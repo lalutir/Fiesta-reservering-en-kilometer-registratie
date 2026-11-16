@@ -1,0 +1,12 @@
+# Caddy gets and renews the HTTPS certificate for $DOMAIN by itself (ports 80 and
+# 443 must be reachable from the internet) and redirects http to https.
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+
+	reverse_proxy app:3000
+}

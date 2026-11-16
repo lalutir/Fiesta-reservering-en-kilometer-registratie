@@ -1,0 +1,64 @@
+# Shared car: the app plus Caddy (automatic HTTPS).
+#   cp .env.example .env   # then edit it
+#   docker compose up -d --build
+# Only Caddy publishes ports (80, 443). The app is reachable from Caddy only.
+
+name: shared-car
+
+# Docker's default json-file log driver never rotates, and the app writes one JSON
+# line per request, so on a small droplet disk the logs would grow without limit.
+# Keep at most 3 x 10 MB per container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    # The Node version is pinned by ARG NODE_VERSION in the Dockerfile.
+    build:
+      context: .
+    image: shared-car-app
+    logging: *default-logging
+    env_file: .env
+    environment:
+      # The app sits behind Caddy: trust the X-Forwarded-For entry it appends.
+      TRUST_PROXY: "1"
+    expose:
+      - "3000"
+    volumes:
+      - app_data:/data # SQLite database (WAL) and nightly backups. Never `docker compose down -v`.
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+
+  caddy:
+    # Pinned to a minor; patch releases arrive with `docker compose pull caddy`.
+    image: caddy:2.11-alpine
+    logging: *default-logging
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates: keep this volume, or you hit Let's Encrypt rate limits
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:
