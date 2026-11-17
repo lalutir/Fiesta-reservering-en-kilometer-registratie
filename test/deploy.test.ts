@@ -260,7 +260,10 @@ test('.env.example is complete, free of secrets, and accepted by the config load
   for (const [name, value] of Object.entries(active)) {
     if (/PASSWORD|SECRET|TOKEN|KEY/.test(name)) assert.equal(value, '', `${name} must be empty in the committed example`);
   }
-  assert.match(active['DOMAIN'] as string, /(^|\.)example\.(com|org|net)$/, 'DOMAIN is an obvious placeholder');
+  // The real production host name: a bare name, no scheme, port or path, and the one the guide tells you to create.
+  assert.equal(active['DOMAIN'], 'fiesta-reserveringen.lalutir.com', 'DOMAIN is the production host name');
+  assert.match(active['DOMAIN'] as string, /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/, 'DOMAIN is a bare host name');
+  assert.ok(read('docs/DEPLOYMENT.md').includes(active['DOMAIN'] as string), 'the deployment guide uses the same host name');
   assert.ok(!('COOKIE_SECURE' in active), 'insecure cookies are never switched on by copying the example');
 
   // Every variable named there (also the commented samples) is really read by something.

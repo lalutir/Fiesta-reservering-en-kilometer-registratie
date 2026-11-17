@@ -94,7 +94,7 @@ Defaults taken (none scope-changing; no one was asked):
 - Exactly one car, 2-10 users, roles admin and member only; admins follow the same creation rules and can edit, cancel and correct anything.
 - PWA over native; English UI with strings centralised for a later Dutch translation; no Web Push (in-app Inbox and badge only).
 - Odometer km is optional on drive records, with per-person totals only; no wider kilometre registration.
-- The owner supplies a domain or subdomain (free DuckDNS works); HTTPS is required for PWA install.
+- The app is served at `https://fiesta-reserveringen.lalutir.com`. `lalutir.com` is owned by the user and its DNS is in Cloudflare; the record must be **DNS only** (grey cloud), because login rate limiting reads the client address Caddy appends to `X-Forwarded-For` (see `docs/DEPLOYMENT.md` section 6). HTTPS is required for PWA install. (Originally the default was "owner supplies a domain; DuckDNS works"; changed on 2026-11-17.)
 - Backups stay on the droplet; off-site copy is documented, not automated. DigitalOcean stays the default host; Hetzner is documented as cheaper.
 - Open questions answered by default: PWA vs native, domain, kilometre registration, admin creating on behalf of others, UI language, push notifications, provider.
 

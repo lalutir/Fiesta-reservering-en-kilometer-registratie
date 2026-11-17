@@ -24,9 +24,10 @@ phone / browser --HTTPS--> Caddy (certificates, ports 80/443)
 ## 1. What you need
 
 - A DigitalOcean account (or Hetzner, see the cost section) and an SSH key pair.
-- A domain or sub-domain. HTTPS is required for installing the app on a phone,
-  and Caddy can only get a certificate for a real name. A free
-  [DuckDNS](https://www.duckdns.org) name such as `ourcar.duckdns.org` works.
+- The domain `lalutir.com`, with its DNS managed in Cloudflare. The app is served
+  at **`fiesta-reserveringen.lalutir.com`**. HTTPS is required for installing the
+  app on a phone, and Caddy can only get a certificate for a real name; section 6
+  adds the one DNS record this needs.
 - This repository, reachable from the server (`git clone`), for example from
   your own GitHub account.
 
@@ -106,17 +107,51 @@ docker compose version            # should print v2.x
 
 ## 6. Domain and DNS
 
-- **Your own domain:** create an **A** record for the name (for example
-  `car.example.com`) pointing to the droplet's IPv4 address, and an **AAAA**
-  record if you use IPv6. Low TTL (300) makes mistakes easier to fix.
-- **DuckDNS:** sign in, add a sub-domain, and set its IP to the droplet's address.
+The app lives at **`https://fiesta-reserveringen.lalutir.com`**. You own
+`lalutir.com` and manage its DNS in Cloudflare, so the only thing to do is add
+one record there. Do this once the droplet exists and you know its IPv4 address
+(section 2).
+
+1. Log in to the Cloudflare dashboard, open the `lalutir.com` site, then
+   **DNS > Records > Add record**.
+2. Fill it in:
+   - **Type:** `A`
+   - **Name:** `fiesta-reserveringen` (Cloudflare shows the full name
+     `fiesta-reserveringen.lalutir.com` next to it)
+   - **IPv4 address:** the droplet's IPv4 address
+   - **Proxy status:** **DNS only** (grey cloud). New records default to
+     *Proxied* (orange cloud): click the cloud once so it turns grey.
+   - **TTL:** Auto (or 5 min while you are still testing)
+3. Save. Add an **AAAA** record with the same name only if you enabled IPv6 on
+   the droplet and use its IPv6 address; otherwise leave IPv6 out.
+
+**Why "DNS only".** Caddy gets its Let's Encrypt certificate by itself over ports
+80 and 443, so it needs the name to lead straight to the droplet. No Cloudflare
+API token or plugin is needed, which also means no Cloudflare credentials on the
+server. And the app rate-limits logins per client address (the one Caddy puts in
+`X-Forwarded-For`). Behind Cloudflare's proxy that address would be a Cloudflare
+one, shared by everyone, so the household would be throttled as a single client.
+Cloudflare still hosts the DNS; you just do not route the traffic through it.
+
+If you switch the proxy on anyway, this guide has not been tested that way: set
+**SSL/TLS > Overview** to **Full (strict)** (never *Flexible*, which causes an
+endless redirect loop), and expect the login throttle to see Cloudflare addresses.
+
+If you ever added CAA records to `lalutir.com`, make sure one of them allows
+`letsencrypt.org`, or the certificate is refused.
 
 Wait until the name resolves to your server before starting the stack, otherwise
-Caddy cannot get a certificate:
+Caddy cannot get a certificate. From your own computer (on Windows use
+`nslookup`; on Linux or macOS use `dig`):
 
 ```bash
-dig +short car.example.com        # must print your droplet IP
+nslookup fiesta-reserveringen.lalutir.com        # Windows
+dig +short fiesta-reserveringen.lalutir.com      # Linux / macOS
 ```
+
+It must print your droplet's IP. If it prints any other address (Cloudflare's own
+look like `172.67.x.x` or `2606:4700:...`), the record is still proxied: switch it
+to **DNS only**.
 
 ## 7. Get the code and configure it
 
@@ -132,7 +167,7 @@ Set at least:
 
 | Variable | Value |
 | --- | --- |
-| `DOMAIN` | your host name, for example `car.example.com` |
+| `DOMAIN` | `fiesta-reserveringen.lalutir.com` (already the value in `.env.example`) |
 | `HOUSEHOLD_TZ` | your time zone, for example `Europe/Amsterdam` |
 | `ADMIN_USERNAME` | the first admin's username (3-32 characters: a-z, 0-9, `.`, `_`, `-`) |
 | `ADMIN_PASSWORD` | a long random password, for example from `openssl rand -base64 24` (empty in `.env.example` on purpose: with no password no admin is created) |
@@ -149,9 +184,9 @@ docker compose ps                 # both services "running"/"healthy"
 docker compose logs -f            # Ctrl+C to leave; look for certificate messages from caddy
 ```
 
-Then open `https://car.example.com`. The first start builds the image (several
-minutes on the smallest droplet). Caddy fetches the certificate within a minute
-once DNS is right.
+Then open `https://fiesta-reserveringen.lalutir.com`. The first start builds the
+image (several minutes on the smallest droplet). Caddy fetches the certificate
+within a minute once DNS is right.
 
 ## 9. The first admin
 
@@ -187,7 +222,7 @@ Leave the password empty to have one generated, and hand it over privately.
 
 ## 10. Install the app on phones
 
-Open `https://car.example.com` on the phone and sign in once.
+Open `https://fiesta-reserveringen.lalutir.com` on the phone and sign in once.
 
 - **Android (Chrome):** menu (three dots) > **Install app** (or **Add to Home screen**).
 - **iPhone / iPad (Safari):** Share button > **Add to Home Screen**. The installed
@@ -300,8 +335,9 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 
 ## 15. Smoke checklist after the first deployment
 
-- [ ] `curl -s https://car.example.com/api/health` prints `{"status":"ok"}`.
-- [ ] `http://car.example.com` redirects to `https://` and the browser shows a valid certificate.
+- [ ] `curl -s https://fiesta-reserveringen.lalutir.com/api/health` prints `{"status":"ok"}`.
+- [ ] `http://fiesta-reserveringen.lalutir.com` redirects to `https://` and the browser shows a valid certificate.
+- [ ] The Cloudflare record is **DNS only** (grey cloud): `curl -sI https://fiesta-reserveringen.lalutir.com | grep -i '^server:'` prints nothing. If it prints `server: cloudflare`, the proxy is on (section 6).
 - [ ] You can sign in, a wrong password is refused with a generic message.
 - [ ] Making a reservation works, and the same time again is refused as taken.
 - [ ] `/admin/` opens for the admin; for a normal member or when signed out it does not.
@@ -311,7 +347,7 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
       ```bash
-      time curl -s -o /dev/null -X POST https://car.example.com/api/auth/login \
+      time curl -s -o /dev/null -X POST https://fiesta-reserveringen.lalutir.com/api/auth/login \
         -H 'Content-Type: application/json' -d '{"username":"nobody","password":"wrong-password-1"}'
       ```
 - [ ] Android Chrome and iPhone Safari can install the app; it fits the phone
@@ -323,6 +359,7 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 | Symptom | Likely cause and fix |
 | --- | --- |
 | Browser says the connection is not private | Caddy has no certificate yet. `docker compose logs caddy`: usually DNS not pointing at the server, or ports 80/443 blocked. |
+| The browser says "too many redirects", a Cloudflare error page (52x) appears, or everyone gets "too many attempts" at sign-in | The Cloudflare record is proxied (orange cloud). In Cloudflare **DNS > Records**, edit `fiesta-reserveringen` and set **Proxy status** to **DNS only** (section 6). |
 | Sign-in works on one phone but "session ended" keeps appearing | The page is open over plain `http://`. Use the `https://` address. |
 | `docker compose up` stops with `set DOMAIN in .env` | `DOMAIN` is missing from `.env`. |
 | Build is killed or hangs on the smallest droplet | Add the swap file (section 4) or use the 1 GiB droplet. |
@@ -338,9 +375,9 @@ All figures are **from memory and not verified**; check the pricing pages.
 | DigitalOcean Basic droplet, 512 MiB / 1 vCPU / 10 GiB | about $4 per month |
 | DigitalOcean Basic droplet, 1 GiB (more comfortable) | about $6 per month |
 | Optional DigitalOcean droplet backups | about +20% of the droplet price |
-| Domain name | EUR 0 with DuckDNS, or roughly EUR 10 per year (about EUR 1 per month) |
+| Domain name | EUR 0 extra: `lalutir.com` is already yours, and the one DNS record in Cloudflare's free DNS costs nothing |
 | HTTPS certificate | EUR 0 (Let's Encrypt, via Caddy) |
-| **Total** | **about $4-6 per month**, plus the domain if you buy one |
+| **Total** | **about $4-6 per month** |
 
 **Cheaper alternative: Hetzner Cloud.** Their smallest cloud server costs roughly
 EUR 4-5 per month (unverified) with more memory and disk than the smallest

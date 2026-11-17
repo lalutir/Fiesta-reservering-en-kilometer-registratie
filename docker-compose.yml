@@ -24,6 +24,7 @@ services:
     env_file: .env
     environment:
       # The app sits behind Caddy: trust the X-Forwarded-For entry it appends.
+      # That is only the real client if nothing else (such as Cloudflare's proxy) is in front of Caddy.
       TRUST_PROXY: "1"
     expose:
       - "3000"

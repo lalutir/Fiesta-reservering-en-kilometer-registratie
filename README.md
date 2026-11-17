@@ -94,8 +94,9 @@ Dockerfile, docker-compose.yml, Caddyfile   production setup
 ## Deploying
 
 See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for a step-by-step guide: a DigitalOcean droplet
-(Hetzner works the same and is a cheaper alternative), a domain, Docker Compose with Caddy for
-automatic HTTPS, first admin, backups, updates and a monthly cost estimate (about $4-6).
+(Hetzner works the same and is a cheaper alternative), a Cloudflare DNS record for
+`fiesta-reserveringen.lalutir.com`, Docker Compose with Caddy for automatic HTTPS, first admin,
+backups, updates and a monthly cost estimate (about $4-6).
 
 ## Known limits
 

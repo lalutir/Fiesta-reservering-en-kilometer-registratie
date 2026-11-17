@@ -1,5 +1,8 @@
 # Caddy gets and renews the HTTPS certificate for $DOMAIN by itself (ports 80 and
 # 443 must be reachable from the internet) and redirects http to https.
+# The Cloudflare DNS record for $DOMAIN must be "DNS only" (grey cloud): the app
+# rate-limits logins by the client address Caddy reports, and behind Cloudflare's
+# proxy that would be a Cloudflare address.
 {$DOMAIN} {
 	encode zstd gzip
 
