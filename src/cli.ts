@@ -71,7 +71,7 @@ export async function runCli(
     const log: Logger = (event) => io.err(JSON.stringify(event));
     const db = openDb(dbPath(config.dataDir));
     try {
-      const ctx: Ctx = { db, clock, config, log, limiter: new LoginLimiter() };
+      const ctx: Ctx = { db, clock, config, log, limiter: new LoginLimiter(), fetch: globalThis.fetch };
       switch (command) {
         case 'create-admin': {
           const username = positional[0];
@@ -117,7 +117,9 @@ export async function runCli(
         }
         default: {
           const r = purge(db, clock.now(), config.tz, log, config.windowMonths);
-          io.out(`Purged ${r.reservations} reservations, ${r.usage} usage records and ${r.sessions} expired sessions older than ${r.cutoff}.`);
+          io.out(
+            `Purged ${r.reservations} reservations, ${r.usage} usage records, ${r.fuel} fill-ups (${r.fuelRequests} payment requests) and ${r.sessions} expired sessions older than ${r.cutoff}.`,
+          );
           return 0;
         }
       }

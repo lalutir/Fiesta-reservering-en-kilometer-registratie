@@ -157,8 +157,10 @@ test('the service worker precache list equals the files in public/ (plus the sha
 });
 
 /** Load sw.js into a sandbox with fake browser APIs and return its handlers. */
-function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>) {
+function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Json[] = []) {
   const handlers: Record<string, (event: Json) => void> = {};
+  const shown: Array<{ title: string; options: Json }> = [];
+  const opened: string[] = [];
   const store = new Map<string, Json>();
   const deleted: string[] = [];
   const cache = {
@@ -171,9 +173,10 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>) {
       addEventListener: (type: string, fn: (e: Json) => void) => (handlers[type] = fn),
       location: { origin: 'https://car.example' },
       skipWaiting: async () => {},
-      clients: { claim: async () => {} },
+      registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
+      clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v1'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v2'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -187,7 +190,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>) {
     });
     return out;
   };
-  return { handlers, store, deleted, fire };
+  return { handlers, store, deleted, fire, shown, opened };
 }
 
 test('service worker: precaches on install, drops old caches on activate', async () => {
@@ -251,6 +254,129 @@ test('service worker is network first, refreshes its cache, and falls back to it
   const res = sw2.fire(request);
   assert.equal(await res.response, failing);
   assert.equal(sw2.store.has(request.url), false, 'error responses are not cached');
+});
+
+/** Objects made inside the vm sandbox have another Object.prototype: compare them as plain JSON. */
+const plain = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
+
+/** Fire the push handler with a payload (a string, or a function that throws) and wait for what it started. */
+async function firePush(sw: ReturnType<typeof loadServiceWorker>, data: string | null | (() => never)) {
+  const waits: Array<Promise<unknown>> = [];
+  const event = {
+    data: data === null ? null : { json: () => (typeof data === 'function' ? data() : JSON.parse(data)) },
+    waitUntil: (p: Promise<unknown>) => waits.push(p),
+  };
+  (sw.handlers['push'] as (e: Json) => void)(event);
+  await Promise.all(waits);
+  return waits.length;
+}
+
+test('service worker push: shows the reminder it was sent, and always shows something', async () => {
+  const sw = loadServiceWorker(async () => ({ ok: true }));
+  const waited = await firePush(sw, JSON.stringify({ title: 'Register your kilometres', body: 'Your reservation ended at 17:00.', url: '/#/usage?res=7', tag: 'km-7' }));
+  assert.equal(waited, 1, 'the notification is tied to the event with waitUntil');
+  assert.equal(sw.shown.length, 1);
+  assert.equal(sw.shown[0]?.title, 'Register your kilometres');
+  assert.equal(sw.shown[0]?.options.body, 'Your reservation ended at 17:00.');
+  assert.equal(sw.shown[0]?.options.tag, 'km-7', 'the same reservation replaces its earlier notification');
+  assert.equal(sw.shown[0]?.options.renotify, true, 'the replacement alerts again: an ignored start reminder must not swallow the end reminder');
+  assert.deepEqual(plain(sw.shown[0]?.options.data), { url: '/#/usage?res=7' });
+  assert.equal(sw.shown[0]?.options.icon, '/icons/icon-192.png');
+
+  // Unreadable, missing, empty or wrongly typed data still ends in a generic notification (iOS withdraws silent pushes).
+  const generic = { title: 'Shared car', body: 'Open the app to see what is waiting.', tag: 'car', data: { url: '/' } };
+  const cases: Array<string | null | (() => never)> = [
+    'not json{',
+    () => {
+      throw new SyntaxError('bad payload');
+    },
+    null,
+    '{}',
+    JSON.stringify({ title: 42, body: ['x'], url: {}, tag: null }),
+    JSON.stringify({ title: '   ', body: '' }),
+  ];
+  for (const data of cases) {
+    sw.shown.length = 0;
+    await firePush(sw, data);
+    assert.equal(sw.shown.length, 1, String(data));
+    const { title, options } = sw.shown[0] as { title: string; options: Json };
+    assert.equal(title, generic.title);
+    assert.equal(options.body, generic.body);
+    assert.equal(options.tag, generic.tag);
+    assert.equal(options.renotify, true, 'renotify needs a tag, and the generic notification has one');
+    assert.deepEqual(plain(options.data), generic.data);
+  }
+
+  sw.shown.length = 0;
+  await firePush(sw, JSON.stringify({ title: 'T'.repeat(500), body: 'B'.repeat(5000) }));
+  assert.equal((sw.shown[0]?.title as string).length, 100);
+  assert.equal((sw.shown[0]?.options.body as string).length, 300);
+});
+
+/** Fire notificationclick with the data the push handler stored. */
+async function fireClick(sw: ReturnType<typeof loadServiceWorker>, data: Json | undefined) {
+  const closed: boolean[] = [];
+  const waits: Array<Promise<unknown>> = [];
+  (sw.handlers['notificationclick'] as (e: Json) => void)({
+    notification: { close: () => closed.push(true), data },
+    waitUntil: (p: Promise<unknown>) => waits.push(p),
+  });
+  await Promise.all(waits);
+  return closed.length;
+}
+
+test('service worker notificationclick: closes it and opens the registration form in this app only', async () => {
+  const win = (url: string, extra: Json = {}) => {
+    const calls: string[] = [];
+    return {
+      url,
+      calls,
+      navigate: async (to: string) => {
+        calls.push(`navigate ${to}`);
+        return { focus: async () => void calls.push('focus navigated') };
+      },
+      focus: async () => void calls.push('focus'),
+      ...extra,
+    } as Json;
+  };
+
+  // An open window of the app is reused: navigated to the form, then focused.
+  const open = win('https://car.example/#/');
+  const sw = loadServiceWorker(async () => ({ ok: true }), [win('https://elsewhere.example/'), open]);
+  assert.equal(await fireClick(sw, { url: '/#/usage?res=7' }), 1, 'the notification is closed');
+  assert.deepEqual(open.calls, ['navigate https://car.example/#/usage?res=7', 'focus navigated']);
+  assert.deepEqual(sw.opened, []);
+
+  // Another origin in the payload is never followed: the start page opens instead.
+  for (const bad of ['https://evil.example/#/usage', '//evil.example/x', 'javascript:alert(1)', undefined, 42, {}]) {
+    const w = win('https://car.example/');
+    const s = loadServiceWorker(async () => ({ ok: true }), [w]);
+    await fireClick(s, bad === undefined ? undefined : { url: bad });
+    assert.deepEqual(w.calls[0], 'navigate https://car.example/', String(bad));
+  }
+
+  // No open window of the app (or only a foreign one): a new window opens at the form.
+  const none = loadServiceWorker(async () => ({ ok: true }), [win('https://elsewhere.example/')]);
+  await fireClick(none, { url: '/#/usage?res=9' });
+  assert.deepEqual(none.opened, ['https://car.example/#/usage?res=9']);
+  const empty = loadServiceWorker(async () => ({ ok: true }));
+  await fireClick(empty, { url: '/#/usage?res=9' });
+  assert.deepEqual(empty.opened, ['https://car.example/#/usage?res=9']);
+
+  // A browser without navigate() just focuses the window; one whose navigate() fails gets a new window.
+  const noNavigate = win('https://car.example/', { navigate: undefined });
+  const a = loadServiceWorker(async () => ({ ok: true }), [noNavigate]);
+  await fireClick(a, { url: '/#/usage?res=3' });
+  assert.deepEqual(noNavigate.calls, ['focus']);
+  assert.deepEqual(a.opened, []);
+  const failing = win('https://car.example/', {
+    navigate: async () => {
+      throw new TypeError('not allowed');
+    },
+  });
+  const b = loadServiceWorker(async () => ({ ok: true }), [failing]);
+  await fireClick(b, { url: '/#/usage?res=3' });
+  assert.deepEqual(b.opened, ['https://car.example/#/usage?res=3']);
 });
 
 test('the server serves the app shell, the service worker and the exact shared time module', async () => {

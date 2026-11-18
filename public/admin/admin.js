@@ -4,12 +4,16 @@
 import { del, get, patch, post, setUnauthorizedHandler } from '../api.js';
 import {
   dateTimeField,
+  driveBody,
   field,
+  fmtDriveRange,
   fmtRange,
+  fmtWhen,
   formatLocal,
   h,
   localInputToUtc,
   numberInput,
+  readDriveTimes,
   readNumber,
   readRange,
   saveErrorText,
@@ -259,6 +263,7 @@ async function renderReservations() {
     r.suggestion ? r.createdByName : '–',
     h('span', { class: `badge-status ${r.status}`, text: S.status[r.status] }),
     fmtRange(r.start, r.end, tz),
+    r.status === 'confirmed' ? kmCell(r) : '–',
     text(r.note),
     h('div', { class: 'actions' }, [
       r.can.edit
@@ -282,8 +287,20 @@ async function renderReservations() {
     editingReservation ? reservationEditor(editingReservation) : null,
     items.length === 0
       ? h('p', { class: 'empty', text: S.admin.reservations.none })
-      : table(S.admin.tabs.reservations, ['#', S.admin.reservations.driver, S.admin.reservations.createdBy, S.admin.reservations.status, S.admin.reservations.when, S.admin.reservations.note, ''], rows),
+      : table(S.admin.tabs.reservations, ['#', S.admin.reservations.driver, S.admin.reservations.createdBy, S.admin.reservations.status, S.admin.reservations.when, S.admin.usage.kmColumn, S.admin.reservations.note, ''], rows),
   ]);
+}
+
+/**
+ * The kilometre state of a reservation: registered (with the distance and who drove), started, or missing.
+ * @param {import('../api.js').Reservation} r
+ */
+function kmCell(r) {
+  const label = S.admin.usage.kmState[r.kmState];
+  const drive = r.drive;
+  const detail = drive && r.kmState === 'registered' ? ` ${S.usage.km(drive.distanceKm ?? 0)}, ${drive.userName}` : drive && r.kmState === 'draft' ? ` (${drive.userName})` : '';
+  const chip = { missing: 'none', draft: 'requested', registered: 'paid' }[r.kmState];
+  return h('span', { class: `chip ${chip}`, text: `${label}${detail}` });
 }
 
 /** @param {import('../api.js').Reservation} r */
@@ -333,26 +350,99 @@ function reservationEditor(r) {
 
 /** @type {import('../api.js').Usage | 'new' | null} */
 let editingUsage = null;
+/** @typedef {{ userId: number, reservationId: number, start: string, end: string }} UsagePreset */
+/**
+ * What a new drive starts with when it is added from the "kilometres to register" list.
+ * @type {UsagePreset | null}
+ */
+let usagePreset = null;
+/** Look back 30 days by default; the toggle shows the whole 6 month window. */
+let pendingFull = false;
+
+/**
+ * Open the drive editor (an existing drive, or a new one with an optional preset) and move focus into it.
+ * @param {import('../api.js').Usage | 'new'} record
+ * @param {UsagePreset | null} [preset]
+ */
+function openUsageEditor(record, preset = null) {
+  editingUsage = record;
+  usagePreset = preset;
+  focusSelector = EDITOR_FIRST_CONTROL;
+  void showTab('usage');
+}
+
+/**
+ * Kilometres still to register, per person: unfinished drives and ended reservations with no completed drive.
+ * @param {import('../api.js').Pending} pending
+ * @param {number} days
+ */
+function pendingSection(pending, days) {
+  const P = S.admin.usage;
+  /** @type {Array<Array<unknown>>} */
+  const rows = [];
+  for (const entry of pending.items) {
+    for (const d of entry.drafts) {
+      rows.push([
+        entry.userName,
+        P.pendingDraft,
+        `${fmtWhen(d.start, tz)}${d.odometerStart === null ? '' : `, ${d.odometerStart} km`}`,
+        text(d.note),
+        h('div', { class: 'actions' }, [
+          button(S.edit, () => openUsageEditor(d)),
+        ]),
+      ]);
+    }
+    for (const r of entry.reservations.filter((x) => x.kmState !== 'draft')) {
+      rows.push([
+        entry.userName,
+        `${P.pendingReservation} #${r.id}`,
+        fmtRange(r.start, r.end, tz),
+        text(r.note),
+        h('div', { class: 'actions' }, [
+          button(P.newRecord, () => openUsageEditor('new', { userId: r.userId, reservationId: r.id, start: r.start, end: r.end })),
+          r.can.cancel
+            ? button(S.admin.reservations.cancelReservation, () => {
+                if (!confirm(S.admin.reservations.confirmCancel)) return;
+                void perform(() => del(`/api/reservations/${r.id}`), S.admin.reservations.cancelled);
+              }, 'danger')
+            : null,
+        ]),
+      ]);
+    }
+  }
+  return h('section', { class: 'card' }, [
+    h('h2', { text: `${P.pendingTitle} (${pending.count})` }),
+    h('p', { class: 'hint', text: P.pendingScope(days) }),
+    rows.length === 0
+      ? h('p', { class: 'empty', text: P.pendingNone })
+      : table(P.pendingTitle, [P.pendingUser, P.pendingItem, S.admin.reservations.when, S.admin.reservations.note, ''], rows),
+    h('div', { class: 'actions' }, [
+      button(pendingFull ? P.pendingShort : P.pendingFull, () => {
+        pendingFull = !pendingFull;
+        void showTab('usage');
+      }),
+    ]),
+  ]);
+}
 
 async function renderUsage() {
-  const [{ users }, { items }] = await Promise.all([
+  const days = pendingFull ? 190 : 30;
+  const [{ users }, { items }, pending] = await Promise.all([
     /** @type {Promise<{ users: import('../api.js').User[] }>} */ (get('/api/admin/users')),
     /** @type {Promise<{ items: import('../api.js').Usage[] }>} */ (get('/api/usage')),
+    /** @type {Promise<import('../api.js').Pending>} */ (get(`/api/usage/pending?all=1&days=${days}`)),
   ]);
   const rows = items.map((u) => [
     u.id,
     u.userName,
-    fmtRange(u.start, u.end, tz),
+    h('span', { class: `badge-status ${u.status === 'draft' ? 'expired' : 'confirmed'}`, text: S.admin.usage.statusLabel[u.status] }),
+    fmtDriveRange(u.start, u.end, tz),
     u.odometerStart !== null || u.odometerEnd !== null ? `${text(u.odometerStart)} → ${text(u.odometerEnd)}` : '–',
     u.distanceKm === null ? '–' : S.usage.km(u.distanceKm),
     text(u.reservationId),
     text(u.note),
     h('div', { class: 'actions' }, [
-      button(S.edit, () => {
-        editingUsage = u;
-        focusSelector = EDITOR_FIRST_CONTROL;
-        void showTab('usage');
-      }),
+      button(S.edit, () => openUsageEditor(u)),
       button(S.delete, () => {
         if (!confirm(S.admin.usage.confirmDelete)) return;
         void perform(() => del(`/api/usage/${u.id}`), S.admin.usage.deleted);
@@ -360,17 +450,14 @@ async function renderUsage() {
     ]),
   ]);
   return h('div', {}, [
+    pendingSection(pending, days),
     h('div', { class: 'actions' }, [
-      button(S.admin.usage.newRecord, () => {
-        editingUsage = 'new';
-        focusSelector = EDITOR_FIRST_CONTROL;
-        void showTab('usage');
-      }, 'primary'),
+      button(S.admin.usage.newRecord, () => openUsageEditor('new'), 'primary'),
     ]),
     editingUsage ? usageEditor(editingUsage, users) : null,
     items.length === 0
       ? h('p', { class: 'empty', text: S.admin.usage.none })
-      : table(S.admin.tabs.usage, ['#', S.admin.reservations.driver, S.admin.reservations.when, S.admin.usage.odometer, S.admin.usage.km, S.admin.usage.reservation, S.admin.reservations.note, ''], rows),
+      : table(S.admin.tabs.usage, ['#', S.admin.reservations.driver, S.admin.usage.status, S.admin.reservations.when, S.admin.usage.odometer, S.admin.usage.km, S.admin.usage.reservation, S.admin.reservations.note, ''], rows),
   ]);
 }
 
@@ -380,14 +467,17 @@ async function renderUsage() {
  */
 function usageEditor(record, users) {
   const existing = record === 'new' ? null : record;
+  const preset = existing ? null : usagePreset;
   const now = new Date();
+  // A finished drive needs both readings; one that is still open (a draft) may leave the end empty.
+  const mode = /** @type {'new' | 'draft' | 'completed'} */ (existing ? existing.status : 'new');
   const driver = select('userId', users.map((u) => String(u.id)), users.map((u) => u.displayName));
-  driver.value = String(existing?.userId ?? session.user.id);
-  const start = dateTimeField(S.usage.start, existing?.start ?? new Date(now.getTime() - 3_600_000).toISOString(), tz);
-  const end = dateTimeField(S.usage.end, existing?.end ?? now.toISOString(), tz);
+  driver.value = String(existing?.userId ?? preset?.userId ?? session.user.id);
+  const start = dateTimeField(S.usage.start, existing?.start ?? preset?.start ?? new Date(now.getTime() - 3_600_000).toISOString(), tz);
+  const end = dateTimeField(S.usage.end, existing ? existing.end : (preset?.end ?? now.toISOString()), tz, { optional: mode !== 'completed' });
   const odoStart = numberInput(existing?.odometerStart);
   const odoEnd = numberInput(existing?.odometerEnd);
-  const reservation = numberInput(existing?.reservationId, '1');
+  const reservation = numberInput(existing?.reservationId ?? preset?.reservationId, '1');
   const note = h('input', { type: 'text', maxlength: '500', value: existing?.note ?? '', autocomplete: 'off' });
   const fDriver = field(S.usage.driver, driver);
   const fOdoStart = field(S.usage.odometerStart, odoStart);
@@ -404,20 +494,26 @@ function usageEditor(record, users) {
         e.preventDefault();
         for (const f of [fDriver, start, end, fOdoStart, fOdoEnd, fRes, fNote]) f.setError(null);
         formError.hidden = true;
-        const range = readRange(start, end);
-        if (!range) return;
-        const body = {
-          userId: Number(driver.value),
-          ...range,
+        const times = readDriveTimes(start, end);
+        if (!times) return;
+        const built = driveBody({
+          mode,
+          start: times.start,
+          end: times.end,
           odometerStart: readNumber(odoStart.value),
           odometerEnd: readNumber(odoEnd.value),
-          reservationId: readNumber(reservation.value),
           note: note.value,
-        };
+        });
+        if (!built.ok) {
+          showFieldErrors({ end, odometerStart: fOdoStart, odometerEnd: fOdoEnd }, { fields: built.errors });
+          return;
+        }
+        const body = { ...built.body, userId: Number(driver.value), reservationId: readNumber(reservation.value) };
         try {
           if (existing) await patch(`/api/usage/${existing.id}`, body);
           else await post('/api/usage', body);
           editingUsage = null;
+          usagePreset = null;
           toast(S.admin.usage.saved);
           await showTab('usage');
         } catch (err) {
@@ -430,11 +526,12 @@ function usageEditor(record, users) {
     },
     [
       h('h2', { text: existing ? `${S.admin.usage.editTitle} #${existing.id}` : S.admin.usage.newRecord }),
+      mode === 'completed' ? null : h('p', { class: 'hint', text: S.admin.usage.editHint }),
       h('div', { class: 'inline-form' }, [fDriver.row, start.row, end.row, fOdoStart.row, fOdoEnd.row, fRes.row, fNote.row]),
       formError,
       h('div', { class: 'actions' }, [
         h('button', { class: 'btn primary', type: 'submit' }, S.admin.usage.save),
-        button(S.cancel, () => { editingUsage = null; void showTab('usage'); }),
+        button(S.cancel, () => { editingUsage = null; usagePreset = null; void showTab('usage'); }),
       ]),
     ],
   );
@@ -448,7 +545,7 @@ async function renderRetention() {
   const r = S.admin.retention;
   const last = s.lastPurge;
   /** @type {string | undefined} */
-  const oldest = [s.oldest.reservationEnd, s.oldest.usageEnd].filter(Boolean).sort()[0];
+  const oldest = [s.oldest.reservationEnd, s.oldest.usageEnd, s.oldest.fuelAt].filter(Boolean).sort()[0];
   return h('div', {}, [
     h('section', { class: 'card' }, [
       h('h2', { text: r.title }),
@@ -458,13 +555,13 @@ async function renderRetention() {
         h('dt', { text: r.cutoff }),
         h('dd', { text: formatLocal(s.cutoff, tz) }),
         h('dt', { text: r.lastPurge }),
-        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions) : ''}` : r.never }),
+        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0) : ''}` : r.never }),
         h('dt', { text: r.lastMaintenance }),
         h('dd', { text: text(s.lastMaintenanceDay) }),
         h('dt', { text: r.lastBackup }),
         h('dd', { text: s.lastBackupAt ? `${s.lastBackupFile} (${formatLocal(s.lastBackupAt, tz)})` : r.never }),
         h('dt', { text: r.counts }),
-        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage) }),
+        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0) }),
         h('dt', { text: r.oldest }),
         h('dd', { text: oldest ? formatLocal(oldest, tz) : '–' }),
       ]),
@@ -473,7 +570,7 @@ async function renderRetention() {
           if (!confirm(r.confirmRun)) return;
           void perform(async () => {
             const res = await post('/api/admin/retention/run', {});
-            toast(r.done(res.result.reservations, res.result.usage));
+            toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0));
           });
         }, 'danger'),
       ]),

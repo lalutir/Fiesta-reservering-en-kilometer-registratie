@@ -4,6 +4,45 @@ import { S, errorText } from '../strings.js';
 
 export const live = true;
 
+/** The kilometre line and the "Register km" button appear this long before a reservation starts (the push reminder's lead time). */
+const LEAD_MS = 30 * 60_000;
+
+/**
+ * What a reservation card says about its kilometres and the one button it offers.
+ * Nothing is shown before the lead time; the owner (or an admin) gets "Register km"
+ * (or "Finish drive" for a started drive); another member gets "I drove this" only
+ * once it has started and while nobody has registered or started a drive for it.
+ * @param {import('../api.js').Reservation} r
+ * @param {number} meId
+ * @param {boolean} isAdmin
+ * @param {string} nowIso
+ * @returns {{ line: string | null, state: import('../api.js').KmState, action: { label: string, href: string } | null }}
+ */
+export function kmAction(r, meId, isAdmin, nowIso) {
+  const none = { line: null, state: r.kmState ?? 'missing', action: null };
+  if (r.status !== 'confirmed') return none;
+  const drive = r.drive;
+  if (r.kmState === 'registered' && drive) {
+    return { line: S.agenda.kmRegistered(drive.distanceKm ?? 0, drive.userId === meId ? S.me : drive.userName), state: 'registered', action: null };
+  }
+  if (r.kmState === 'draft' && drive) {
+    const own = drive.userId === meId;
+    return {
+      line: own ? S.agenda.kmDraft : S.agenda.kmDraftBy(drive.userName),
+      state: 'draft',
+      action: own || isAdmin ? { label: S.agenda.finishDrive, href: `#/usage?edit=${drive.id}` } : null,
+    };
+  }
+  const nowMs = Date.parse(nowIso);
+  const startMs = Date.parse(r.start);
+  if (r.userId === meId || isAdmin) {
+    if (nowMs < startMs - LEAD_MS) return none;
+    return { line: S.agenda.kmMissing, state: 'missing', action: { label: S.agenda.registerKm, href: `#/usage?res=${r.id}` } };
+  }
+  if (nowMs >= startMs) return { line: S.agenda.kmMissing, state: 'missing', action: { label: S.agenda.iDroveThis, href: `#/usage?res=${r.id}` } };
+  return none;
+}
+
 /**
  * One reservation as a card with the actions the server says are allowed.
  * @param {import('../api.js').App} app
@@ -15,7 +54,7 @@ export function reservationCard(app, r, past) {
   const mine = r.userId === app.session.user.id;
   const iCreated = r.createdBy === app.session.user.id;
   const nowIso = new Date().toISOString();
-  const canLogDrive = r.status === 'confirmed' && mine && r.start <= nowIso;
+  const km = kmAction(r, app.session.user.id, app.session.user.role === 'admin', nowIso);
 
   /**
    * Runs one action; the card's buttons stay disabled until the list is reloaded.
@@ -53,6 +92,7 @@ export function reservationCard(app, r, past) {
     h('div', { class: 'when', text: fmtRange(r.start, r.end, app.tz) }),
     subtitle ? h('div', { class: 'sub', text: subtitle }) : null,
     r.note ? h('div', { class: 'note', text: r.note }) : null,
+    km.line ? h('div', { class: `km-line ${km.state}`, text: km.line }) : null,
     h('div', { class: 'actions' }, [
       r.can.approve
         ? h('button', { class: 'btn primary', type: 'button', onclick: (/** @type {Event} */ e) => void act(e, () => post(`/api/reservations/${r.id}/approve`), S.agenda.approved) }, S.agenda.approve)
@@ -72,7 +112,7 @@ export function reservationCard(app, r, past) {
             S.agenda.decline,
           )
         : null,
-      canLogDrive ? h('a', { class: 'btn', href: `#/usage?res=${r.id}` }, S.agenda.logDrive) : null,
+      km.action ? h('a', { class: 'btn primary', href: km.action.href }, km.action.label) : null,
       r.can.edit ? h('a', { class: 'btn', href: `#/reserve/${r.id}` }, S.edit) : null,
       r.can.cancel
         ? h(

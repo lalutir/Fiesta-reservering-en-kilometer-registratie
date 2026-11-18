@@ -4,6 +4,7 @@ import { h, setContent, toaster } from './dom.js';
 import { S, errorText } from './strings.js';
 import * as account from './views/account.js';
 import * as agenda from './views/agenda.js';
+import * as fuel from './views/fuel.js';
 import * as history from './views/history.js';
 import * as inbox from './views/inbox.js';
 import * as login from './views/login.js';
@@ -23,7 +24,7 @@ import * as usage from './views/usage.js';
  */
 
 /** @type {Record<string, View>} */
-const VIEWS = { agenda, reserve, inbox, usage, history, account };
+const VIEWS = { agenda, reserve, inbox, usage, fuel, history, account };
 const TABS = [
   ['agenda', S.nav.agenda],
   ['reserve', S.nav.reserve],
@@ -32,6 +33,8 @@ const TABS = [
   ['history', S.nav.history],
   ['account', S.nav.account],
 ];
+// Routes that live under a tab: Fuel and costs is reached from Drives, so that tab stays highlighted.
+const TAB_OF_ROUTE = { fuel: 'usage' };
 const REFRESH_MS = 60_000;
 
 const root = /** @type {HTMLElement} */ (document.getElementById('app'));
@@ -43,9 +46,13 @@ let viewHost = null;
 /** @type {HTMLElement | null} */
 let toastEl = null;
 /** @type {HTMLElement | null} */
-let badgeEl = null;
+let inboxBadgeEl = null;
+/** @type {HTMLElement | null} */
+let drivesBadgeEl = null;
 /** @type {HTMLElement | null} */
 let inboxTabEl = null;
+/** @type {HTMLElement | null} */
+let drivesTabEl = null;
 let renderToken = 0;
 
 /** @returns {Route} */
@@ -63,18 +70,28 @@ function isEditing() {
   return !!viewHost && !!active && viewHost.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
 }
 
+/**
+ * @param {HTMLElement | null} badge
+ * @param {HTMLElement | null} tab
+ * @param {number} count
+ * @param {(n: number) => string} label
+ */
+function showBadge(badge, tab, count, label) {
+  if (!badge) return;
+  badge.textContent = String(count);
+  badge.hidden = count === 0;
+  // The bare number means nothing to a screen reader: give the tab a name that says what it counts.
+  if (count > 0) tab?.setAttribute('aria-label', label(count));
+  else tab?.removeAttribute('aria-label');
+}
+
+/** Inbox (answers waiting) and Drives (kilometres to register) counts, fetched side by side. */
 async function updateBadge() {
-  if (!app || !badgeEl) return;
-  try {
-    const { incomingCount } = await get('/api/inbox');
-    badgeEl.textContent = String(incomingCount);
-    badgeEl.hidden = incomingCount === 0;
-    // The bare number means nothing to a screen reader: give the tab a name that says what it counts.
-    if (incomingCount > 0) inboxTabEl?.setAttribute('aria-label', S.inbox.tabLabel(incomingCount));
-    else inboxTabEl?.removeAttribute('aria-label');
-  } catch {
-    // the badge is a convenience; the views report real errors
-  }
+  if (!app || !inboxBadgeEl) return;
+  // Each badge is a convenience: if its request fails the other still updates, and the views report real errors.
+  const [inbox, pending] = await Promise.allSettled([get('/api/inbox'), get('/api/usage/pending')]);
+  if (inbox.status === 'fulfilled') showBadge(inboxBadgeEl, inboxTabEl, inbox.value.incomingCount, S.inbox.tabLabel);
+  if (pending.status === 'fulfilled') showBadge(drivesBadgeEl, drivesTabEl, pending.value.count, S.usage.tabLabel);
 }
 
 /**
@@ -102,11 +119,12 @@ async function renderCurrent(opts = {}) {
     return;
   }
   const token = ++renderToken;
+  const tabName = /** @type {Record<string, string>} */ (TAB_OF_ROUTE)[route.name] ?? route.name;
   document.querySelectorAll('.tabs a').forEach((a) => {
-    if (a.getAttribute('data-tab') === route.name) a.setAttribute('aria-current', 'page');
+    if (a.getAttribute('data-tab') === tabName) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  const tabLabel = TABS.find(([name]) => name === route.name)?.[1];
+  const tabLabel = route.name === 'fuel' ? S.fuel.title : TABS.find(([name]) => name === route.name)?.[1];
   document.title = tabLabel ? `${tabLabel} - ${S.appName}` : S.appName;
   try {
     const el = await view.render(app, route);
@@ -140,15 +158,17 @@ function backgroundRefresh() {
 
 /** Build the tab bar and view host once per sign-in. */
 function buildShell(/** @type {import('./api.js').Session} */ session) {
-  badgeEl = h('span', { class: 'badge', hidden: true }, '0');
+  inboxBadgeEl = h('span', { class: 'badge', hidden: true }, '0');
+  drivesBadgeEl = h('span', { class: 'badge', hidden: true }, '0');
   toastEl = h('div', { class: 'toast', role: 'status', 'aria-live': 'polite' });
   viewHost = h('main', { class: 'view', id: 'view' });
   const tabs = TABS.map(([name, label]) => {
     const link = h('a', { class: 'tab', href: `#/${name === 'agenda' ? '' : name}`, 'data-tab': name }, [
       h('span', { class: 'tab-label' }, label),
-      name === 'inbox' ? badgeEl : null,
+      name === 'inbox' ? inboxBadgeEl : name === 'usage' ? drivesBadgeEl : null,
     ]);
     if (name === 'inbox') inboxTabEl = link;
+    if (name === 'usage') drivesTabEl = link;
     return link;
   });
   setContent(
@@ -171,6 +191,7 @@ function showLogin(notice) {
   app = null;
   viewHost = null;
   inboxTabEl = null;
+  drivesTabEl = null;
   renderToken++;
   document.title = `${S.login.title} - ${S.appName}`;
   setContent(root, login.render({ notice, onSuccess: () => void start() }));

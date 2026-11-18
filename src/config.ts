@@ -15,6 +15,16 @@ export interface ScryptParams {
   p: number;
 }
 
+/**
+ * Optional Tikkie payment-request adapter. Off unless all three variables are
+ * set. UNVERIFIED: written against a stub only (see src/payments.ts).
+ */
+export interface TikkieConfig {
+  url: string;
+  apiKey: string;
+  accessToken: string;
+}
+
 export interface Config {
   port: number;
   bindHost: string;
@@ -31,6 +41,14 @@ export interface Config {
   windowMonths: number;
   publicDir: string;
   sharedDir: string;
+  /** Web Push kill switch (PUSH_ENABLED, default on). Push also needs a subject, see pushSubject. */
+  pushEnabled: boolean;
+  /**
+   * The VAPID "sub" claim sent to the push services: PUSH_CONTACT when set, else
+   * https://<DOMAIN>. Undefined (push off) when push is disabled or neither gives one.
+   */
+  pushSubject: string | undefined;
+  tikkie: TikkieConfig | undefined;
 }
 
 /**
@@ -73,6 +91,36 @@ function strEnv(env: Env, name: string): string | undefined {
   return raw === undefined || raw === '' ? undefined : raw;
 }
 
+const HOST_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+
+/** PUSH_CONTACT (https: or mailto:) wins; otherwise https://<DOMAIN> when DOMAIN is a bare host name. */
+function pushSubject(env: Env, enabled: boolean): string | undefined {
+  const contact = strEnv(env, 'PUSH_CONTACT')?.trim();
+  if (contact !== undefined && !/^(https:\/\/[^\s/]+\S*|mailto:[^\s@]+@[^\s@]+)$/.test(contact)) {
+    throw new Error('PUSH_CONTACT must be an https:// URL or a mailto: address');
+  }
+  if (!enabled) return undefined;
+  if (contact !== undefined) return contact;
+  const domain = strEnv(env, 'DOMAIN')?.trim();
+  return domain !== undefined && HOST_NAME_RE.test(domain) ? `https://${domain.toLowerCase()}` : undefined;
+}
+
+/** All three TIKKIE_* variables or none: half a configuration is a mistake worth failing on. */
+function tikkieConfig(env: Env): TikkieConfig | undefined {
+  const url = strEnv(env, 'TIKKIE_PAYMENT_REQUEST_URL');
+  const apiKey = strEnv(env, 'TIKKIE_API_KEY');
+  const accessToken = strEnv(env, 'TIKKIE_ACCESS_TOKEN');
+  if (url === undefined && apiKey === undefined && accessToken === undefined) return undefined;
+  const missing = [
+    ['TIKKIE_PAYMENT_REQUEST_URL', url],
+    ['TIKKIE_API_KEY', apiKey],
+    ['TIKKIE_ACCESS_TOKEN', accessToken],
+  ].filter(([, value]) => value === undefined).map(([name]) => name);
+  if (missing.length > 0) throw new Error(`Tikkie needs TIKKIE_PAYMENT_REQUEST_URL, TIKKIE_API_KEY and TIKKIE_ACCESS_TOKEN together; missing: ${missing.join(', ')}`);
+  if (!/^https:\/\/[^\s/]+/.test(url as string)) throw new Error('TIKKIE_PAYMENT_REQUEST_URL must start with https://');
+  return { url: url as string, apiKey: apiKey as string, accessToken: accessToken as string };
+}
+
 /** Parse and validate the environment. Fails fast on bad values. */
 export function loadConfig(env: Env, overrides: Partial<Config> = {}): Config {
   const root = findProjectRoot();
@@ -80,6 +128,7 @@ export function loadConfig(env: Env, overrides: Partial<Config> = {}): Config {
   if (!isValidTimeZone(tz)) throw new Error(`HOUSEHOLD_TZ is not a valid IANA time zone: ${tz}`);
   const N = intEnv(env, 'SCRYPT_N', 2 ** 15, 2 ** 10, 2 ** 16);
   if ((N & (N - 1)) !== 0) throw new Error('SCRYPT_N must be a power of two');
+  const pushEnabled = boolEnv(env, 'PUSH_ENABLED', true);
   const config: Config = {
     port: intEnv(env, 'PORT', 3000, 1, 65535),
     bindHost: strEnv(env, 'BIND_HOST') ?? '127.0.0.1',
@@ -94,6 +143,9 @@ export function loadConfig(env: Env, overrides: Partial<Config> = {}): Config {
     windowMonths: 6,
     publicDir: path.resolve(strEnv(env, 'PUBLIC_DIR') ?? path.join(root, 'public')),
     sharedDir: path.resolve(strEnv(env, 'SHARED_DIR') ?? path.join(root, 'shared')),
+    pushEnabled,
+    pushSubject: pushSubject(env, pushEnabled),
+    tikkie: tikkieConfig(env),
   };
   return { ...config, ...overrides };
 }

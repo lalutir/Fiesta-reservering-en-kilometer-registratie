@@ -26,8 +26,14 @@ if (await bootstrapAdmin(app.ctx)) {
 if (!config.cookieSecure) {
   log({ event: 'server.warning', message: 'COOKIE_SECURE is off. Only use this for local development over http.' });
 }
+if (config.pushEnabled && config.pushSubject === undefined) {
+  // Reminders are on by default but need an https address to identify this server to the push services.
+  // Without one they stay off, and nothing else would say so.
+  log({ event: 'server.warning', message: 'Reminders are off: push needs an https address. Set DOMAIN to a bare host name (such as car.example.com) or set PUSH_CONTACT, or set PUSH_ENABLED=false to silence this.' });
+}
 
 const maintenance = app.maintenance.start();
+const reminders = app.reminders.start();
 const address = await app.listen(config.port, config.bindHost);
 log({ event: 'server.listening', host: address.address, port: address.port, timeZone: config.tz });
 
@@ -37,6 +43,7 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   log({ event: 'server.stopping', signal });
   maintenance.stop();
+  reminders.stop();
   await app.close();
   db.close();
   process.exit(0);

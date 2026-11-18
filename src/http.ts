@@ -12,6 +12,8 @@ export interface Ctx {
   config: Config;
   log: Logger;
   limiter: LoginLimiter;
+  /** Outbound HTTP (push services, the optional Tikkie call). Replaced by a stub in tests. */
+  fetch: typeof fetch;
 }
 
 export interface Principal {

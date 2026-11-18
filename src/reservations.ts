@@ -1,4 +1,4 @@
-import { many, one, run, tx, type Db, type ReservationRow, type ReservationStatus, type UserRow } from './db.ts';
+import { many, one, run, tx, type Db, type ReservationRow, type ReservationStatus, type UsageStatus, type UserRow } from './db.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Req, type Router } from './http.ts';
 import { Fields, ValidationError, assertInsideWindow, queryRange, queryUserId, windowBounds } from './validate.ts';
 
@@ -6,9 +6,33 @@ import { Fields, ValidationError, assertInsideWindow, queryRange, queryUserId, w
 export type EffectiveStatus = ReservationStatus | 'expired';
 export type Action = 'edit' | 'cancel' | 'approve' | 'decline';
 
+/** The drive shown on a reservation: the one that registers it, else a linked draft, else a linked older drive. */
+export interface ReservationDrive {
+  id: number;
+  userId: number;
+  userName: string;
+  status: UsageStatus;
+  odometerStart: number | null;
+  odometerEnd: number | null;
+  distanceKm: number | null;
+  /** True when the drive was linked to this reservation; false when it only overlaps it in time. */
+  linked: boolean;
+}
+
+/** registered = a completed drive with both readings covers it; draft = a linked drive was started; missing = neither. */
+export type KmState = 'registered' | 'draft' | 'missing';
+
 interface ReservationJoin extends ReservationRow {
   user_name: string;
   created_by_name: string;
+  registered: number;
+  d_id: number | null;
+  d_user_id: number | null;
+  d_user_name: string | null;
+  d_status: UsageStatus | null;
+  d_odo_start: number | null;
+  d_odo_end: number | null;
+  d_reservation_id: number | null;
 }
 
 export interface ReservationDto {
@@ -26,12 +50,54 @@ export interface ReservationDto {
   createdAt: string;
   updatedAt: string;
   can: Record<Action, boolean>;
+  /** The drive that registers this reservation (or the draft/older drive linked to it); null when there is none. */
+  drive: ReservationDrive | null;
+  /** Invariant: 'registered' always comes with a non-null drive. */
+  kmState: KmState;
 }
 
-const SELECT = `SELECT r.*, u.display_name AS user_name, c.display_name AS created_by_name
+/** A finished drive with both odometer readings: the only kind of drive whose kilometres count. `a` is the usage alias. */
+const COUNTED_SQL = (a: string): string => `${a}.status = 'completed' AND ${a}.odometer_start IS NOT NULL AND ${a}.odometer_end IS NOT NULL`;
+
+/**
+ * "This reservation has its kilometres registered": a completed drive with both
+ * odometer readings that is linked to it or strictly overlaps it (touching ends
+ * do not count), by anyone. Alias `r` is the reservation. The one definition
+ * behind the reservation card, the pending-km list and the reminder scheduler,
+ * so the three can never disagree.
+ */
+export const REGISTERED_SQL = `EXISTS (SELECT 1 FROM usage x
+         WHERE ${COUNTED_SQL('x')}
+           AND (x.reservation_id = r.id OR (x.start_utc < r.end_utc AND x.end_utc > r.start_utc)))`;
+
+// Which drive to show on a reservation: first the completed drive with readings that registers it
+// (linked ones before merely overlapping ones), then a linked draft, then a linked older drive
+// without readings. Every row that REGISTERED_SQL accepts is a candidate of rank 0 or 1, so a
+// registered reservation always has a drive. The rank is computed in a derived table because SQLite
+// does not resolve a reference to the outer reservation (`r`) inside an ORDER BY.
+const DRIVE_PICK_SQL = `(SELECT p.id FROM (
+           SELECT g.id AS id, g.start_utc AS start_utc,
+                  CASE
+                    WHEN ${COUNTED_SQL('g')} AND g.reservation_id = r.id THEN 0
+                    WHEN ${COUNTED_SQL('g')} THEN 1
+                    WHEN g.status = 'draft' THEN 2
+                    ELSE 3
+                  END AS rank
+             FROM usage g
+            WHERE g.reservation_id = r.id
+               OR (${COUNTED_SQL('g')} AND g.start_utc < r.end_utc AND g.end_utc > r.start_utc)) p
+         ORDER BY p.rank, p.start_utc, p.id
+         LIMIT 1)`;
+
+const SELECT = `SELECT r.*, u.display_name AS user_name, c.display_name AS created_by_name,
+         (${REGISTERED_SQL}) AS registered,
+         d.id AS d_id, d.user_id AS d_user_id, du.display_name AS d_user_name, d.status AS d_status,
+         d.odometer_start AS d_odo_start, d.odometer_end AS d_odo_end, d.reservation_id AS d_reservation_id
   FROM reservations r
   JOIN users u ON u.id = r.user_id
-  JOIN users c ON c.id = r.created_by`;
+  JOIN users c ON c.id = r.created_by
+  LEFT JOIN usage d ON d.id = ${DRIVE_PICK_SQL}
+  LEFT JOIN users du ON du.id = d.user_id`;
 
 // ------------------------------------------------------------- permissions
 // One place decides who may do what. The same functions guard the mutating
@@ -82,7 +148,23 @@ function canFlags(actor: Principal, row: ReservationRow, nowIso: string): Record
   return { edit: flag('edit'), cancel: flag('cancel'), approve: flag('approve'), decline: flag('decline') };
 }
 
+function driveOf(row: ReservationJoin): ReservationDrive | null {
+  if (row.d_id === null) return null;
+  const both = row.d_odo_start !== null && row.d_odo_end !== null;
+  return {
+    id: row.d_id,
+    userId: row.d_user_id as number,
+    userName: row.d_user_name as string,
+    status: row.d_status as UsageStatus,
+    odometerStart: row.d_odo_start,
+    odometerEnd: row.d_odo_end,
+    distanceKm: both ? (row.d_odo_end as number) - (row.d_odo_start as number) : null,
+    linked: row.d_reservation_id === row.id,
+  };
+}
+
 export function toDto(row: ReservationJoin, actor: Principal, nowIso: string): ReservationDto {
+  const drive = driveOf(row);
   return {
     id: row.id,
     userId: row.user_id,
@@ -97,6 +179,8 @@ export function toDto(row: ReservationJoin, actor: Principal, nowIso: string): R
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     can: canFlags(actor, row, nowIso),
+    drive,
+    kmState: row.registered === 1 ? 'registered' : drive?.status === 'draft' ? 'draft' : 'missing',
   };
 }
 
@@ -148,6 +232,22 @@ export function listConfirmed(db: Db, actor: Principal, nowIso: string, from: st
     `${SELECT} WHERE r.status = 'confirmed' AND r.end_utc >= ? AND r.start_utc <= ? ORDER BY r.start_utc, r.id`,
     from,
     to,
+  );
+  return rows.map((r) => toDto(r, actor, nowIso));
+}
+
+/**
+ * Confirmed reservations of one driver that have ended (since `from`) and have no
+ * completed drive with both readings: the kilometres still to register.
+ */
+export function listUnregistered(db: Db, actor: Principal, nowIso: string, userId: number, from: string): ReservationDto[] {
+  const rows = many<ReservationJoin>(
+    db,
+    `${SELECT} WHERE r.status = 'confirmed' AND r.user_id = ? AND r.end_utc <= ? AND r.end_utc >= ? AND NOT ${REGISTERED_SQL}
+      ORDER BY r.start_utc, r.id`,
+    userId,
+    nowIso,
+    from,
   );
   return rows.map((r) => toDto(r, actor, nowIso));
 }

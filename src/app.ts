@@ -16,7 +16,10 @@ import {
   type Ctx,
   type Logger,
 } from './http.ts';
+import { registerFuelRoutes } from './fuel.ts';
 import { startMaintenance, tick } from './maintenance.ts';
+import { createPush, registerPushRoutes } from './push.ts';
+import { createReminders, type Reminders } from './reminders.ts';
 import { registerReservationRoutes } from './reservations.ts';
 import { registerRetentionRoutes } from './retention.ts';
 import { serveStatic } from './static.ts';
@@ -28,6 +31,8 @@ export interface AppDeps {
   clock: Clock;
   config: Config;
   log: Logger;
+  /** Outbound HTTP; defaults to the global fetch. Tests pass a stub so nothing leaves the machine. */
+  fetch?: typeof fetch;
 }
 
 export interface App {
@@ -38,6 +43,8 @@ export interface App {
   close(): Promise<void>;
   /** The daily purge and backup. Nothing runs until start() is called (by server.ts). */
   maintenance: { tick(): boolean; start(): { stop(): void } };
+  /** The push reminder scheduler. Nothing runs until start() is called (by server.ts). */
+  reminders: Reminders;
 }
 
 /**
@@ -46,7 +53,7 @@ export interface App {
  * No timers are created here.
  */
 export function createApp(deps: AppDeps): App {
-  const ctx: Ctx = { ...deps, limiter: new LoginLimiter() };
+  const ctx: Ctx = { ...deps, fetch: deps.fetch ?? globalThis.fetch, limiter: new LoginLimiter() };
   const { config, log } = ctx;
   const router = new Router((req) => authenticate(ctx, req), config.trustProxy);
 
@@ -57,6 +64,10 @@ export function createApp(deps: AppDeps): App {
   registerUserRoutes(router, ctx);
   registerReservationRoutes(router, ctx);
   registerUsageRoutes(router, ctx);
+  registerFuelRoutes(router, ctx);
+  const push = createPush(ctx);
+  registerPushRoutes(router, ctx, push);
+  const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);
 
   // The stack goes to the server log only, never to the client.
@@ -158,5 +169,6 @@ export function createApp(deps: AppDeps): App {
       });
     },
     maintenance: { tick: () => tick(ctx), start: () => startMaintenance(ctx) },
+    reminders,
   };
 }
