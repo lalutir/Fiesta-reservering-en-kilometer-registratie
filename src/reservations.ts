@@ -1,4 +1,4 @@
-import { many, one, run, tx, type Db, type ReservationRow, type ReservationStatus, type UsageStatus, type UserRow } from './db.ts';
+import { many, one, run, tx, type Db, type KmFor, type ReservationRow, type ReservationStatus, type UsageStatus, type UserRow } from './db.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Req, type Router } from './http.ts';
 import { Fields, ValidationError, assertInsideWindow, queryRange, queryUserId, windowBounds } from './validate.ts';
 
@@ -17,6 +17,10 @@ export interface ReservationDrive {
   distanceKm: number | null;
   /** True when the drive was linked to this reservation; false when it only overlaps it in time. */
   linked: boolean;
+  /** Whose kilometres these are: the driver's own, another person's or the shared pool. */
+  kmFor: KmFor;
+  kmUserId: number | null;
+  kmUserName: string | null;
 }
 
 /** registered = a completed drive with both readings covers it; draft = a linked drive was started; missing = neither. */
@@ -33,6 +37,9 @@ interface ReservationJoin extends ReservationRow {
   d_odo_start: number | null;
   d_odo_end: number | null;
   d_reservation_id: number | null;
+  d_km_for: KmFor | null;
+  d_km_user_id: number | null;
+  d_km_user_name: string | null;
 }
 
 export interface ReservationDto {
@@ -92,12 +99,14 @@ const DRIVE_PICK_SQL = `(SELECT p.id FROM (
 const SELECT = `SELECT r.*, u.display_name AS user_name, c.display_name AS created_by_name,
          (${REGISTERED_SQL}) AS registered,
          d.id AS d_id, d.user_id AS d_user_id, du.display_name AS d_user_name, d.status AS d_status,
-         d.odometer_start AS d_odo_start, d.odometer_end AS d_odo_end, d.reservation_id AS d_reservation_id
+         d.odometer_start AS d_odo_start, d.odometer_end AS d_odo_end, d.reservation_id AS d_reservation_id,
+         d.km_for AS d_km_for, d.km_user_id AS d_km_user_id, dku.display_name AS d_km_user_name
   FROM reservations r
   JOIN users u ON u.id = r.user_id
   JOIN users c ON c.id = r.created_by
   LEFT JOIN usage d ON d.id = ${DRIVE_PICK_SQL}
-  LEFT JOIN users du ON du.id = d.user_id`;
+  LEFT JOIN users du ON du.id = d.user_id
+  LEFT JOIN users dku ON dku.id = d.km_user_id`;
 
 // ------------------------------------------------------------- permissions
 // One place decides who may do what. The same functions guard the mutating
@@ -160,6 +169,9 @@ function driveOf(row: ReservationJoin): ReservationDrive | null {
     odometerEnd: row.d_odo_end,
     distanceKm: both ? (row.d_odo_end as number) - (row.d_odo_start as number) : null,
     linked: row.d_reservation_id === row.id,
+    kmFor: row.d_km_for as KmFor,
+    kmUserId: row.d_km_user_id,
+    kmUserName: row.d_km_user_name,
   };
 }
 

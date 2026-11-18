@@ -36,6 +36,7 @@ export interface ReservationRow {
 }
 
 export type UsageStatus = 'draft' | 'completed';
+export type KmFor = 'self' | 'person' | 'together';
 
 export interface UsageRow {
   id: number;
@@ -49,6 +50,9 @@ export interface UsageRow {
   note: string;
   created_by: number;
   status: UsageStatus;
+  /** Whose kilometres these are: the driver's own, another person's (km_user_id) or a shared pool. */
+  km_for: KmFor;
+  km_user_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +83,8 @@ export interface FuelRequestRow {
   updated_at: string;
   paid_at: string | null;
   paid_by: number | null;
+  /** Highest fill-up id that existed when the request was made: its payment settles the earlier shares of the pair up to that id. NULL for requests made before v3. */
+  covers_fuel_id: number | null;
 }
 
 export interface PushSubscriptionRow {
@@ -237,6 +243,29 @@ export const MIGRATIONS: readonly string[] = [
     sent_at        TEXT NOT NULL,
     PRIMARY KEY (reservation_id, kind, scheduled_utc)
   ) WITHOUT ROWID;
+  `,
+
+  // 3: kilometres that are not the driver's. km_for says whose kilometres a
+  // drive is: the driver's own (the default, which is what every existing row
+  // is), another person's (km_user_id) or "together" (a pool split equally over
+  // the active users). The driver (user_id) stays the driver for the
+  // registration obligation, reminders and overlap; only the kilometre totals
+  // and the fuel split follow the owner. The second CHECK ties km_user_id to
+  // km_for = 'person' in both directions.
+  // fuel_requests.covers_fuel_id is the highest fill-up id that existed when the
+  // request was made (ids are AUTOINCREMENT, so this is a creation order that
+  // needs no clock): the earlier shares of the same pair from fill-ups up to that
+  // id are the ones its payment settles. NULL (every request made before this
+  // migration) settles nothing but its own share.
+  `
+  ALTER TABLE usage ADD COLUMN km_for TEXT NOT NULL DEFAULT 'self'
+    CHECK (km_for IN ('self', 'person', 'together'));
+  ALTER TABLE usage ADD COLUMN km_user_id INTEGER REFERENCES users(id)
+    CHECK ((km_for = 'person') = (km_user_id IS NOT NULL));
+  CREATE INDEX usage_km_user ON usage(km_user_id) WHERE km_user_id IS NOT NULL;
+
+  ALTER TABLE fuel_requests ADD COLUMN covers_fuel_id INTEGER
+    CHECK (covers_fuel_id IS NULL OR covers_fuel_id >= 1);
   `,
 ];
 

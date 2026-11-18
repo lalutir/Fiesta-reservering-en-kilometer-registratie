@@ -31,6 +31,9 @@
  * @property {number | null} odometerEnd
  * @property {number | null} distanceKm
  * @property {boolean} linked false when it only overlaps the reservation in time
+ * @property {'self' | 'person' | 'together'} [kmFor] whose kilometres these are (the driver's own when absent)
+ * @property {number | null} [kmUserId]
+ * @property {string | null} [kmUserName]
  */
 /**
  * @typedef {object} Usage
@@ -44,6 +47,9 @@
  * @property {number | null} odometerEnd
  * @property {number | null} distanceKm
  * @property {number | null} reservationId
+ * @property {'self' | 'person' | 'together'} [kmFor] whose kilometres these are: the driver's own, another person's or the shared pool (the driver stays the driver)
+ * @property {number | null} [kmUserId] the person, when kmFor is 'person'
+ * @property {string | null} [kmUserName]
  * @property {string} note
  * @property {{ edit: boolean, delete: boolean }} can
  * @property {boolean} fuelLocked a payment request depends on this drive: only an admin can change it
@@ -67,6 +73,7 @@
  * @property {string} link
  * @property {string | null} paidAt
  * @property {boolean} changed the live share differs from the amount that was asked
+ * @property {number} [currentCents] what a request for this share would ask right now
  */
 /**
  * @typedef {object} FuelShare
@@ -75,8 +82,11 @@
  * @property {number} km
  * @property {number} cents
  * @property {boolean} owes owes the fueler: more than zero, or a request was made for them
+ * @property {number} [carriedCents] net of the earlier open shares between the fueler and this person (below zero: the fueler owes them)
+ * @property {number} [dueCents] the share plus carriedCents, never below zero: what a request asks
+ * @property {{ fuelId: number, at: string } | null} [settledBy] a payment on a later fill-up settled this share
  * @property {FuelRequest | null} request
- * @property {{ request: boolean, markPaid: boolean }} can
+ * @property {{ request: boolean, markPaid: boolean, selfPaid?: boolean }} can selfPaid: this person can say "I have paid this" for their own share
  */
 /**
  * @typedef {object} Fuel
@@ -90,10 +100,12 @@
  * @property {string} note
  * @property {{ from: string | null, to: string }} period
  * @property {number} totalKm
+ * @property {number} [togetherKm] of totalKm: driven together, split equally over everybody
  * @property {boolean} equalSplit
  * @property {boolean} firstInData
  * @property {FuelShare[]} shares
  * @property {boolean} hasPaidRequests
+ * @property {boolean} [settledByLater] a later payment settled a share of this fill-up
  * @property {{ edit: boolean, delete: boolean }} can
  */
 /** @typedef {{ fromUserId: number, fromName: string, toUserId: number, toName: string, cents: number }} Balance */

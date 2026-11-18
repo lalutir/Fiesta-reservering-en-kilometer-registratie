@@ -119,12 +119,62 @@ export function shareLinks(message) {
 
 /**
  * @param {import('../api.js').FuelShare} share
- * @returns {'none' | 'requested' | 'paid' | 'changed' | 'paidChanged'}
+ * @returns {'none' | 'requested' | 'paid' | 'changed' | 'paidChanged' | 'settled'}
  */
 export function shareStatus(share) {
+  if (share.request?.paidAt) return share.request.changed ? 'paidChanged' : 'paid';
+  // A later payment covered it: not paid itself, but nothing is owed for it any more.
+  if (share.settledBy) return 'settled';
   if (!share.request) return 'none';
-  if (share.request.paidAt) return share.request.changed ? 'paidChanged' : 'paid';
   return share.request.changed ? 'changed' : 'requested';
+}
+
+/**
+ * The lines about what rides along with a share: what is still open from earlier fill-ups (or taken
+ * off for what the fueler owes back) and the total to pay. Empty when nothing is carried.
+ * @param {import('../api.js').Fuel} fuel
+ * @param {import('../api.js').FuelShare} share
+ * @param {(name: string, id: number) => string} nameOf
+ * @returns {string[]}
+ */
+export function carriedLines(fuel, share, nameOf) {
+  const carried = share.carriedCents ?? 0;
+  if (carried === 0) return [];
+  const line = carried > 0
+    ? S.fuel.carried(fmtCents(carried))
+    : S.fuel.carriedBack(nameOf(fuel.userName, fuel.userId), nameOf(share.userName, share.userId), fmtCents(-carried));
+  return [line, S.fuel.due(fmtCents(share.dueCents ?? share.cents))];
+}
+
+/**
+ * carriedLines as rows. The last one is the total to pay, so it reads as the figure that matters.
+ * @param {import('../api.js').Fuel} fuel
+ * @param {import('../api.js').FuelShare} share
+ * @param {(name: string, id: number) => string} nameOf
+ * @returns {HTMLElement[]}
+ */
+export function carriedRows(fuel, share, nameOf) {
+  const lines = carriedLines(fuel, share, nameOf);
+  return lines.map((line, i) => h('div', { class: i === lines.length - 1 ? 'sub due' : 'sub', text: line }));
+}
+
+/**
+ * "I have paid this request": the debtor's own button, the same on the History screen and on the Fuel card.
+ * @param {import('../api.js').Fuel} fuel
+ * @param {import('../api.js').FuelShare} share
+ * @param {(event: Event, fuelId: number, action: () => Promise<unknown>, done: string) => unknown} run how the caller runs an action (busy buttons, toast, reload)
+ * @returns {HTMLElement}
+ */
+export function selfPaidButton(fuel, share, run) {
+  return h(
+    'button',
+    {
+      class: 'btn small primary',
+      type: 'button',
+      onclick: (/** @type {Event} */ e) => void run(e, fuel.id, () => post(`/api/fuel/${fuel.id}/requests/${share.userId}/paid`, { paid: true }), S.fuel.iPaidSaved),
+    },
+    S.fuel.iPaid,
+  );
 }
 
 /**
@@ -135,8 +185,9 @@ export function shareStatus(share) {
 export function changedLine(share) {
   const request = share.request;
   if (!request || !request.changed) return null;
-  const difference = share.cents - request.amountCents;
-  const args = /** @type {const} */ ([fmtCents(request.amountCents), fmtCents(share.cents), difference > 0, fmtCents(Math.abs(difference))]);
+  // What a request for this share would ask now (the share plus what is carried); older requests asked for the share alone.
+  const difference = (request.currentCents ?? share.cents) - request.amountCents;
+  const args = /** @type {const} */ ([fmtCents(request.amountCents), fmtCents(request.currentCents ?? share.cents), difference > 0, fmtCents(Math.abs(difference))]);
   return request.paidAt ? S.fuel.changedPaid(...args) : S.fuel.changedAsked(...args);
 }
 
@@ -395,10 +446,17 @@ export async function render(app, route) {
     title.focus();
   };
 
+  /**
+   * A name as the viewer reads it: "me" for themselves.
+   * @param {string} name
+   * @param {number} id
+   */
+  const nameOf = (name, id) => (id === me.id ? S.me : name);
+
   /** @param {import('../api.js').Fuel} f */
   const card = (f) => {
     const panelHost = h('div', {});
-    const lockedHint = f.hasPaidRequests && (isAdmin || f.userId === me.id);
+    const lockedHint = (f.hasPaidRequests || f.settledByLater) && (isAdmin || f.userId === me.id);
     return h('article', { class: 'card fuel', id: `fuel-${f.id}` }, [
       h('div', { class: 'row' }, [
         h('strong', { text: S.fuel.header(f.userId === me.id ? S.me : f.userName, fmtLitres(f.millilitres), fmtCents(f.totalCents)) }),
@@ -409,6 +467,7 @@ export async function render(app, route) {
       f.note ? h('div', { class: 'note', text: f.note }) : null,
       h('div', { class: 'sub', text: f.firstInData || f.period.from === null ? S.fuel.periodFirst : S.fuel.periodBetween(fmtWhen(f.period.from, app.tz), fmtWhen(f.period.to, app.tz)) }),
       f.equalSplit ? h('div', { class: 'sub', text: S.fuel.equalSplit }) : null,
+      f.togetherKm ? h('div', { class: 'sub', text: S.fuel.togetherNote(f.togetherKm) }) : null,
       h(
         'ul',
         { class: 'shares' },
@@ -416,6 +475,7 @@ export async function render(app, route) {
           const status = shareStatus(s);
           const isPaid = Boolean(s.request?.paidAt);
           const changedText = changedLine(s);
+          const selfPaid = s.can.selfPaid === true;
           return h('li', { class: 'share' }, [
             h('div', { class: 'row' }, [
               h('strong', { text: s.userId === me.id ? S.me : s.userName }),
@@ -426,13 +486,19 @@ export async function render(app, route) {
                   ? h('span', { class: 'chip', text: S.fuel.paidTheBill })
                   : null,
             ]),
+            carriedRows(f, s, nameOf),
+            s.settledBy ? h('div', { class: 'sub', text: S.fuel.settledBy(fmtWhen(s.settledBy.at, app.tz)) }) : null,
             changedText ? h('div', { class: 'sub', text: changedText }) : null,
-            s.can.request || s.can.markPaid
+            s.can.request || s.can.markPaid || selfPaid
               ? h('div', { class: 'actions' }, [
                   s.can.request
-                    ? h('button', { class: 'btn small primary', type: 'button', onclick: () => openPanel(f, s, panelHost) }, s.request ? S.fuel.shareRequest : S.fuel.request)
+                    ? // One primary action per share: when the person can also say "I have paid", that is the one.
+                      h('button', { class: selfPaid ? 'btn small' : 'btn small primary', type: 'button', onclick: () => openPanel(f, s, panelHost) }, s.request ? S.fuel.shareRequest : S.fuel.request)
                     : null,
-                  s.can.markPaid
+                  // Their own share: "I have paid" wins over the fueler's "Mark paid" (an admin who owes money sees only this one).
+                  selfPaid
+                    ? selfPaidButton(f, s, act)
+                    : s.can.markPaid
                     ? h(
                         'button',
                         {
@@ -453,7 +519,7 @@ export async function render(app, route) {
         }),
       ),
       panelHost,
-      lockedHint ? h('p', { class: 'hint', text: S.fuel.paidLocked }) : null,
+      lockedHint ? h('p', { class: 'hint', text: f.hasPaidRequests ? S.fuel.paidLocked : S.fuel.settledLocked }) : null,
       f.can.edit || f.can.delete
         ? h('div', { class: 'actions' }, [
             f.can.edit ? h('a', { class: 'btn', href: `#/fuel?edit=${f.id}` }, S.edit) : null,

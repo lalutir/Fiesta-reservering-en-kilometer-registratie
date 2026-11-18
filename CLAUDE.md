@@ -223,6 +223,111 @@ Defaults taken (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/km-registration-fuel-split-notifications` (git-excluded). Base commit `3489e2a55c1caa631c1957d44f15391a18c2418c`.
 <!-- implement:run:km-registration-fuel-split-notifications:end -->
 
+<!-- implement:run:km-for-others-and-fuel-payment-push:start -->
+### Kilometres that are not the driver's (own person or together pool) plus fuel payment push and "I have paid" with carry-over (km-for-others-and-fuel-payment-push)
+
+Date 2026-11-18. Branch `implement/km-for-others-and-fuel-payment-push` (named by the ledger; see Honesty flags: the work sits in a worktree on a detached HEAD). Base branch `main`, base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`.
+
+### Request
+
+> I have two new functions I want implemented: The first one being the option to click "I drove, but the kilometers aren't mine" with then the option to link it to another person or not (which will mean it goes in the together pool). This is usefull for if one of us drives the other to the hospital (the patient's kilometers, but the other drove) as well as groceries for the family etc (I drove, combined kilometers). When this is pressed a note is compulsary to explain why it isn't their kilometers. The second function is to do with the fuel registration (2 small functions). I want a push notification sent if someone filled up the car and you owe them money, as well as the option to click on the history screen to press "I have payed this request", if the button has not been pressed the prices will be taken into calculation for the next fueljob.
+
+### What was built
+
+A drive has an owner: the driver's own kilometres (default), another active person's, or "together". Anything but own needs a note (422 `note: required`, also when finishing a draft). Kilometre totals and the fuel split follow the owner; together kilometres form a pool split equally over the active users. The driver stays the driver for the registration obligation, reminders and overlap. Fuel: saving a fill-up pushes each debtor with a live share above zero, a debtor can press "I have paid this request" on History and on the Fuel card, and unpaid amounts are carried into the next fill-up's amount due between the same two people. Nothing is committed: git shows 27 modified files (26 with a diff) and 5 untracked, +1758/-164 on tracked files before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.3): two `usage` columns, owner weights in front of `splitCents`, derived carry-over, existing routes reused.
+- Rejected: idiomatic (attribution columns, carry-over inside `fuelOverview`; 5.3) and robust (explicit columns, a pair ledger, best-effort notifier; 4.7). The ledger gives only the scores.
+- Rejected, from the build record: stored settlement rows (a second source of truth), household-wide debt simplification (out of scope), awaiting the push inside the request (a slow push service would delay a saved fill-up).
+
+### How it works
+
+Start with `src/fuel-carry.ts` (rules and the long top comment), then `src/fuel.ts` (`computeShares`, `fuelOverview`, request and paid routes), `src/usage.ts` (`attributionErrors`, summary), `src/fuel-notify.ts`, `public/dom.js` (`kmOwnerControl`) and `public/views/history.js` (`fuelOwed`).
+
+- Migration v3 is additive: `usage.km_for` (default `self`, so old rows stay own), `usage.km_user_id` (CHECK ties it to `person`), `fuel_requests.covers_fuel_id`; the pre-migrate-v2 copy is written first.
+- A share's amount due is the share plus the net open shares between the same two people (what the fueler owes back is taken off, never below zero). A request stores the highest fill-up id at creation; marking it paid settles the earlier shares of the pair up to that id. Nothing else is stored, so marking unpaid re-opens them. Cards, request text, balances and push read this one function.
+- `POST /api/fuel/:id/requests/:debtorId/paid` (existing route): the debtor may mark paid for their own share only (403 otherwise, 403 for `paid:false`), it creates a manual request snapshot when none exists, and is idempotent.
+- `POST /api/fuel` answers first; `fuel-notify.ts` then sends one push per device (tag per fill-up, url `/#/history`) and never fails or delays the save. `App.idle()` and `close()` wait for sends in flight.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/fuel-carry.ts`, `src/fuel-notify.ts` | added | Carry-over and settlement (pure); push for a new fill-up |
+| `src/db.ts`, `usage.ts`, `reservations.ts`, `fuel.ts`, `payments.ts`, `app.ts` | modified | Migration v3; attribution, summary, billed-period lock on create and finish; pool weights, request cover, debtor paid route; carried text; notifier wiring |
+| `public/dom.js`, `strings.js`, `api.js`, `style.css` | modified | Owner control, texts, typedefs, styles |
+| `public/views/usage.js`, `agenda.js`, `history.js`, `fuel.js`, `public/admin/admin.js` | modified | Form, lists, Fuel you owe, card lines, admin table and editor |
+| `test/attribution.test.ts`, `fuel-carry.test.ts`, `client-attribution.test.ts` | added | Attribution and split; carry-over, paid route, push; client helpers |
+| `test/db`, `maintenance`, `km`, `fuel`, `forms`, `admin`, `pwa` tests | modified | v3 upgrade and rollback, version pins, DTO rules, screens, notification and tap target |
+| `scripts/smoke.mjs`, `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Smoke check 12, two new guide sections, this entry |
+
+`package.json`, the lockfile, `Dockerfile`, compose, `Caddyfile` and `.env.example` are unchanged.
+
+### How to run and test
+
+Final test-stage attempt, Windows, Node 22.23.1, all exit 0: `npm run typecheck` (server and client) and `npm run lint` clean; `npm test` 443 of 443 (baseline 364; 425 after build, 427 after backend and simplify, 442 in attempt 0); `npm run build` clean; `npm run smoke` 12 of 12 over real HTTP. `npm run check` runs all five. Also run by the stages: 10 mutation checks in build (each turned a test red, files restored); headless Chromium at 390 and 320 px (build: 50 of 50 checks; UI pass: light and dark). The docs step ran no test command.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design:frontend-design | Yes per ledger caveat (`fallback_used` true) | 7 fixes, e.g. focus lost after "I have paid", amount due shown twice in the wrong order |
+| Backend | engineering-skills:senior-backend | No | Paid route took a second payment on a share a later payment had settled (now 409 `already_paid`); push job tracker could raise an unhandled rejection (now caught); 2 tests, 425 to 427 |
+| Data | engineering-advanced-skills:database-designer | No | No change; v2 file with 20,000 drives upgraded in 110 ms, integrity check ok; 20,000 split and 20,000 carry fuzz cases held |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; filtered inline |
+| Simplicity | simplify | No | Single inline pass (Agent tool unavailable): 5 behaviour-neutral cleanups, tests unchanged at 427 |
+
+### Verification
+
+Verified (ran by the stages, saw pass): the five commands above, the Chromium passes, v2 to v3 upgrade with rows, rollback of a failing v3, CHECK constraints, 500-seed split and 300-seed carry property tests (sums exact to the cent), working tree identical before and after build and smoke.
+
+NOT verified:
+- Real push delivery (Google, Apple, Mozilla), real phones, installed PWAs, screen readers.
+- Docker build, `docker compose up`, Caddy HTTPS, a droplet deploy, first start on the live database, a real two-process migration race; `node:sqlite` only on Node 22.23.1.
+- Carry-over over weeks of real use.
+- No browser pass after the simplify changes to `dom.js`, `usage.js`, `history.js`, `admin.js` nor after the review fix; typecheck, lint and the fake-DOM tests cover them.
+
+Test confidence: high for what the automated commands cover (ledger); not for the items above.
+
+### Review
+
+Two rounds, three lenses each (correctness, maintainability, risk). Round 1: 17 findings, 1 confirmed major, F13 (a member could bill another person by creating or finishing a drive in a billed period, `src/usage.ts`), fixed with one regression test (442 to 443). Round 2: 17 findings, 0 confirmed.
+
+Remaining minor notes (not fixed): alternating fuelers can make cards and "Who owes whom" disagree; the fill-up push is skipped when the net amount due is zero although the criterion and docs say "share above zero"; the reservation card shows whose kilometres but not the note; a debtor's one-tap "I have paid" creates a request row that freezes the period for everyone and unmarking keeps the freeze; attributed kilometres have no plausibility bound and the target is not told; a failed push is not retried; past fill-ups are re-split when the set of active users changes; the paid route does not re-check settlement inside its transaction after the provider await; `history.js` copies `act`/`refocus` from `fuel.js`; owner-control wiring is duplicated in `usage.js` and `admin.js`; `fuel.ts` is 662 lines; new typedef fields are optional; `short()` can cut a surrogate pair; some doc drift.
+
+### Assumptions and open questions
+
+Defaults taken for six open questions (none scope-changing; no one was asked):
+- "History screen" is the History tab plus the same button on the Fuel card.
+- Unpaid amounts roll into the next request per pair of people, netted both ways; paying settles the included earlier shares.
+- Together kilometres are split equally over all active users.
+- Attributing kilometres needs no approval and sends no push to the target; the note is required on drafts too.
+- The debtor cannot undo "paid" (fueler or admin can); the fueler gets no push when it is pressed.
+- The fuel push fires on creation only and says the amount can still change; a debtor with a carry but no share on the new fill-up is not asked.
+
+### Honesty flags
+
+- Restarts: 1 (the ledger does not name the stage). Degraded stages: none. Debug attempts: 0. The test stage ran twice.
+- Ledger and git disagree: the ledger names branch `implement/km-for-others-and-fuel-payment-push`, but the worktree `.claude/worktrees/km-for-others-and-fuel-payment-push` is on a detached HEAD at the base commit. The branch exists in the main checkout at the same commit with no commits; the build stage reports that checkout clean. All changes are uncommitted in the worktree.
+- Ledger and git disagree on tests: the test stage's `tests_added` is empty, yet the count rose from 427 to 442; git also shows `test/pwa.test.ts` changed, which the build list omits. Git is trusted; the stage that added each test is not recorded.
+- `test/client.test.ts` shows modified in git status with an empty diff (line endings).
+- The ledger's `chosen.rationale` is the placeholder "Duplicate call, please ignore."; the rationale above comes from the build record and the scores.
+- Caveat: the test agent reported a pass although 3 commands exited non-zero (baseline typecheck and `npm test` before its fixes, and `sha256sum -c` on the mutation files).
+- `01-analysis.md` was refused by the harness. Audit files are split between the main checkout's and the worktree's `.claude/runs/km-for-others-and-fuel-payment-push`.
+- Several new tests passed on the first run; the mutation checks, not a red run on the untouched tree, show they can fail.
+- Security and simplify ran inline, not as parallel fan-outs.
+- Two unmarked sections below (`## /implement run log: km registration, ...` and `## /implement run log: kilometres for someone else or together, ...`) are older build-stage records left untouched; the second is stale (425 tests, no specialist or review results) and this entry supersedes it.
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3.
+- Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/km-for-others-and-fuel-payment-push` (git-excluded). Base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`.
+<!-- implement:run:km-for-others-and-fuel-payment-push:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)
@@ -318,3 +423,89 @@ A **Send test notification** button, **unsubscribing the device on sign-out** (a
 ### Reproduce
 
 - Invocation: `/implement` with the Request text above. Plan: `.claude/runs/km-registration-fuel-split-notifications/04-chosen-plan.md` (detail in `03-plan-0.md`). Audit directory `.claude/runs/km-registration-fuel-split-notifications` (git-excluded).
+
+## /implement run log: kilometres for someone else or together, fuel push, "I have paid" and carry-over
+
+### Kilometres that are not the driver's (own person or together pool) plus fuel payment push and "I have paid" with carry-over (km-for-others-and-fuel-payment-push)
+
+Date 2026-11-18. Branch `implement/km-for-others-and-fuel-payment-push`. Base branch `main`, base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`. This is the **build stage's** record: the specialist, test and review stages add their own results below it. Nothing is committed by the build step.
+
+### Request
+
+> (the request text is in the pipeline's problem statement, not repeated here) A driver can mark a drive's kilometres as another person's or as "together"; a note is then compulsory, and totals and the fuel split follow the owner. Fuel: a push to each person who owes money when a fill-up is registered, an "I have paid this request" button for the debtor (History screen and Fuel card), and unpaid amounts carried into the next fill-up's amount due between the same two people.
+
+### What was built
+
+- **Whose kilometres (migration v3).** `usage.km_for` (`self`, `person`, `together`, default `self`, so every existing row is the driver's own) and `usage.km_user_id`, tied together by a CHECK in both directions. `POST` and `PATCH /api/usage` take `kmFor` and `kmUserId`; omitted means self. A person needs an active user other than the driver (`required`, `same_as_driver`, `unknown_user`, checked only when the person changed), self and together take no person (`only_for_person`), and anything but self needs a non-blank note (`note: required`, on create, update and when finishing a draft). The driver stays the driver for the obligation, reminders and overlap. DTOs, History, the Drives list, the reservation card line and the admin Drives table show the owner and the note; the admin editor and the member form both get the choice.
+- **Summary.** `GET /api/usage/summary` counts kilometres under the owner, reports `together` on its own, and keeps `totalKm`. Trips follow the driver (each drive once), so `totalTrips` includes together drives.
+- **Fuel split.** `computeShares` weighs personal kilometres by owner and treats together kilometres as a pool every active user carries an equal part of (all weights scaled by the number of active users, so integers and the largest-remainder rule are kept). Self-only data gives exactly the old result.
+- **Carry-over and settlement (`src/fuel-carry.ts`, pure).** A share's amount due is the share plus the net of the earlier open shares between the same two people (what the fueler owes back is taken off, never below zero). A request remembers the highest fill-up id that existed when it was made (`fuel_requests.covers_fuel_id`); when it is paid it settles the earlier shares of the pair up to that id. Nothing is stored for the settlement: it follows from the one paid flag, so marking unpaid re-opens it, and the request's own amount does not change when it is paid. Balances, cards, the request text and the push all read this one function.
+- **"I have paid this request".** `POST /api/fuel/:id/requests/:debtorId/paid` lets the debtor mark their own share paid (403 for anyone else's share or for `paid: false`), records a manual request snapshot in the same transaction when none exists, and is idempotent. The fueler and admins keep their rights, including mark unpaid. The button is on the History screen (**Fuel you owe**) and on the Fuel card and wins over "Mark paid" on the debtor's own share.
+- **Push for a new fill-up (`src/fuel-notify.ts`).** After `POST /api/fuel` has saved and answered, each device of every active debtor with a live share above zero gets one notification (fueler, amount, what is carried, `/#/history`, tag per fill-up). It is fire-and-forget with per-send error handling; `App.idle()` and `close()` wait for sends in flight. Nothing is sent when push is off or on edit and delete.
+- **Request text.** `requestMessage` names the carried amount and the together pool; with nothing carried the text is byte-identical to before.
+
+### Why this approach
+
+- Chosen: derived settlement from a stored request cover (the plan's step 5 to 7), additive migration v3, pure `fuel-carry.ts`, a notifier outside the request. Rejected: storing settlement rows (a second source of truth that can disagree with the shares), a household-wide debt simplification (out of scope), awaiting the push inside the request (a slow push service would delay a saved fill-up).
+- `covers_fuel_id` is an integer, not a timestamp (deviation from the plan, see below): ids are AUTOINCREMENT, so "existed when the request was made" needs no clock and cannot go wrong with a frozen test clock, equal timestamps or a clock that jumps back.
+
+### How it works
+
+Start with `src/fuel-carry.ts` (the rules, with the long comment at the top), then `src/fuel.ts` (`computeShares`, `fuelOverview`, the request and paid routes), `src/usage.ts` (`attributionErrors`, the summary), `src/fuel-notify.ts`, then `public/dom.js` (`kmOwnerControl`, `linkNoteToOwner`, `driveBody`) and `public/views/history.js` (`fuelOwed`).
+
+- Settlement: for a paid request R on fill-up F for debtor D (fueler C), every earlier share (date order) of the pair (C, D) in either direction, from a fill-up with id up to `covers_fuel_id`, that is not paid itself, is settled by R. Two paid requests reaching the same share: the earlier fill-up's request gets it and the other one's numbers then differ from what is due (its card says so). A request made before v3 has no cover and settles nothing but itself.
+- A settled share keeps counting inside the request that settled it (so paying does not flag it as changed) and drops out of balances, later carry-overs and later requests. A fill-up with a share settled by a later payment is locked like one with a paid request (`settledByLater`).
+- A debtor with a carry but no share on the new fill-up is not listed and not asked; the older amount waits for their next share (documented).
+- The unpaid-then-redone request takes a new cover. The cover is read in the same synchronous step as the amount, before the provider call is awaited, so a fill-up registered meanwhile is not covered.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/fuel-carry.ts`, `src/fuel-notify.ts` | added | Carry-over and settlement (pure); the push for a new fill-up and its in-flight tracker |
+| `src/db.ts` | modified | Migration v3, `KmFor`, row types |
+| `src/usage.ts`, `src/reservations.ts` | modified | Attribution rules and DTOs, owner-based summary; card drive carries the owner |
+| `src/fuel.ts`, `src/payments.ts`, `src/app.ts` | modified | Pool weights, DTO fields, request cover, debtor paid route, settled lock; carried and pool text; notifier wiring and `idle()` |
+| `public/dom.js`, `strings.js`, `api.js`, `style.css` | modified | Owner control, label and note link, new texts and typedefs, checkbox and header styles |
+| `public/views/usage.js`, `agenda.js`, `history.js`, `fuel.js`, `public/admin/admin.js` | modified | Form, lists and totals, Fuel you owe, card lines and button, admin table and editor |
+| `test/attribution.test.ts`, `fuel-carry.test.ts`, `client-attribution.test.ts` | added | Attribution rules and split; carry-over, paid route and push; client helpers |
+| `test/db.test.ts`, `maintenance.test.ts`, `km.test.ts`, `fuel.test.ts`, `forms.test.ts`, `admin.test.ts` | modified | v3 upgrade, rollback and CHECK tests, version pins; DTO and rule updates; screens |
+| `scripts/smoke.mjs`, `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Smoke check 12, docs and this entry |
+
+### How to run and test
+
+On Windows with Node 22.23.1, all exit 0 (the last run, in a linked worktree):
+
+- `npm run check`: typecheck (server and client `checkJs`) and lint clean, `npm test` 425 of 425 (baseline 364), `npm run build` clean, `npm run smoke` 12 of 12 checks over real HTTP (check 12 is new: a drive for another person needs a note, the summary follows the owner, the debtor says "I have paid").
+- Mutation checks: 10 deliberate breaks of the new rules (cover ignored, own settled share not counted, debtor may undo, note rule dropped, pool not scaled, inactive person told, settled share still owed, no settled lock, kilometres follow the driver in the summary, owner ignored in the split) each turned at least one test red; every file was restored and compared byte for byte.
+- Browser pass in the installed headless Chromium at 390 and 320 px (a driver script kept outside the repository): 50 of 50 checks, no sideways scroll on the drive form (closed, open, with errors), History, Fuel and costs, the Drives list and the admin Drives table and editor, no console errors. It exercised the reveal, the required note and focus on the first invalid field with nothing sent, the amount due and carried on History, one press of "I have paid" settling two shares, and the equal part of the together pool. The pass found one real layout problem (the History header wrapped one word per line under the 6em name column of the shared share rule), fixed with a `.owed-head` class and checked again.
+
+### Verification
+
+Verified (ran and saw pass): the commands above, the browser pass, the v2 to v3 upgrade with rows (data kept, copy `pre-migrate-v2.db` written once, v1 straight to v3), the rollback of a failing v3, CHECK constraints, the property tests (500 seeded fill-ups: shares always add up to the total to the cent; 300 seeded carry scenarios: the amount due is the open net of the pair and paying it settles the rest).
+
+NOT verified:
+- Real push delivery to Google, Apple or Mozilla and anything on a real phone or installed PWA (the tests use a stand-in push service and real VAPID keys; the notification itself, its tap target and iOS behaviour were not seen).
+- Docker build, `docker compose up`, Caddy HTTPS, deployment to a real droplet, the first start on the live database (the upgrade ran on synthetic v2 files and in the built server on a fresh one).
+- Screen reader behaviour (labels, `aria-required`, focus were checked structurally and in the browser, not with a reader) and the light theme.
+- The fuel carry-over against real household use: the rules were designed and property-tested, not tried over weeks.
+
+### Deviations from the plan
+
+- **Worked in a linked git worktree**, not the shared checkout: the harness refused every write to the shared checkout ("the parent session has not isolated yet"). The worktree is `.claude/worktrees/km-for-others-and-fuel-payment-push` (detached at `ed6cc59`, `node_modules` junctioned to the main checkout). The changes are uncommitted there, so `git status` and `git diff main` in the main checkout show nothing: later stages must read them from the worktree.
+- `fuel_requests.covers_fuel_id` (an integer fill-up id) instead of the planned `covers_until` timestamp compared with `fuel.created_at`: no clock dependence (see above). Behaviour otherwise as planned.
+- The field code for a person on a self or together drive is `only_for_person` (a new sentence), not the existing `must_be_empty`, whose text is about drafts.
+- Added, from the judges' feedback: the admin editor has the owner control; a fill-up with a share settled by a later payment is locked (`settledByLater`, same 409 `has_paid_requests`); `FuelRequestDto.currentCents` makes the "amount changed" line right with carry-over; trips follow the driver and the summary has a separate `together` object.
+- Client tests are in `test/client-attribution.test.ts` (new) instead of `test/client.test.ts`; `GET /api/fuel` was added to the History tests' routes. The History screen tolerates a failing `GET /api/fuel` (the history still shows) on purpose.
+- `App.idle()` (new) so tests can wait for the notifications that are in flight.
+
+### Honesty flags
+
+- The write-up files `01-analysis.md` and `06-build.md` live under the git-excluded `.claude/runs/` of the checkout the harness blocked; the build write-up is in the worktree's copy of that folder if it could be written, otherwise only in the structured result.
+- Several new tests passed on their first run; the mutation checks above are the evidence they can fail, not a red run on the untouched tree.
+- `test/client.test.ts` shows as modified in `git status` although its bytes equal `HEAD` (a line-ending quirk after a reverted import edit): `git diff` on it is empty.
+- Real push, Docker, Caddy, phones and the live database were not exercised (see Verification).
+
+### Reproduce
+
+- Invocation: `/implement` (a workflow run, step 6 of 14). Plan and problem statement come from the pipeline, not a file in the repository. Audit directory `.claude/runs/km-for-others-and-fuel-payment-push` (git-excluded). Base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`.

@@ -17,6 +17,11 @@ plus an admin page for the person who manages it.
   drove. A reservation card has a **Register km** button (from 30 minutes before it starts) that
   opens the form already linked to it, and shows the drive and kilometres once registered. The
   history shows reserved versus actual driver and kilometres per person.
+- **Kilometres that are not yours.** If you drove but the kilometres are someone else's (you took
+  them somewhere) or for the whole household, tick *I drove, but the kilometres aren't mine* and
+  choose the person or *Together*. A note is then compulsory. You stay the driver (registration,
+  reminders and overlap follow you); the kilometre totals and the fuel split follow the owner, and
+  *Together* kilometres are split equally over everybody active.
 - **Drafts.** Before leaving, save the drive with only the start reading; when back, open it
   (Drives tab, or the reminder) and add the end reading and time. One unfinished drive per person.
   Reservations that ended without a completed drive are listed on the Drives tab (with a count
@@ -27,8 +32,12 @@ plus an admin page for the person who manages it.
   it ends, and once more an hour later if the kilometres are still missing. Each person turns it
   on per device on the Account page. On an iPhone the app must be on the Home Screen (iOS 16.4+).
 - **Fuel and costs.** Record who fuelled, when, litres and price. The cost is split by the
-  kilometres each person drove since the previous fill-up, exact to the cent, with a running
-  "who owes whom" and paid status.
+  kilometres that count for each person since the previous fill-up, exact to the cent, with a
+  running "who owes whom" and paid status. Registering a fill-up sends a push to everybody who owes
+  money. A person who owes presses **I have paid this request** (History screen or Fuel card) for
+  their own share; what is still unpaid from earlier fill-ups between the same two people is
+  carried into the next amount due (and what the fueler owes back is taken off), and paying that
+  request settles the earlier shares with it.
 - **Payment requests.** For each share the app writes a message you send yourself (share sheet,
   text message, WhatsApp, copy), optionally with a payment link you paste. A Tikkie adapter
   exists but is **optional, off by default and unverified**: Tikkie's API is offered to business
@@ -56,6 +65,12 @@ plus an admin page for the person who manages it.
   scheduler share one SQL predicate (`REGISTERED_SQL`), so the banner and the notification agree.
 - **Fuel shares are computed live** from the drives (pure largest-remainder function, integer
   cents and millilitres, no floats); a payment request is a snapshot of the amount that was asked.
+  Personal kilometres weigh their owner; *Together* kilometres are a pool every active user carries
+  an equal part of (each weight is scaled by the number of active users, so it stays an integer).
+- **Settlement is derived, not stored.** A request remembers the highest fill-up id that existed
+  when it was made (ids are creation order, no clock involved). Paying it settles the earlier shares
+  of the same two people up to that id; marking it unpaid opens them again. `src/fuel-carry.ts` is
+  the pure function behind the card, the request text, the push and the balances, so they agree.
 - **Web Push without a library.** VAPID signing and message encryption use `node:crypto` and
   `fetch` (checked against the RFC 8291 test vector), so there is still no runtime dependency.
   Subscription addresses are only accepted for the four push services the browsers use.
@@ -114,10 +129,11 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   auth.ts     passwords, sessions, login throttle                  users.ts    login and user admin
   reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
   fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
+  fuel-carry.ts  carried-over amounts and settlement (pure)        fuel-notify.ts  the push for a new fill-up
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v2, migrations)
+  db.ts       the only file that touches node:sqlite (schema v3, migrations)
 shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
 public/     the PWA (vanilla JavaScript modules) and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
@@ -144,6 +160,13 @@ backups, updates and a monthly cost estimate (about $4-6).
   Home Screen. Without reminders the Drives tab still shows what is waiting.
 - Fuel is entered by hand (no price lookup) in euro. Because everything older than 6 months is
   deleted, the share of the oldest fill-up can change when its oldest drives disappear.
+- **"I have paid" is a self-report** (the person who is owed or an admin can undo it) and the app
+  moves no money. Carry-over is netted per pair of people, not across the household. A settled
+  share stays settled if a drive is added to its period later; the request that settled it is
+  flagged "amount changed" and that flag is the only signal. A person with nothing owed on a new
+  fill-up is not asked: their older amounts wait for their next share.
+- The fill-up push is sent once, after saving, and not retried; a person without a device signed up
+  for reminders hears nothing and finds the amount on the History screen.
 - Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,
   older reservations without a drive show up as "km to register" until they are cancelled or
   registered.

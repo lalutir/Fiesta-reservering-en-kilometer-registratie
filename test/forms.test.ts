@@ -546,9 +546,10 @@ test('history: drives show km, who reserved and the note, an open drive says so,
   const open = draft({ id: 21, start: at(-120), reservation: null, sameDriver: null, reservationId: null, note: '' });
   const unused = reservation({ id: 30, userId: BEN.id, userName: 'Ben', start: at(-9000), end: at(-8900), note: 'Never used' });
   const registered = reservation({ id: 31, start: at(-7000), end: at(-6900), kmState: 'registered' });
-  const routes = { 'GET /api/history': () => ({ usage: [linked, open], reservations: [unused, registered] }) };
+  const routes = { 'GET /api/history': () => ({ usage: [linked, open], reservations: [unused, registered] }), 'GET /api/fuel': () => ({ items: [], balances: [] }) };
   await withClient({ now: NOW, routes }, async ({ dom }) => {
     const list = view(dom, await renderHistory(me.app));
+    assert.equal(all(list, 'section.card').length, 0, 'nobody owes fuel money, so there is no fuel section');
     const cards = all(list, 'article.history');
     assert.equal(cards.length, 3, 'the registered reservation is not shown as unused');
 
@@ -564,6 +565,316 @@ test('history: drives show km, who reserved and the note, an open drive says so,
 
     assert.equal(one(never, '.badge-status').textContent, S.history.notDriven);
     assert.equal(one(never, '.note').textContent, 'Never used');
+  });
+});
+
+test('history: a drive that is somebody else\'s or shared says so, with the note', async () => {
+  const me = makeApp(ANNA);
+  const forBen = usage({ id: 20, userId: ANNA.id, userName: 'Anna', start: at(-300), end: at(-200), kmFor: 'person', kmUserId: BEN.id, kmUserName: 'Ben', note: 'Took Ben to the station', reservation: null, sameDriver: null });
+  const together = usage({ id: 21, userId: ANNA.id, userName: 'Anna', start: at(-100), end: at(-50), kmFor: 'together', kmUserId: null, kmUserName: null, note: 'Shopping for everybody', reservation: null, sameDriver: null });
+  const own = usage({ id: 22, userId: ANNA.id, userName: 'Anna', start: at(-30), end: at(-10), kmFor: 'self', kmUserId: null, kmUserName: null, reservation: null, sameDriver: null });
+  const routes = { 'GET /api/history': () => ({ usage: [own, together, forBen], reservations: [] }), 'GET /api/fuel': () => ({ items: [], balances: [] }) };
+  await withClient({ now: NOW, routes }, async ({ dom }) => {
+    const cards = all(view(dom, await renderHistory(me.app)), 'article.history');
+    assert.equal(cards.length, 3);
+    const [ownCard, sharedCard, personCard] = cards as [FakeElement, FakeElement, FakeElement];
+    assert.equal(all(ownCard, '.km-owner-line').length, 0, 'the driver\'s own kilometres say nothing extra');
+    assert.equal(one(sharedCard, '.km-owner-line').textContent, S.usage.kmOwnerTogether);
+    assert.equal(one(sharedCard, '.note').textContent, 'Shopping for everybody');
+    assert.equal(one(personCard, '.km-owner-line').textContent, S.usage.kmOwnerPerson('Ben'));
+    assert.equal(one(personCard, '.note').textContent, 'Took Ben to the station');
+    assert.equal(one(personCard, 'strong').textContent, S.history.drivenBy(S.me), 'Anna is still the driver');
+  });
+});
+
+/** A fill-up by Anna with Ben's share to pay (Ben is the viewer in the History tests). */
+function owedFuel(id: number, share: Json = {}, over: Json = {}): Json {
+  return fuelRow({
+    id,
+    shares: [
+      { userId: ANNA.id, userName: 'Anna', km: 100, cents: 4000, owes: false, carriedCents: 0, dueCents: 0, settledBy: null, request: null, can: { request: false, markPaid: false, selfPaid: false } },
+      { userId: BEN.id, userName: 'Ben', km: 100, cents: 4000, owes: true, carriedCents: 0, dueCents: 4000, settledBy: null, request: null, can: { request: false, markPaid: false, selfPaid: true }, ...share },
+    ],
+    ...over,
+  });
+}
+const historyRoutes = (items: Json[], extra: Routes = {}): Routes => ({
+  'GET /api/history': () => ({ usage: [], reservations: [] }),
+  'GET /api/fuel': () => ({ items, balances: [] }),
+  ...extra,
+});
+const owedSection = (page: unknown): FakeElement => {
+  const heading = all(page, 'h3').find((h3) => h3.textContent === S.history.fuelOwed);
+  assert.ok(heading?.parent, 'the Fuel you owe section is on the page');
+  return heading.parent;
+};
+
+test('history: "Fuel you owe" lists what I have to pay with the amount due and carried, and "I have paid this request" says so', async () => {
+  const me = makeApp(BEN);
+  let paid = false;
+  const items = (): Json[] => [
+    owedFuel(5, { carriedCents: 1500, dueCents: 5500, ...(paid ? { request: request({ amountCents: 5500, paidAt: at(-1), changed: false }), can: { request: false, markPaid: false, selfPaid: false } } : {}) }, { at: at(-1440) }),
+  ];
+  const routes = historyRoutes([], {
+    'GET /api/fuel': () => ({ items: items(), balances: [] }),
+    'POST /api/fuel/5/requests/2/paid': (call) => {
+      assert.deepEqual(call.body, { paid: true });
+      paid = true;
+      return { fuel: {} };
+    },
+  });
+  await withClient({ now: NOW, routes }, async ({ dom, api }) => {
+    const page = view(dom, await renderHistory(me.app));
+    const section = owedSection(page);
+    assert.ok(all(section, 'p.hint').some((p) => p.textContent === S.history.fuelOwedIntro));
+    const [row] = all(section, 'li.share') as [FakeElement];
+    assert.equal(one(row, 'strong').textContent, S.history.fuelOwedHeader('Anna', fmtWhen(at(-1440), TZ)));
+    // The rows add up in order and the total is said once, as the last (emphasised) line.
+    const order = [S.history.fuelOwedShare('40.00'), S.fuel.carried('15.00'), S.fuel.due('55.00')].map((line) => row.textContent.indexOf(line));
+    assert.ok(order[0]! >= 0 && order[0]! < order[1]! && order[1]! < order[2]!, `this fill-up, what is carried, then the amount due: ${order.join(',')}`);
+    assert.equal(all(row, 'div.sub.due').length, 1, 'only the total is emphasised');
+    assert.equal(row.textContent.includes(S.history.fuelOwedDue('55.00')), false, 'the total is not repeated above its breakdown');
+    assert.equal(all(row, '.chip').length, 0, 'still open: no paid state yet');
+
+    await byText(row, 'button', S.fuel.iPaid).fire('click');
+    await until(() => me.toasts.length === 1, 'the answer');
+    assert.deepEqual(onlyWrite(api).path, '/api/fuel/5/requests/2/paid');
+    assert.deepEqual(me.toasts, [{ message: S.fuel.iPaidSaved, isError: false }]);
+    assert.equal(me.refreshes(), 1, 'the screen reloads');
+    await until(() => dom.focused()?.id === 'owed-5', 'focus to return to the fill-up that was paid, not to nowhere');
+
+    // After the reload the share is paid: a paid state, no button.
+    const again = owedSection(view(dom, await renderHistory(me.app)));
+    const [done] = all(again, 'li.share') as [FakeElement];
+    assert.equal(one(done, '.chip').textContent, S.fuel.status.paid);
+    assert.ok(done.textContent.includes(S.history.fuelOwedPaid('55.00')));
+    assert.equal(all(done, 'button').length, 0);
+    assert.equal(all(again, 'p.hint').filter((p) => p.textContent === S.history.fuelOwedIntro).length, 0, 'nothing left to press, so no instruction');
+  });
+});
+
+test('history: open shares come before paid and settled ones, other people\'s shares are not listed, and a failing fuel answer does not take the history down', async () => {
+  const me = makeApp(BEN);
+  const settled = owedFuel(4, { settledBy: { fuelId: 6, at: at(-100) }, can: { request: false, markPaid: false, selfPaid: false } }, { at: at(-5000) });
+  const open = owedFuel(6, {}, { at: at(-100) });
+  const others = owedFuel(7, { userId: 3, userName: 'Carla' }); // the second share belongs to somebody else; Ben has none here
+  const mine = fuelRow({ id: 8, userId: BEN.id, userName: 'Ben', shares: [{ userId: BEN.id, userName: 'Ben', km: 100, cents: 4000, owes: false, carriedCents: 0, dueCents: 0, settledBy: null, request: null, can: { request: false, markPaid: false, selfPaid: false } }] });
+  await withClient({ now: NOW, routes: historyRoutes([settled, open, others, mine]) }, async ({ dom }) => {
+    const rows = all(owedSection(view(dom, await renderHistory(me.app))), 'li.share');
+    assert.equal(rows.length, 2, 'Carla\'s share and my own fill-up are not mine to pay');
+    assert.ok((rows[0] as FakeElement).textContent.includes(S.history.fuelOwedDue('40.00')), 'the open one first');
+    assert.equal(one(rows[1], '.chip').textContent, S.fuel.status.settled);
+    assert.ok((rows[1] as FakeElement).textContent.includes(S.fuel.settledBy(fmtWhen(at(-100), TZ))));
+    assert.equal(all(rows[1], 'button').length, 0, 'nothing to press on a settled share');
+  });
+
+  await withClient({ now: NOW, routes: historyRoutes([], { 'GET /api/fuel': () => refuse(500, 'internal') }) }, async ({ dom }) => {
+    const page = view(dom, await renderHistory(me.app));
+    assert.equal(all(page, 'h3').some((h3) => h3.textContent === S.history.fuelOwed), false);
+    assert.equal(one(page, 'h2').textContent, S.history.title, 'the history itself still shows');
+  });
+});
+
+test('history: when "I have paid this request" is refused (a stale page), the person is told why, the buttons work again and the screen reloads to the truth', async () => {
+  const me = makeApp(BEN);
+  let settled = false;
+  const items = (): Json[] => [
+    owedFuel(5, settled ? { settledBy: { fuelId: 6, at: at(-100) }, can: { request: false, markPaid: false, selfPaid: false } } : {}, { at: at(-1440) }),
+  ];
+  const routes = historyRoutes([], {
+    'GET /api/fuel': () => ({ items: items(), balances: [] }),
+    'POST /api/fuel/5/requests/2/paid': () => {
+      settled = true; // somebody else's payment settled it while this page was open
+      return refuse(409, 'already_paid');
+    },
+  });
+  await withClient({ now: NOW, routes }, async ({ dom, api }) => {
+    const page = view(dom, await renderHistory(me.app));
+    const [row] = all(owedSection(page), 'li.share') as [FakeElement];
+    const button = byText(row, 'button', S.fuel.iPaid);
+    await button.fire('click');
+    await until(() => me.toasts.length === 1, 'the refusal to be reported');
+    assert.deepEqual(me.toasts, [{ message: S.errors.already_paid, isError: true }], 'an error, in words');
+    assert.equal(onlyWrite(api).path, '/api/fuel/5/requests/2/paid');
+    assert.equal(me.refreshes(), 1, 'the screen reloads whatever the answer was');
+    await until(() => button.disabled === false, 'the button to be usable again, not stuck busy');
+    await until(() => dom.focused()?.id === 'owed-5', 'focus to return to the fill-up');
+
+    // After the reload the truth is on the screen: settled, nothing left to press.
+    const [after] = all(owedSection(view(dom, await renderHistory(me.app))), 'li.share') as [FakeElement];
+    assert.equal(one(after, '.chip').textContent, S.fuel.status.settled);
+    assert.equal(all(after, 'button').length, 0);
+  });
+});
+
+// ----------------------------------------- kilometres that are not the driver's own
+
+const ownerBox =(form: unknown): FakeElement => one(form, '.km-owner-box');
+const notMine = (form: unknown): FakeElement => one(form, 'label.check input');
+const ownerSelect = (form: unknown): FakeElement => control(fieldRow(form, S.usage.kmWhose));
+const optionsOf = (select: FakeElement): string[] => all(select, 'option').map((o) => o.textContent);
+
+test('drive form: "I drove, but the kilometres aren\'t mine" reveals the choice and makes the note required; nothing is sent until both are filled in', async () => {
+  const me = makeApp(ANNA);
+  const ended = reservation({ start: at(-300), end: at(-240), note: '', kmState: 'missing' });
+  await withClient({ now: NOW, routes: driveRoutes({ reservations: [ended] }) }, async ({ dom, api }) => {
+    const form = view(dom, await driveForm(me, 'res=7'));
+    // Off by default: nothing extra to look at, the note is the recommended one.
+    assert.equal(notMine(form).checked, false);
+    assert.equal(ownerBox(form).hidden, true);
+    assert.equal(hintOf(fieldRow(form, S.usage.note)), S.noteHint);
+    assert.equal(control(fieldRow(form, S.usage.note)).getAttribute('aria-required'), 'false');
+    assert.equal(all(form, 'label.check span')[0]?.textContent, S.usage.kmNotMine);
+
+    await typeInto(readingStart(form), '50000');
+    await typeInto(readingEnd(form), '50042');
+    notMine(form).checked = true;
+    await notMine(form).fire('change');
+    assert.equal(ownerBox(form).hidden, false, 'the choice appears');
+    assert.deepEqual(optionsOf(ownerSelect(form)), [S.usage.kmPersonNone, S.usage.kmChooseTogether, 'Ben', 'Root'], 'every active person but the driver, and Together');
+    const note = fieldRow(form, S.usage.noteRequired);
+    assert.equal(hintOf(note), S.usage.noteRequiredHint);
+    assert.equal(control(note).getAttribute('aria-required'), 'true');
+
+    // Nothing chosen and no note: both are reported on their fields, no request is made, focus goes to the first.
+    await submitForm(form);
+    assert.deepEqual(api.writes(), []);
+    assert.equal(errorOf(fieldRow(form, S.usage.kmWhose)), S.fieldErrors.required);
+    assert.equal(errorOf(note), S.fieldErrors.required);
+    assert.equal(dom.focused(), ownerSelect(form), 'focus goes to the first invalid field');
+
+    // Together is chosen: the note is still missing.
+    ownerSelect(form).value = 'together';
+    await ownerSelect(form).fire('change');
+    await submitForm(form);
+    assert.deepEqual(api.writes(), []);
+    assert.equal(errorOf(fieldRow(form, S.usage.kmWhose)), '', 'the choice is fine now');
+    assert.equal(errorOf(note), S.fieldErrors.required);
+    await typeInto(control(note), '   ');
+    await submitForm(form);
+    assert.deepEqual(api.writes(), [], 'a blank note is no note');
+
+    await typeInto(control(note), 'Shopping for everybody');
+    await submitForm(form);
+    assert.deepEqual(onlyWrite(api).body, {
+      status: 'completed',
+      start: at(-300),
+      end: at(-240),
+      odometerStart: 50000,
+      odometerEnd: 50042,
+      note: 'Shopping for everybody',
+      kmFor: 'together',
+      kmUserId: null,
+      reservationId: 7,
+    });
+    assert.deepEqual(me.toasts, [{ message: S.usage.saved, isError: false }]);
+  });
+});
+
+test('drive form: choosing a person sends their id; switching the box off again sends nothing about it', async () => {
+  const me = makeApp(ANNA);
+  const ended = reservation({ start: at(-300), end: at(-240), note: 'Visit', kmState: 'missing' });
+  await withClient({ now: NOW, routes: driveRoutes({ reservations: [ended] }) }, async ({ dom, api }) => {
+    const form = view(dom, await driveForm(me, 'res=7'));
+    await typeInto(readingStart(form), '50000');
+    await typeInto(readingEnd(form), '50042');
+
+    notMine(form).checked = true;
+    await notMine(form).fire('change');
+    ownerSelect(form).value = `person:${BEN.id}`;
+    await ownerSelect(form).fire('change');
+    await submitForm(form);
+    const sent = onlyWrite(api).body;
+    assert.deepEqual([sent['kmFor'], sent['kmUserId'], sent['note']], ['person', BEN.id, 'Visit']);
+
+    // Back to "mine": the label returns to the recommended note and the request says nothing about whose kilometres.
+    notMine(form).checked = false;
+    await notMine(form).fire('change');
+    assert.equal(ownerBox(form).hidden, true);
+    assert.equal(hintOf(fieldRow(form, S.usage.note)), S.noteHint);
+    await typeInto(control(fieldRow(form, S.usage.note)), '');
+    await submitForm(form);
+    const own = api.writes()[1]?.body as Json;
+    assert.equal('kmFor' in own, false);
+    assert.equal(own['note'], '', 'the driver\'s own kilometres need no note');
+  });
+});
+
+test('drive form: editing a drive that is somebody else\'s keeps the choice, and an admin choosing another driver takes that person out of the list', async () => {
+  const me = makeApp(ANNA);
+  const forBen = usage({ id: 4, userId: ANNA.id, userName: 'Anna', kmFor: 'person', kmUserId: BEN.id, kmUserName: 'Ben', note: 'Took Ben', can: { edit: true, delete: true } });
+  const routes = driveRoutes({ usage: [forBen], extra: { 'PATCH /api/usage/4': () => ({ usage: {} }) } });
+  await withClient({ now: NOW, routes }, async ({ dom, api }) => {
+    const form = view(dom, await driveForm(me, 'edit=4'));
+    assert.equal(notMine(form).checked, true);
+    assert.equal(ownerBox(form).hidden, false);
+    assert.equal(ownerSelect(form).value, `person:${BEN.id}`);
+    assert.ok(fieldRow(form, S.usage.noteRequired), 'the note is required while it is somebody else\'s');
+
+    await submitForm(form);
+    const kept = onlyWrite(api).body;
+    assert.deepEqual([kept['kmFor'], kept['kmUserId'], kept['note']], ['person', BEN.id, 'Took Ben']);
+
+    // Taking it back as the driver's own has to be said in the request, since "self" is otherwise left out.
+    notMine(form).checked = false;
+    await notMine(form).fire('change');
+    await submitForm(form);
+    const back = api.writes()[1]?.body as Json;
+    assert.deepEqual([back['kmFor'], back['kmUserId']], ['self', null]);
+  });
+
+  // The person has been deactivated since: still shown and kept while the drive is edited.
+  const gone = usage({ id: 4, userId: ANNA.id, userName: 'Anna', kmFor: 'person', kmUserId: 9, kmUserName: 'Dora', note: 'Took Dora', can: { edit: true, delete: true } });
+  await withClient({ now: NOW, routes: driveRoutes({ usage: [gone] }) }, async ({ dom }) => {
+    const form = view(dom, await driveForm(me, 'edit=4'));
+    assert.ok(optionsOf(ownerSelect(form)).includes('Dora'));
+    assert.equal(ownerSelect(form).value, 'person:9');
+  });
+
+  // An admin registers for somebody else: the driver cannot also be the other person.
+  const admin = makeApp(ADMIN);
+  await withClient({ now: NOW, routes: driveRoutes() }, async ({ dom }) => {
+    const form = view(dom, await driveForm(admin));
+    notMine(form).checked = true;
+    await notMine(form).fire('change');
+    assert.deepEqual(optionsOf(ownerSelect(form)), [S.usage.kmPersonNone, S.usage.kmChooseTogether, 'Anna', 'Ben'], 'the admin is the driver');
+    ownerSelect(form).value = `person:${BEN.id}`;
+    const who = control(fieldRow(form, S.usage.driver));
+    who.value = String(BEN.id);
+    await who.fire('change');
+    assert.deepEqual(optionsOf(ownerSelect(form)), [S.usage.kmPersonNone, S.usage.kmChooseTogether, 'Anna', `Root (${S.me})`], 'Ben is the driver now, so he is not offered and the choice of him is dropped');
+    assert.equal(ownerSelect(form).value, '');
+  });
+});
+
+test('drive form: a server refusal about whose kilometres shows on the choice, and the list and totals show the owner and Together', async () => {
+  const me = makeApp(ANNA);
+  const forBen = usage({ id: 4, userId: ANNA.id, userName: 'Anna', kmFor: 'person', kmUserId: BEN.id, kmUserName: 'Ben', note: 'Took Ben', can: { edit: true, delete: true } });
+  const shared = usage({ id: 5, userId: ANNA.id, userName: 'Anna', start: at(-900), end: at(-800), kmFor: 'together', kmUserId: null, kmUserName: null, note: 'All of us', can: { edit: true, delete: true } });
+  const routes = driveRoutes({
+    usage: [forBen, shared],
+    extra: {
+      'GET /api/usage/summary': () => ({
+        items: [{ userId: BEN.id, userName: 'Ben', trips: 0, km: 120 }, { userId: ANNA.id, userName: 'Anna', trips: 2, km: 40 }],
+        together: { trips: 1, km: 30 },
+        totalKm: 190,
+      }),
+      'PATCH /api/usage/4': () => refuse(422, 'validation_failed', { fields: { kmUserId: 'same_as_driver' } }),
+    },
+  });
+  await withClient({ now: NOW, routes }, async ({ dom }) => {
+    const form = view(dom, await driveForm(me, 'edit=4'));
+    await submitForm(form);
+    assert.equal(errorOf(fieldRow(form, S.usage.kmWhose)), S.fieldErrors.same_as_driver);
+    assert.equal(one(form, 'p.form-error').textContent, S.errors.validation_failed);
+
+    const page = view(dom, await driveForm(me));
+    const cards = all(page, 'article.usage');
+    assert.equal(one(cards[0], '.km-owner-line').textContent, S.usage.kmOwnerPerson('Ben'));
+    assert.equal(one(cards[1], '.km-owner-line').textContent, S.usage.kmOwnerTogether);
+    const totals = all(one(page, 'ul.totals'), 'li').map((li) => li.textContent);
+    assert.deepEqual(totals, [`Ben${S.usage.km(120)} · ${S.usage.trips(0)}`, `${S.me}${S.usage.km(40)} · ${S.usage.trips(2)}`, `${S.usage.kmTogetherTotal}${S.usage.km(30)} · ${S.usage.trips(1)}`]);
+    assert.ok(all(page, 'p.hint').some((p) => p.textContent === S.usage.kmTogetherNote), 'it explains what together means');
   });
 });
 
@@ -778,6 +1089,58 @@ test('fill-up card: shows who fuelled, the note and each share; delete asks firs
     await remove.fire('click');
     await until(() => me.toasts.at(-1)?.message === S.fuel.deleted, 'the delete to be reported');
     assert.equal(onlyWrite(api).path, '/api/fuel/5');
+  });
+});
+
+test('fill-up card: carried amounts, together kilometres and settled shares are explained, and "I have paid" replaces "Mark paid" on my own share', async () => {
+  const admin = makeApp(ADMIN);
+  const base = { km: 100, owes: true, settledBy: null, carriedCents: 0, dueCents: 0 };
+  const shares = [
+    { ...base, userId: ANNA.id, userName: 'Anna', cents: 4000, owes: false, request: null, can: { request: false, markPaid: false, selfPaid: false } },
+    // Ben: 40.00 plus 15.00 still open from earlier; the fueler can ask.
+    { ...base, userId: BEN.id, userName: 'Ben', cents: 4000, carriedCents: 1500, dueCents: 5500, request: null, can: { request: true, markPaid: false, selfPaid: false } },
+    // The admin owes too and has a request: as an admin they could also mark it paid, but for their own share only "I have paid" is offered.
+    { ...base, userId: ADMIN.id, userName: 'Root', cents: 2000, dueCents: 1000, carriedCents: -1000, request: request({ amountCents: 1000, changed: false }), can: { request: true, markPaid: true, selfPaid: true } },
+  ];
+  const settled = fuelRow({
+    id: 4,
+    at: at(-3000),
+    settledByLater: true,
+    togetherKm: 0,
+    shares: [{ ...base, userId: BEN.id, userName: 'Ben', cents: 3000, owes: true, settledBy: { fuelId: 5, at: at(-1440) }, request: null, can: { request: false, markPaid: false, selfPaid: false } }],
+    can: { edit: false, delete: false },
+  });
+  const newest = fuelRow({ id: 5, togetherKm: 80, shares });
+  let paid = false;
+  const routes = fuelRoutes([], {
+    'GET /api/fuel': () => ({ items: [newest, settled], balances: [] }),
+    'POST /api/fuel/5/requests/3/paid': (call) => {
+      paid = call.body.paid === true;
+      return { fuel: {} };
+    },
+  });
+  await withClient({ now: NOW, routes }, async ({ dom, api }) => {
+    const page = view(dom, await fuelForm(admin));
+    const card = one(page, 'article#fuel-5');
+    assert.ok(all(card, 'div.sub').some((d) => d.textContent === S.fuel.togetherNote(80)), 'together kilometres are explained');
+    const [, ben, root] = all(card, 'li.share') as [FakeElement, FakeElement, FakeElement];
+    assert.deepEqual(all(ben, 'div.sub').map((d) => d.textContent), [S.fuel.carried('15.00'), S.fuel.due('55.00')]);
+    assert.deepEqual(all(root, 'div.sub').map((d) => d.textContent), [S.fuel.carriedBack('Anna', S.me, '10.00'), S.fuel.due('10.00')], 'what the fueler owes back is taken off');
+    assert.deepEqual(all(root, 'button').map((b) => b.textContent), [S.fuel.shareRequest, S.fuel.iPaid], 'their own share: I have paid, not Mark paid');
+
+    await byText(root, 'button', S.fuel.iPaid).fire('click');
+    await until(() => admin.toasts.at(-1)?.message === S.fuel.iPaidSaved, 'the answer');
+    assert.equal(paid, true);
+    assert.equal(onlyWrite(api).path, '/api/fuel/5/requests/3/paid');
+    assert.equal(admin.refreshes(), 1);
+
+    // A fill-up whose share a later payment settled: the state is named, the lock is explained, and nothing can be pressed on it.
+    const old = one(page, 'article#fuel-4');
+    assert.equal(one(old, '.chip').textContent, S.fuel.status.settled);
+    assert.ok(all(old, 'div.sub').some((d) => d.textContent === S.fuel.settledBy(fmtWhen(at(-1440), TZ))));
+    assert.ok(all(old, 'p.hint').some((p) => p.textContent === S.fuel.settledLocked), 'and why it cannot be changed');
+    assert.equal(all(old, 'button').length, 0);
+    assert.equal(all(old, 'a').filter((a) => a.textContent === S.edit).length, 0);
   });
 });
 

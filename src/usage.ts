@@ -1,4 +1,4 @@
-import { isUniqueViolation, many, one, run, tx, type Db, type UsageRow, type UsageStatus } from './db.ts';
+import { isUniqueViolation, many, one, run, tx, type Db, type KmFor, type UsageRow, type UsageStatus } from './db.ts';
 import { requestedPeriods } from './fuel.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
 import { listConfirmed, listUnregistered } from './reservations.ts';
@@ -8,6 +8,7 @@ import { Fields, ValidationError, assertInsideWindow, failIfAny, queryRange, que
 const FUTURE_SLACK_MS = 5 * 60_000;
 const MAX_ODOMETER = 10_000_000;
 const STATUSES = ['draft', 'completed'] as const;
+const KM_FORS = ['self', 'person', 'together'] as const;
 /** How far back the pending-km list looks by default; the admin can ask for the whole window. */
 const PENDING_DEFAULT_DAYS = 14;
 const PENDING_MAX_DAYS = 190;
@@ -15,6 +16,8 @@ const DAY_MS = 86_400_000;
 
 interface UsageJoin extends UsageRow {
   user_name: string;
+  /** The person whose kilometres these are, when km_for is 'person'. */
+  km_user_name: string | null;
 }
 
 export interface UsageDto {
@@ -30,6 +33,10 @@ export interface UsageDto {
   /** Only known when both odometer readings exist. */
   distanceKm: number | null;
   reservationId: number | null;
+  /** Whose kilometres these are: the driver's own, another person's (kmUserId) or the shared pool. The driver stays the driver. */
+  kmFor: KmFor;
+  kmUserId: number | null;
+  kmUserName: string | null;
   note: string;
   createdBy: number;
   createdAt: string;
@@ -39,7 +46,8 @@ export interface UsageDto {
   fuelLocked: boolean;
 }
 
-const SELECT = `SELECT g.*, u.display_name AS user_name FROM usage g JOIN users u ON u.id = g.user_id`;
+const SELECT = `SELECT g.*, u.display_name AS user_name, ku.display_name AS km_user_name
+  FROM usage g JOIN users u ON u.id = g.user_id LEFT JOIN users ku ON ku.id = g.km_user_id`;
 
 function mayChange(actor: Principal, row: UsageRow): boolean {
   return actor.role === 'admin' || actor.id === row.user_id;
@@ -60,6 +68,9 @@ function toDto(row: UsageJoin, actor: Principal, locked: boolean): UsageDto {
     odometerEnd: row.odometer_end,
     distanceKm: both ? (row.odometer_end as number) - (row.odometer_start as number) : null,
     reservationId: row.reservation_id,
+    kmFor: row.km_for,
+    kmUserId: row.km_user_id,
+    kmUserName: row.km_user_name,
     note: row.note,
     createdBy: row.created_by,
     createdAt: row.created_at,
@@ -81,13 +92,28 @@ function lockedFor(db: Db, actor: Principal): (row: UsageRow) => boolean {
   return (row) => row.status === 'completed' && covered(row.end_utc);
 }
 
+function fuelRequestedError(): HttpError {
+  return new HttpError(409, 'fuel_requested', 'A payment request was made for the fill-up this drive belongs to. Ask an admin to change it.');
+}
+
 /** The 409 for a member who edits, moves or deletes a locked drive. `newEnd` is where an edit would put it. */
 function assertNotFuelLocked(db: Db, actor: Principal, existing: UsageRow, newEnd: string | null): void {
   if (actor.role === 'admin' || existing.status !== 'completed') return;
   const covered = requestedPeriods(db);
-  if (covered(existing.end_utc) || (newEnd !== null && covered(newEnd))) {
-    throw new HttpError(409, 'fuel_requested', 'A payment request was made for the fill-up this drive belongs to. Ask an admin to change it.');
-  }
+  if (covered(existing.end_utc) || (newEnd !== null && covered(newEnd))) throw fuelRequestedError();
+}
+
+/**
+ * The 409 for a member who puts kilometres that are not their own (another person's, or the shared
+ * pool) into the period of a fill-up with a payment request: it would lower their own share and raise
+ * someone else's after the money was asked for or paid. A drive of their own (kmFor 'self') stays open
+ * to everybody, as before: the fuel card flags the difference. An admin can do both. This covers
+ * creating a completed drive and finishing a draft (a draft is not billed to anyone until then);
+ * changing a drive that is already completed is assertNotFuelLocked.
+ */
+function assertNotBilledToOthers(db: Db, actor: Principal, input: UsageInput): void {
+  if (actor.role === 'admin' || input.status !== 'completed' || input.kmFor === 'self' || input.end === null) return;
+  if (requestedPeriods(db)(input.end)) throw fuelRequestedError();
 }
 
 function load(db: Db, id: number): UsageJoin {
@@ -105,6 +131,9 @@ interface UsageInput {
   odometerStart: number | null;
   odometerEnd: number | null;
   reservationId: number | null;
+  kmFor: KmFor;
+  /** Only set when kmFor is 'person'. */
+  kmUserId: number | null;
   note: string;
 }
 
@@ -136,6 +165,24 @@ export function shapeErrors(i: {
   return errors;
 }
 
+/**
+ * Whose kilometres a drive is, as pure rules. 'person' needs another person than the driver;
+ * 'self' and 'together' take no person; anything but the driver's own kilometres needs a note
+ * (the reason), also on a draft: the rule belongs to the row, not to its status. Returns one code
+ * per field. That the person exists and is active is checked against the database (checkUsage).
+ */
+export function attributionErrors(i: { kmFor: KmFor; kmUserId: number | null; driverId: number; note: string }): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (i.kmFor === 'person') {
+    if (i.kmUserId === null) errors['kmUserId'] = 'required';
+    else if (i.kmUserId === i.driverId) errors['kmUserId'] = 'same_as_driver';
+  } else if (i.kmUserId !== null) {
+    errors['kmUserId'] = 'only_for_person';
+  }
+  if (i.kmFor !== 'self' && i.note.trim() === '') errors['note'] = 'required';
+  return errors;
+}
+
 /** The 409 for a driver who already has a drive in progress (other than `excludeId`), or undefined when there is none. */
 function openDraftError(db: Db, userId: number, excludeId: number): HttpError | undefined {
   const open = one<{ id: number }>(db, "SELECT id FROM usage WHERE user_id = ? AND status = 'draft' AND id != ?", userId, excludeId);
@@ -143,8 +190,12 @@ function openDraftError(db: Db, userId: number, excludeId: number): HttpError | 
 }
 
 /** Cross-field rules shared by create and update. Throws 422/409. */
-function checkUsage(ctx: Ctx, input: UsageInput, now: Date, excludeId: number): void {
+function checkUsage(ctx: Ctx, input: UsageInput, now: Date, excludeId: number, previousKmUserId: number | null): void {
   if (!one<{ id: number }>(ctx.db, 'SELECT id FROM users WHERE id = ?', input.userId)) throw new ValidationError({ userId: 'unknown_user' });
+  // The person must be active when chosen; one who was deactivated after the choice stays as it was.
+  if (input.kmUserId !== null && input.kmUserId !== previousKmUserId && !one<{ id: number }>(ctx.db, 'SELECT id FROM users WHERE id = ? AND active = 1', input.kmUserId)) {
+    throw new ValidationError({ kmUserId: 'unknown_user' });
+  }
   const nowMs = now.getTime();
   const errors = shapeErrors(input);
   if (input.status === 'draft') {
@@ -235,27 +286,50 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     return ok({ items: rows.map((r) => toDto(r, actor, locked(r))), window: range });
   });
 
-  // Kilometres per driver. Only finished drives count; a draft is a drive that has not ended yet.
+  // Kilometres per person. Only finished drives count; a draft is a drive that has not ended yet.
+  // Trips follow the driver (every drive is one trip, counted once, so totalTrips includes the
+  // together drives); kilometres follow whose they are: the driver's own, another person's, or the
+  // shared "together" pool, which is reported on its own. totalKm is items plus together.
   router.add('GET', '/api/usage/summary', 'user', (req) => {
     const range = queryRange(req.query, ctx.clock.now(), config.tz, config.windowMonths);
-    const rows = many<{ user_id: number; user_name: string; trips: number; trips_with_km: number; km: number }>(
+    const rows = many<{ user_id: number; km_for: KmFor; km_user_id: number | null; trips: number; trips_with_km: number; km: number }>(
       db,
-      `SELECT g.user_id, u.display_name AS user_name, COUNT(*) AS trips,
+      `SELECT g.user_id, g.km_for, g.km_user_id, COUNT(*) AS trips,
               SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL THEN 1 ELSE 0 END) AS trips_with_km,
               COALESCE(SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL
                                 THEN g.odometer_end - g.odometer_start END), 0) AS km
-         FROM usage g JOIN users u ON u.id = g.user_id
+         FROM usage g
         WHERE g.status = 'completed' AND g.end_utc >= ? AND g.start_utc <= ?
-        GROUP BY g.user_id, u.display_name
-        ORDER BY km DESC, trips DESC, u.display_name`,
+        GROUP BY g.user_id, g.km_for, g.km_user_id`,
       range.from,
       range.to,
     );
-    const items = rows.map((r) => ({ userId: r.user_id, userName: r.user_name, trips: r.trips, tripsWithKm: r.trips_with_km, km: r.km }));
+    const names = new Map(many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users').map((u) => [u.id, u.display_name]));
+    const people = new Map<number, { userId: number; userName: string; trips: number; tripsWithKm: number; km: number }>();
+    const person = (userId: number) => {
+      let entry = people.get(userId);
+      if (!entry) people.set(userId, (entry = { userId, userName: names.get(userId) ?? '?', trips: 0, tripsWithKm: 0, km: 0 }));
+      return entry;
+    };
+    const together = { trips: 0, tripsWithKm: 0, km: 0 };
+    for (const r of rows) {
+      const driver = person(r.user_id);
+      driver.trips += r.trips;
+      driver.tripsWithKm += r.trips_with_km;
+      if (r.km_for === 'together') {
+        together.trips += r.trips;
+        together.tripsWithKm += r.trips_with_km;
+        together.km += r.km;
+      } else {
+        person(r.km_for === 'person' ? (r.km_user_id as number) : r.user_id).km += r.km;
+      }
+    }
+    const items = [...people.values()].sort((a, b) => b.km - a.km || b.trips - a.trips || (a.userName < b.userName ? -1 : a.userName > b.userName ? 1 : 0));
     return ok({
       items,
+      together,
       totalTrips: items.reduce((n, r) => n + r.trips, 0),
-      totalKm: items.reduce((n, r) => n + r.km, 0),
+      totalKm: items.reduce((n, r) => n + r.km, 0) + together.km,
       window: range,
     });
   });
@@ -301,10 +375,11 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
       UsageJoin & { r_id: number | null; r_user_id: number | null; r_user_name: string | null; r_start: string | null; r_end: string | null }
     >(
       db,
-      `SELECT g.*, u.display_name AS user_name,
+      `SELECT g.*, u.display_name AS user_name, ku.display_name AS km_user_name,
               r.id AS r_id, r.user_id AS r_user_id, ru.display_name AS r_user_name, r.start_utc AS r_start, r.end_utc AS r_end
          FROM usage g
          JOIN users u ON u.id = g.user_id
+         LEFT JOIN users ku ON ku.id = g.km_user_id
          LEFT JOIN reservations r ON r.id = g.reservation_id
          LEFT JOIN users ru ON ru.id = r.user_id
         WHERE g.end_utc >= ? AND g.start_utc <= ?
@@ -336,13 +411,15 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     const odometerStart = readOdometer(f, 'odometerStart');
     const odometerEnd = readOdometer(f, 'odometerEnd');
     const reservationId = f.nullableInt('reservationId', { min: 1 });
+    const kmFor = f.oneOf('kmFor', KM_FORS, { optional: true }) ?? 'self';
+    const kmUserId = f.nullableInt('kmUserId', { min: 1 }) ?? null;
     const note = f.string('note', { optional: true, max: 500 }) ?? '';
-    // Type errors above win (fail keeps the first code); these are the km obligation and the draft shape.
-    for (const [key, code] of Object.entries(
-      shapeErrors({ status, start, end: end ?? null, odometerStart: odometerStart ?? null, odometerEnd: odometerEnd ?? null }),
-    )) {
-      f.fail(key, code);
-    }
+    // Type errors above win (fail keeps the first code); these are the km obligation, the draft shape and whose km they are.
+    const rules = {
+      ...shapeErrors({ status, start, end: end ?? null, odometerStart: odometerStart ?? null, odometerEnd: odometerEnd ?? null }),
+      ...attributionErrors({ kmFor, kmUserId, driverId: userId, note }),
+    };
+    for (const [key, code] of Object.entries(rules)) f.fail(key, code);
     f.done();
     if (userId !== actor.id && actor.role !== 'admin') {
       throw new HttpError(403, 'forbidden', 'Only an admin can log usage for someone else');
@@ -355,6 +432,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
       odometerStart: odometerStart ?? null,
       odometerEnd: odometerEnd ?? null,
       reservationId: reservationId ?? null,
+      kmFor,
+      kmUserId,
       note,
     };
     const now = ctx.clock.now();
@@ -362,11 +441,12 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     let created: UsageJoin;
     try {
       created = tx(db, () => {
-        checkUsage(ctx, input, now, -1);
+        assertNotBilledToOthers(db, actor, input);
+        checkUsage(ctx, input, now, -1, null);
         const { lastInsertRowid } = run(
           db,
-          `INSERT INTO usage (user_id, status, start_utc, end_utc, odometer_start, odometer_end, reservation_id, note, created_by, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO usage (user_id, status, start_utc, end_utc, odometer_start, odometer_end, reservation_id, km_for, km_user_id, note, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           input.userId,
           input.status,
           input.start,
@@ -374,6 +454,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
           input.odometerStart,
           input.odometerEnd,
           input.reservationId,
+          input.kmFor,
+          input.kmUserId,
           input.note,
           actor.id,
           nowIso,
@@ -402,7 +484,12 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     const odometerStart = readOdometer(f, 'odometerStart');
     const odometerEnd = readOdometer(f, 'odometerEnd');
     const reservationId = f.nullableInt('reservationId', { min: 1 });
+    const kmForIn = f.oneOf('kmFor', KM_FORS, { optional: true });
+    const kmUserIdIn = f.nullableInt('kmUserId', { min: 1 });
     const note = f.string('note', { optional: true, max: 500 });
+    // The person carries over only while the drive stays "someone else's"; any other choice clears it.
+    const kmFor = kmForIn ?? existing.km_for;
+    const kmUserId = kmUserIdIn !== undefined ? kmUserIdIn : kmFor === 'person' ? existing.km_user_id : null;
     const input: UsageInput = {
       userId,
       status,
@@ -412,6 +499,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
       odometerStart: odometerStart === undefined ? existing.odometer_start : odometerStart,
       odometerEnd: odometerEnd === undefined ? existing.odometer_end : odometerEnd,
       reservationId: reservationId === undefined ? existing.reservation_id : reservationId,
+      kmFor,
+      kmUserId,
       note: note ?? existing.note,
     };
     if (existing.status === 'completed' && status === 'draft') {
@@ -419,6 +508,7 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     } else {
       for (const [key, code] of Object.entries(shapeErrors(input))) f.fail(key, code);
     }
+    for (const [key, code] of Object.entries(attributionErrors({ kmFor, kmUserId, driverId: userId, note: input.note }))) f.fail(key, code);
     f.done();
     if (userId !== existing.user_id && actor.role !== 'admin') {
       throw new HttpError(403, 'forbidden', 'Only an admin can reassign a usage record');
@@ -428,11 +518,13 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     try {
       updated = tx(db, () => {
         assertNotFuelLocked(db, actor, existing, input.end);
-        checkUsage(ctx, input, now, id);
+        // A draft is not billed to anyone yet, so finishing one is a new registration (a completed drive was checked above).
+        if (existing.status === 'draft') assertNotBilledToOthers(db, actor, input);
+        checkUsage(ctx, input, now, id, existing.km_user_id);
         run(
           db,
           `UPDATE usage SET user_id = ?, status = ?, start_utc = ?, end_utc = ?, odometer_start = ?, odometer_end = ?,
-                  reservation_id = ?, note = ?, updated_at = ? WHERE id = ?`,
+                  reservation_id = ?, km_for = ?, km_user_id = ?, note = ?, updated_at = ? WHERE id = ?`,
           input.userId,
           input.status,
           input.start,
@@ -440,6 +532,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
           input.odometerStart,
           input.odometerEnd,
           input.reservationId,
+          input.kmFor,
+          input.kmUserId,
           input.note,
           now.toISOString(),
           id,

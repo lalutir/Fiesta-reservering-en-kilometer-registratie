@@ -268,13 +268,18 @@ test('who may edit, delete, ask for money and mark it paid: the fueler or an adm
     assert.equal((await ben.post(`/api/fuel/${id}/requests`, { debtorId: carla.id })).status, 403);
     assert.equal((await carla.post(`/api/fuel/${id}/requests`, { debtorId: carla.id })).status, 403, 'not even for yourself');
     assert.equal((await anna.post(`/api/fuel/${id}/requests`, { debtorId: ben.id })).status, 201);
-    assert.equal((await ben.post(`/api/fuel/${id}/requests/${ben.id}/paid`, { paid: true })).status, 403, 'a debtor cannot mark their own payment');
+    // A debtor may say "I have paid" for their own share (fuel-carry.test.ts), but never undo it and never speak for someone else.
+    assert.equal((await ben.post(`/api/fuel/${id}/requests/${ben.id}/paid`, { paid: false })).status, 403, 'a debtor cannot mark their own payment as unpaid');
     assert.equal((await carla.post(`/api/fuel/${id}/requests/${ben.id}/paid`, { paid: true })).status, 403);
     assert.equal((await t.client().post(`/api/fuel/${id}/requests/${ben.id}/paid`, { paid: true })).status, 401);
 
     const seenByBen = (await ben.get('/api/fuel')).body.items[0];
     assert.deepEqual(seenByBen.can, { edit: false, delete: false });
-    assert.deepEqual(seenByBen.shares.map((s: Json) => s.can), [{ request: false, markPaid: false }, { request: false, markPaid: false }, { request: false, markPaid: false }]);
+    assert.deepEqual(seenByBen.shares.map((s: Json) => s.can), [
+      { request: false, markPaid: false, selfPaid: false },
+      { request: false, markPaid: false, selfPaid: true },
+      { request: false, markPaid: false, selfPaid: false },
+    ]);
     const seenByAnna = (await anna.get('/api/fuel')).body.items[0];
     assert.deepEqual(seenByAnna.shares.map((s: Json) => [s.userName, s.can.request, s.can.markPaid]), [['Anna', false, false], ['Ben', true, true], ['Carla', true, false]]);
 
@@ -461,7 +466,7 @@ test('an unpaid request stays on the card when its drive is deleted: listed, fla
     const share = items[0].shares[1];
     assert.equal(share.owes, true);
     assert.deepEqual([share.request.amountCents, share.request.changed, share.request.paidAt], [1500, true, null], 'the request keeps what was asked and says it changed');
-    assert.deepEqual({ ...share.can }, { request: false, markPaid: true }, 'nothing left to ask for, but the request can still be settled');
+    assert.deepEqual({ ...share.can }, { request: false, markPaid: true, selfPaid: false }, 'nothing left to ask for, but the request can still be settled');
     assert.deepEqual(pairs(balances), [['Carla', 'Anna', 2000]], 'nobody is asked for money for a drive that no longer exists');
     assert.equal((await anna.post(`/api/fuel/${f.id}/requests`, { debtorId: ben.id })).body.error.fields.debtorId, 'nothing_owed', 'no request for 0.00');
     assert.equal(one<{ n: number }>(t.db, 'SELECT COUNT(*) AS n FROM fuel_requests')?.n, 1, 'the request itself is still on record');
@@ -489,7 +494,7 @@ test('a paid request stays on the card, flagged with its changed share, when the
     assert.equal((await admin.del(`/api/usage/${driveOf(t, ben.id)}`)).status, 204);
     share = await benShare();
     assert.deepEqual([share.km, share.cents, share.owes, share.request.amountCents, share.request.changed, share.request.paidAt !== null], [0, 0, true, 1500, true, true]);
-    assert.deepEqual({ ...share.can }, { request: false, markPaid: true }, 'the fueler can still mark it unpaid');
+    assert.deepEqual({ ...share.can }, { request: false, markPaid: true, selfPaid: false }, 'the fueler can still mark it unpaid');
     assert.deepEqual(pairs((await anna.get('/api/fuel')).body.balances), [['Carla', 'Anna', 2000]]);
   } finally {
     await t.close();

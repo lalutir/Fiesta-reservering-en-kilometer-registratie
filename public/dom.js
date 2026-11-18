@@ -152,23 +152,21 @@ function markInvalid(controls, invalid, describedBy) {
 }
 
 /**
- * A labelled form control with a place for its error message.
+ * A labelled form control with a place for its error message. The label and the hint can be
+ * changed afterwards (the note says "required" once the kilometres are not the driver's own).
  * @param {string} label
  * @param {HTMLElement} control
  * @param {string} [hint]
- * @returns {Field}
+ * @returns {Field & { setLabel: (text: string) => void, setHint: (text: string) => void }}
  */
 export function field(label, control, hint) {
   if (!control.id) control.id = `field-${++fieldSeq}`;
   const hintId = `${control.id}-hint`;
   const errorId = `${control.id}-error`;
   const error = h('span', { class: 'field-error', role: 'alert', id: errorId });
-  const row = h('div', { class: 'field' }, [
-    h('label', { for: control.id, text: label }),
-    control,
-    hint ? h('small', { class: 'hint', id: hintId, text: hint }) : null,
-    error,
-  ]);
+  const labelEl = h('label', { for: control.id, text: label });
+  const hintEl = hint ? h('small', { class: 'hint', id: hintId, text: hint }) : null;
+  const row = h('div', { class: 'field' }, [labelEl, control, hintEl, error]);
   const baseline = hint ? [hintId] : [];
   markInvalid([control], false, baseline);
   return {
@@ -177,6 +175,12 @@ export function field(label, control, hint) {
       error.textContent = code ? fieldErrorText(code) : '';
       row.classList.toggle('invalid', !!code);
       markInvalid([control], !!code, code ? [...baseline, errorId] : baseline);
+    },
+    setLabel: (text) => {
+      labelEl.textContent = text;
+    },
+    setHint: (text) => {
+      if (hintEl) hintEl.textContent = text;
     },
   };
 }
@@ -280,6 +284,7 @@ export function readDriveTimes(start, end) {
  * @param {number | null} v.odometerStart
  * @param {number | null} v.odometerEnd
  * @param {string} v.note
+ * @param {KmOwner} [v.owner] whose kilometres these are; anything but "self" needs a note (and a person for "person") and is sent along
  * @returns {{ ok: true, status: 'draft' | 'completed', body: Record<string, unknown> } | { ok: false, errors: Record<string, string> }}
  */
 export function driveBody(v) {
@@ -293,12 +298,139 @@ export function driveBody(v) {
     errors['end'] = 'required';
     errors['odometerEnd'] = 'required';
   }
+  const owner = v.owner && v.owner.kmFor !== 'self' ? v.owner : null;
+  if (owner) {
+    // The server enforces both again; saying it here saves a round trip and keeps the form where it is.
+    if (v.note.trim() === '') errors['note'] = 'required';
+    if (owner.kmFor === 'person' && owner.kmUserId === null) errors['kmUserId'] = 'required';
+  }
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   const status = hasEnd ? 'completed' : 'draft';
+  /** @type {Record<string, unknown>} */
+  const body = { status, start: v.start, end: v.end, odometerStart: v.odometerStart, odometerEnd: v.odometerEnd, note: v.note };
+  if (owner) {
+    body['kmFor'] = owner.kmFor;
+    body['kmUserId'] = owner.kmFor === 'person' ? owner.kmUserId : null;
+  }
+  return { ok: true, status, body };
+}
+
+/** @typedef {{ kmFor: 'self' | 'person' | 'together', kmUserId: number | null }} KmOwner */
+
+/**
+ * Keep a note field in step with the owner control: anything but "mine" makes the note required,
+ * and the label, the hint and aria-required say so.
+ * @param {ReturnType<typeof kmOwnerControl>} owner
+ * @param {ReturnType<typeof field>} noteField
+ * @param {HTMLElement} noteInput
+ */
+export function linkNoteToOwner(owner, noteField, noteInput) {
+  const sync = () => {
+    const required = owner.isNotMine();
+    noteField.setLabel(required ? S.usage.noteRequired : S.usage.note);
+    noteField.setHint(required ? S.usage.noteRequiredHint : S.noteHint);
+    noteInput.setAttribute('aria-required', required ? 'true' : 'false');
+  };
+  owner.onChange(sync);
+  sync();
+}
+
+/**
+ * Whose kilometres a drive is, in words; null when they are the driver's own.
+ * @param {{ kmFor?: 'self' | 'person' | 'together', kmUserId?: number | null, kmUserName?: string | null }} drive
+ * @param {number} meId
+ * @returns {string | null}
+ */
+export function kmOwnerLabel(drive, meId) {
+  if (drive.kmFor === 'together') return S.usage.kmOwnerTogether;
+  if (drive.kmFor === 'person' && drive.kmUserId !== null && drive.kmUserId !== undefined) {
+    return S.usage.kmOwnerPerson(drive.kmUserId === meId ? S.me : (drive.kmUserName ?? '?'));
+  }
+  return null;
+}
+
+/**
+ * kmOwnerLabel as a line under a drive; null when the kilometres are the driver's own.
+ * @param {Parameters<typeof kmOwnerLabel>[0]} drive
+ * @param {number} meId
+ * @returns {HTMLElement | null}
+ */
+export function kmOwnerLine(drive, meId) {
+  const label = kmOwnerLabel(drive, meId);
+  return label ? h('div', { class: 'sub km-owner-line', text: label }) : null;
+}
+
+/**
+ * The control that says whose kilometres a drive is. By default they are the driver's own; the checkbox
+ * "I drove, but the kilometres aren't mine" reveals one choice: another person or Together (split
+ * equally over everybody). The note then becomes required (the caller listens with onChange and says so).
+ * @param {object} o
+ * @param {Array<{ id: number, displayName: string }>} o.users active users
+ * @param {number} o.meId
+ * @param {number} o.driverId the driver: not offered as the other person
+ * @param {Parameters<typeof kmOwnerLabel>[0] | null} [o.current] the drive being edited (older answers without the fields read as the driver's own)
+ * @returns {{
+ *   row: HTMLElement,
+ *   field: Field,
+ *   read: () => KmOwner,
+ *   isNotMine: () => boolean,
+ *   setDriver: (id: number) => void,
+ *   onChange: (fn: () => void) => void,
+ * }}
+ */
+export function kmOwnerControl(o) {
+  const currentFor = o.current?.kmFor ?? 'self';
+  const currentUserId = o.current?.kmUserId ?? null;
+  let driverId = o.driverId;
+  const check = h('input', { type: 'checkbox', checked: currentFor !== 'self' });
+  const select = h('select', { name: 'kmOwner', 'aria-required': 'true' });
+  const f = field(S.usage.kmWhose, select);
+  const box = h('div', { class: 'km-owner-box', hidden: !check.checked }, [f.row]);
+
+  /** @param {string} selected the value to keep or '' */
+  const fillOptions = (selected) => {
+    const options = [h('option', { value: '', text: S.usage.kmPersonNone }), h('option', { value: 'together', text: S.usage.kmChooseTogether })];
+    const offered = new Set();
+    for (const u of o.users) {
+      if (u.id === driverId) continue;
+      offered.add(u.id);
+      options.push(h('option', { value: `person:${u.id}`, text: u.id === o.meId ? `${u.displayName} (${S.me})` : u.displayName }));
+    }
+    // Someone deactivated since the drive was saved stays selectable while it is edited, so saving it does not drop them.
+    if (currentUserId !== null && currentUserId !== driverId && !offered.has(currentUserId)) {
+      options.push(h('option', { value: `person:${currentUserId}`, text: o.current?.kmUserName ?? '?' }));
+    }
+    select.replaceChildren(...options);
+    select.value = options.some((opt) => opt.value === selected) ? selected : '';
+  };
+  fillOptions(currentFor === 'together' ? 'together' : currentFor === 'person' ? `person:${currentUserId}` : '');
+
+  /** @type {Array<() => void>} */
+  const listeners = [];
+  const changed = () => {
+    box.hidden = !check.checked;
+    for (const fn of listeners) fn();
+  };
+  check.addEventListener('change', changed);
+  select.addEventListener('change', changed);
+
   return {
-    ok: true,
-    status,
-    body: { status, start: v.start, end: v.end, odometerStart: v.odometerStart, odometerEnd: v.odometerEnd, note: v.note },
+    row: h('div', { class: 'km-owner' }, [h('label', { class: 'check' }, [check, h('span', { text: S.usage.kmNotMine })]), box]),
+    field: f,
+    read: () => {
+      if (!check.checked) return { kmFor: 'self', kmUserId: null };
+      if (select.value === 'together') return { kmFor: 'together', kmUserId: null };
+      const m = /^person:(\d+)$/.exec(select.value);
+      return { kmFor: 'person', kmUserId: m ? Number(m[1]) : null };
+    },
+    isNotMine: () => check.checked,
+    setDriver: (id) => {
+      driverId = id;
+      fillOptions(select.value);
+    },
+    onChange: (fn) => {
+      listeners.push(fn);
+    },
   };
 }
 

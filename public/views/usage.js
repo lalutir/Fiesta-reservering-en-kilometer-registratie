@@ -9,6 +9,9 @@ import {
   fmtWhen,
   focusFirstInvalid,
   h,
+  kmOwnerControl,
+  kmOwnerLine,
+  linkNoteToOwner,
   numberInput,
   readDriveTimes,
   readNumber,
@@ -109,7 +112,7 @@ export async function render(app, route) {
 
   const [list, summary, reservations, pending] = await Promise.all([
     /** @type {Promise<{ items: import('../api.js').Usage[] }>} */ (get('/api/usage')),
-    /** @type {Promise<{ items: Array<{ userId: number, userName: string, trips: number, km: number }>, totalKm: number }>} */ (get('/api/usage/summary')),
+    /** @type {Promise<{ items: Array<{ userId: number, userName: string, trips: number, km: number }>, together?: { trips: number, km: number }, totalKm: number }>} */ (get('/api/usage/summary')),
     /** @type {Promise<{ items: import('../api.js').Reservation[] }>} */ (get(`/api/reservations?status=confirmed&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)),
     /** @type {Promise<import('../api.js').Pending>} */ (get('/api/usage/pending')),
   ]);
@@ -171,6 +174,16 @@ export async function render(app, route) {
   const fOdoStart = field(S.usage.odometerStart, odoStart, lastReading === null ? undefined : S.usage.lastReading(lastReading));
   const fOdoEnd = field(S.usage.odometerEnd, odoEnd);
   const fNote = field(S.usage.note, note, S.noteHint);
+  // Whose kilometres these are. The driver stays the driver (obligation, reminders, overlap); only the
+  // kilometre totals and the fuel split follow the owner. Anything but "mine" makes the note required.
+  const kmOwner = kmOwnerControl({
+    users: app.users,
+    meId: me.id,
+    driverId: Number(driver.value),
+    current: existing,
+  });
+  linkNoteToOwner(kmOwner, fNote, note);
+  driver.addEventListener('change', () => kmOwner.setDriver(Number(driver.value)));
   const submit = h('button', { class: 'btn primary block', type: 'submit' });
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const draftLink = h('a', { class: 'btn small', href: '#/usage', hidden: true }, S.usage.pending.finish);
@@ -189,7 +202,7 @@ export async function render(app, route) {
       novalidate: true,
       onsubmit: async (/** @type {Event} */ e) => {
         e.preventDefault();
-        const all = [fDriver, fReservation, start, end, fOdoStart, fOdoEnd, fNote];
+        const all = [fDriver, fReservation, start, end, fOdoStart, fOdoEnd, kmOwner.field, fNote];
         for (const f of all) f.setError(null);
         formError.hidden = true;
         draftLink.hidden = true;
@@ -198,6 +211,7 @@ export async function render(app, route) {
           focusFirstInvalid(form);
           return;
         }
+        const owner = kmOwner.read();
         const built = driveBody({
           mode,
           start: times.start,
@@ -205,13 +219,20 @@ export async function render(app, route) {
           odometerStart: readNumber(odoStart.value),
           odometerEnd: readNumber(odoEnd.value),
           note: note.value,
+          owner,
         });
         if (!built.ok) {
-          showFieldErrors({ end, odometerStart: fOdoStart, odometerEnd: fOdoEnd }, { fields: built.errors });
+          // Nothing is sent: a missing note or person is reported on its field, right here.
+          showFieldErrors({ end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, kmUserId: kmOwner.field, note: fNote }, { fields: built.errors });
           focusFirstInvalid(form);
           return;
         }
         const body = built.body;
+        // Going back to "mine" on an edit has to be said, since "self" is otherwise left out of the request.
+        if (existing && owner.kmFor === 'self' && (existing.kmFor ?? 'self') !== 'self') {
+          body['kmFor'] = 'self';
+          body['kmUserId'] = null;
+        }
         const reservationId = readNumber(reservation.value);
         if (existing) {
           // PATCH: the link is only sent when the person changed the select, so an untouched link can never be dropped.
@@ -233,7 +254,7 @@ export async function render(app, route) {
         } catch (err) {
           const apiErr = /** @type {import('../api.js').ApiError} */ (err);
           showFieldErrors(
-            { start, end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, reservationId: fReservation, userId: fDriver, note: fNote },
+            { start, end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, reservationId: fReservation, userId: fDriver, kmFor: kmOwner.field, kmUserId: kmOwner.field, note: fNote },
             apiErr,
           );
           formError.textContent = saveErrorText(apiErr, app.tz, S.usage.overlap);
@@ -257,6 +278,7 @@ export async function render(app, route) {
       end.row,
       fOdoStart.row,
       fOdoEnd.row,
+      kmOwner.row,
       fNote.row,
       h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }),
       formError,
@@ -300,6 +322,7 @@ export async function render(app, route) {
       u.odometerStart !== null || u.odometerEnd !== null
         ? h('div', { class: 'sub', text: `${u.odometerStart ?? '?'} → ${u.odometerEnd ?? '?'} km` })
         : null,
+      kmOwnerLine(u, me.id),
       u.note ? h('div', { class: 'note', text: u.note }) : null,
       u.fuelLocked ? h('p', { class: 'hint', text: S.usage.fuelLocked }) : null,
       u.can.edit || u.can.delete
@@ -337,15 +360,18 @@ export async function render(app, route) {
     ]),
     pendingBanner(app, pending),
     form,
-    summary.items.length > 0
+    summary.items.length > 0 || (summary.together?.km ?? 0) > 0
       ? h('section', { class: 'card' }, [
           h('h3', { text: S.usage.kmTotals }),
-          h(
-            'ul',
-            { class: 'totals' },
+          h('ul', { class: 'totals' }, [
             summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.me : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
-          ),
+            // The shared pool is not anybody's: it is shown on its own line (split equally when fuel is paid).
+            summary.together && summary.together.km > 0
+              ? h('li', {}, [h('span', { text: S.usage.kmTogetherTotal }), h('span', { text: `${S.usage.km(summary.together.km)} · ${S.usage.trips(summary.together.trips)}` })])
+              : null,
+          ]),
           h('p', { class: 'hint', text: S.usage.kmNote }),
+          summary.together && summary.together.km > 0 ? h('p', { class: 'hint', text: S.usage.kmTogetherNote }) : null,
         ])
       : null,
     h('h2', { text: S.usage.recent }),

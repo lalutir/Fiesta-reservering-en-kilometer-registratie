@@ -17,7 +17,15 @@ import type { TikkieConfig } from './config.ts';
 import type { Logger } from './http.ts';
 
 export interface PaymentInput {
+  /** What is asked: the share plus what is carried from earlier fill-ups. */
   amountCents: number;
+  /** The share of this fill-up alone; defaults to amountCents (nothing carried). */
+  shareCents?: number;
+  /**
+   * Net of the earlier open shares between the two people, folded into amountCents: more than zero is
+   * still owed to the creditor, less than zero is what the creditor owes the debtor back. Default 0.
+   */
+  carriedCents?: number;
   creditorName: string;
   debtorName: string;
   /** Litres as shown to people, for example "40.0". */
@@ -27,6 +35,8 @@ export interface PaymentInput {
   /** Kilometres the debtor drove in the period and kilometres everyone drove. */
   km: number;
   kmTotal: number;
+  /** Of kmTotal: driven together, split equally over everybody. Default 0. */
+  togetherKm?: number;
   /** Equal split because nobody drove in the period. */
   equalSplit: boolean;
   /** Identifies the fill-up and the debtor to the provider; contains no personal data. */
@@ -54,12 +64,24 @@ export function formatCents(cents: number): string {
 
 /** The text of the request, in English like the rest of the interface. */
 export function requestMessage(input: PaymentInput): string {
+  const together = input.togetherKm ?? 0;
+  const carried = input.carriedCents ?? 0;
+  const share = input.shareCents ?? input.amountCents;
   const why = input.equalSplit
     ? 'nobody drove in that period, so the cost is split equally'
-    : `${input.km} of ${input.kmTotal} km driven`;
+    : together > 0
+      ? `${input.km} km of your own and an equal part of ${together} km driven together, ${input.kmTotal} km in all`
+      : `${input.km} of ${input.kmTotal} km driven`;
+  // Without anything carried the text is exactly what it always was.
+  const earlier =
+    carried > 0
+      ? ` EUR ${formatCents(carried)} from earlier fill-ups is still open, so the total is EUR ${formatCents(input.amountCents)}.`
+      : carried < 0
+        ? ` EUR ${formatCents(-carried)} that ${input.creditorName} still owes you from earlier is taken off, so the total is EUR ${formatCents(input.amountCents)}.`
+        : '';
   return (
     `Hi ${input.debtorName}, ${input.creditorName} fuelled the shared car on ${input.date} (${input.litres} L). ` +
-    `Your share is EUR ${formatCents(input.amountCents)} (${why}). Please pay ${input.creditorName}.`
+    `Your share is EUR ${formatCents(share)} (${why}).${earlier} Please pay ${input.creditorName}.`
   );
 }
 
