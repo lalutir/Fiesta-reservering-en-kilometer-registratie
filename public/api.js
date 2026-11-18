@@ -17,21 +17,87 @@
  * @property {string} end
  * @property {string} note
  * @property {ReservationCan} can
+ * @property {ReservationDrive | null} drive the drive that registers it (or the draft / older drive linked to it)
+ * @property {KmState} kmState registered implies drive is not null
+ */
+/** @typedef {'registered' | 'draft' | 'missing'} KmState */
+/**
+ * @typedef {object} ReservationDrive
+ * @property {number} id
+ * @property {number} userId
+ * @property {string} userName
+ * @property {'draft' | 'completed'} status
+ * @property {number | null} odometerStart
+ * @property {number | null} odometerEnd
+ * @property {number | null} distanceKm
+ * @property {boolean} linked false when it only overlaps the reservation in time
  */
 /**
  * @typedef {object} Usage
  * @property {number} id
  * @property {number} userId
  * @property {string} userName
+ * @property {'draft' | 'completed'} status a draft is a drive that has started but not ended
  * @property {string} start
- * @property {string} end
+ * @property {string | null} end null for a draft
  * @property {number | null} odometerStart
  * @property {number | null} odometerEnd
  * @property {number | null} distanceKm
  * @property {number | null} reservationId
  * @property {string} note
  * @property {{ edit: boolean, delete: boolean }} can
+ * @property {boolean} fuelLocked a payment request depends on this drive: only an admin can change it
  */
+/**
+ * Kilometres still to register for one person.
+ * @typedef {object} PendingItem
+ * @property {number} userId
+ * @property {string} userName
+ * @property {Reservation[]} reservations ended reservations without a completed registration
+ * @property {Usage[]} drafts
+ */
+/** @typedef {{ items: PendingItem[], count: number }} Pending */
+
+/**
+ * @typedef {object} FuelRequest
+ * @property {number} id
+ * @property {number} amountCents
+ * @property {'manual' | 'tikkie'} provider
+ * @property {string} message
+ * @property {string} link
+ * @property {string | null} paidAt
+ * @property {boolean} changed the live share differs from the amount that was asked
+ */
+/**
+ * @typedef {object} FuelShare
+ * @property {number} userId
+ * @property {string} userName
+ * @property {number} km
+ * @property {number} cents
+ * @property {boolean} owes owes the fueler: more than zero, or a request was made for them
+ * @property {FuelRequest | null} request
+ * @property {{ request: boolean, markPaid: boolean }} can
+ */
+/**
+ * @typedef {object} Fuel
+ * @property {number} id
+ * @property {number} userId
+ * @property {string} userName
+ * @property {string} at
+ * @property {number} millilitres
+ * @property {number} totalCents
+ * @property {number} pricePerLitreMillis thousandths of a euro
+ * @property {string} note
+ * @property {{ from: string | null, to: string }} period
+ * @property {number} totalKm
+ * @property {boolean} equalSplit
+ * @property {boolean} firstInData
+ * @property {FuelShare[]} shares
+ * @property {boolean} hasPaidRequests
+ * @property {{ edit: boolean, delete: boolean }} can
+ */
+/** @typedef {{ fromUserId: number, fromName: string, toUserId: number, toName: string, cents: number }} Balance */
+
 /**
  * What every view gets: the signed-in session, the user list and a few actions.
  * @typedef {object} App

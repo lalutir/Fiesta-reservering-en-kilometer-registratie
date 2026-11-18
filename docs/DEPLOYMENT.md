@@ -176,6 +176,9 @@ Keep the password to letters, digits and `- _ . / + =`: Docker Compose treats `$
 and `#` in a `.env` file specially. Leave `COOKIE_SECURE` unset (it defaults to
 on). `.env` is git-ignored: never commit it and never paste it into chat or tickets.
 
+The reminders and the optional Tikkie link have settings of their own; the defaults
+are right for this household (section 18).
+
 ## 8. Start it
 
 ```bash
@@ -240,12 +243,15 @@ The app does this by itself:
   consistent even while the app is running;
 - it keeps the newest 14 (`BACKUP_KEEP_DAYS`) and deletes older ones.
 
-Two things to know:
+Three things to know:
 
 1. **Retention caveat.** The app deletes data older than 6 months every day, but a
    backup made earlier still contains it. Old data therefore lingers in backups
    for up to 14 days. Lower `BACKUP_KEEP_DAYS` if that matters.
-2. **Backups hold password hashes.** Treat copies like secrets.
+2. **Backups hold password hashes**, the push signing key and every phone's push subscription. Treat copies like secrets.
+3. **Upgrade copies.** When an update changes the database layout, the app first
+   writes `pre-migrate-v<old version>.db` into the same folder. Those are not
+   rotated or deleted by themselves (section 18).
 
 **Off-site copy** (not automated, to keep the cost at zero; do it now and then,
 and always before an update):
@@ -304,7 +310,9 @@ git switch -
 
 If the new version had changed the database layout (the release notes will say
 so), also restore the backup you took before updating (section 11), because an
-older app refuses to open a newer database.
+older app refuses to open a newer database. The app itself keeps the copy it made
+just before such an upgrade as `/data/backups/pre-migrate-v<old version>.db`
+(section 18).
 
 ## 13. Pinned versions
 
@@ -343,6 +351,12 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 - [ ] `/admin/` opens for the admin; for a normal member or when signed out it does not.
 - [ ] `docker compose exec app ls -l /data/backups` lists today's backup.
 - [ ] `docker compose logs app | grep retention.purge` shows a JSON line with the deleted counts.
+- [ ] After an update from the first version: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v1.db`, and the Drives tab and the admin page open without errors (section 18).
+- [ ] On one phone: Account > Reminders > Enable reminders, then **Send test notification**;
+      the notification appears. On an iPhone this needs the app on the Home Screen (section 18).
+- [ ] A drive can be saved as a draft with only the start reading and finished later;
+      a fill-up shows each person's share, and a payment request can be copied or shared.
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -363,6 +377,8 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 | Sign-in works on one phone but "session ended" keeps appearing | The page is open over plain `http://`. Use the `https://` address. |
 | `docker compose up` stops with `set DOMAIN in .env` | `DOMAIN` is missing from `.env`. |
 | Build is killed or hangs on the smallest droplet | Add the swap file (section 4) or use the 1 GiB droplet. |
+| The test notification never arrives | Check, in this order: reminders are on for that device (Account page), notifications are allowed for the app in the phone's settings, the app is installed on the Home Screen on an iPhone, `PUSH_ENABLED` is not `false`, `docker compose logs app` has no "Reminders are off" warning from the start-up (it means `DOMAIN` is not a bare host name such as `car.example.com` and `PUSH_CONTACT` is empty), and the same logs show no `push.send_failed` lines (they name the push service and the status). A phone whose push service answers "gone" is removed and has to enable reminders again. |
+| The Account page says this browser's push service is not supported | Only Google (Chrome, Edge, Android), Apple, Mozilla and Microsoft push services are used (section 18). |
 | Times look an hour off | `HOUSEHOLD_TZ` is wrong in `.env`; times are shown in that zone whatever the phone is set to. |
 | Disk is filling up | `docker system df` shows where. Container logs are capped at 3 x 10 MB each; old images and build cache are the usual cause: `docker image prune -f` and `docker builder prune -f`. Do not prune volumes (`docker volume prune`, `docker system prune --volumes`): with the stack down they can remove the database volume. |
 
@@ -384,3 +400,133 @@ EUR 4-5 per month (unverified) with more memory and disk than the smallest
 DigitalOcean droplet, and has data centres in Germany and Finland. Everything in
 this guide works the same there: create an Ubuntu server, and follow sections 3
 to 15 (the swap file is then usually unnecessary).
+
+## 18. Kilometres, reminders, fuel costs and payment requests
+
+This section is about the part of the app that records every drive with its
+odometer readings, reminds people to do that, and splits the fuel. Like the rest
+of this guide it was **never run on a real server, phone or push service by the
+people who wrote it**: the automated tests cover the logic and the message
+format, not delivery to a real phone. Section 15 has a short checklist for it.
+
+### Updating to this version (database upgrade)
+
+The first start of this version upgrades the database from schema v1 to v2
+(drafts, fuel, payment requests, reminder subscriptions). Nothing is removed.
+
+- **Take a backup first**, as for any update (section 12).
+- Right before the upgrade the app also writes a full copy of the old database to
+  `/data/backups/pre-migrate-v1.db`. It is written once, not rotated and not
+  deleted by the daily clean-up. It holds password hashes like every backup, so
+  treat it as a secret, and delete it (`docker compose exec app rm /data/backups/pre-migrate-v1.db`)
+  once you are happy with the new version. If it cannot be written (disk full),
+  the app refuses to start and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from
+  section 11, and start the previous version. Drafts, fill-ups and payment
+  requests made after the upgrade are lost by a restore, and an older app refuses
+  to open a v2 database. If you go back and later try the update again, delete
+  `pre-migrate-v1.db` first: the app never overwrites an existing copy, so
+  otherwise it would keep the old one instead of making a fresh copy of the
+  database as it is by then.
+- **What people see on the first day:** reservations from before the update have
+  no completed drive with odometer readings, so they count as "kilometres to
+  register". A member's Drives tab lists their reservations that ended in the
+  last 14 days; the admin page lists the last 30 days and has a button for the
+  whole 6 months. Every row has **Car not used? Cancel the reservation**, which
+  removes the reservation and keeps any drive. Old drives without readings are
+  kept and shown, but saving a change to one now needs both readings. No
+  reminder notification is sent for old reservations.
+
+### Kilometre registration
+
+- Every finished drive has an end time and both odometer readings; the kilometres
+  count for the person who drove (not for the person who reserved).
+- A drive can be saved as a **draft** with only the start reading, before leaving,
+  and finished with the end reading and end time when back. Each person can have
+  one unfinished drive at a time.
+- A reservation card offers **Register km** from 30 minutes before it starts and
+  shows who registered it and how far. Someone else who drove a reservation uses
+  **I drove this**, once it has started.
+- The note on a reservation or a drive is recommended, never required.
+
+### Reminders (Web Push)
+
+The app can send a phone notification 30 minutes before a reservation starts (to
+save the start reading), when it ends, and once more an hour later if the
+kilometres are still not registered. Each moment is sent once per reservation,
+also across restarts. Nothing is sent when the reservation is not confirmed, when
+a drive is registered, or when the server was down so long that the moment is more
+than 15 minutes in the past.
+
+- **It needs nothing in `.env`.** The app identifies itself to the push services
+  with `https://` plus `DOMAIN`. `PUSH_CONTACT` overrides that with another
+  `https://` address or a `mailto:` address. Either one is sent to Google, Apple
+  and Mozilla with each notification, so prefer the website address over a
+  personal mailbox. `PUSH_ENABLED=false` switches all reminders off.
+- **Everyone turns it on per device:** Account > Reminders > Enable reminders, and
+  allow notifications when the phone asks. **Send test notification** is the way
+  to see that delivery really works on that phone.
+- **iPhone and iPad:** push only works for the app installed on the Home Screen
+  (Share, then Add to Home Screen) on iOS or iPadOS 16.4 or later. Open the
+  installed app to turn reminders on. In a Safari tab the Account page says so.
+- **Supported push services:** Google (`fcm.googleapis.com`, used by Chrome, Edge
+  and Android), Apple (below `push.apple.com`), Mozilla (below
+  `push.services.mozilla.com`) and Microsoft (below `notify.windows.com`). The
+  server only ever contacts these, over HTTPS on port 443, and does not follow
+  redirects. Any other browser is told its push service is not supported. The
+  list sits near the top of `src/push.ts`, so adding a service is a one-line change.
+- **The container needs outbound HTTPS.** Docker's default networking allows it.
+- **The key:** the first time it is needed the app creates a signing key for push
+  and keeps it in the database, so phones stay signed up across restarts, updates
+  and restores. With a brand-new database everyone has to enable reminders again.
+- **Best effort.** Phones can delay or drop notifications (battery saving, "do not
+  disturb"). Without notifications the Drives tab still shows a banner and a count
+  of what is waiting.
+
+### Fuel costs
+
+- Anyone records a fill-up (when, and any two of litres, total price and price per
+  litre; the third is worked out). An admin can record one for someone else.
+  Money is kept in whole cents and volume in millilitres, in euro.
+- Each fill-up is split over the kilometres of the **finished drives that ended
+  between the previous fill-up and this one**, to the cent (leftover cents go to
+  the largest shares). The person who fuelled does not owe themselves. If nobody
+  drove in that period the cost is split equally over everyone active, and the
+  card says so. The first fill-up covers every drive before it.
+- Fill-ups follow the 6 month retention like everything else, together with their
+  payment requests, so an unpaid request older than that disappears. When old
+  drives are deleted the share of the oldest fill-up can change; a request that
+  was already made keeps the amount that was asked and is marked "amount changed"
+  (paid or not), with the difference written under it. A person a request was made
+  for stays on the card even when their share has dropped to nothing. "Who owes
+  whom" counts every unpaid share at what is owed now and nothing for a paid one,
+  so a paid request whose share changed afterwards is not settled by the balances:
+  read the difference on its card and mark it unpaid to ask again.
+- Only the person who fuelled (or an admin) can edit, delete, request or mark paid,
+  and a fill-up with a payment marked as paid is locked until it is marked unpaid.
+- Once a payment request exists for a fill-up, the drives that ended in its period
+  can no longer be edited, moved or deleted by their owners (the drive says so);
+  an admin still can. Registering a new drive is always possible.
+
+### Payment requests (and Tikkie)
+
+- **Default: a message you send yourself.** The app writes the request text; the
+  person who is owed shares it by the phone's share sheet, text message, WhatsApp
+  or copy and paste. They can paste a payment link from a bank app or Tikkie to
+  include it (https only). They mark the share paid when the money arrives.
+- **Tikkie is optional, off, and unverified.** Tikkie's own API is offered to
+  Tikkie business customers; a private household most likely has no access, and
+  nobody involved in writing this could try it. The adapter switches on only when
+  **all three** of `TIKKIE_PAYMENT_REQUEST_URL`, `TIKKIE_API_KEY` and
+  `TIKKIE_ACCESS_TOKEN` are set in `.env` (the app refuses to start with only
+  some). It sends one static bearer token, whereas the real API uses short-lived
+  tokens, and it was tried only against a stand-in server in the automated tests.
+  Whatever goes wrong, the request falls back to the normal message, and only a
+  link on `tikkie.me` is ever shown. The key and token are never logged or sent to
+  the browser. Leave all three empty unless you really have that access.
+
+### Switching things off
+
+- Reminders: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
+- Tikkie: empty the three variables.
+- Nothing else needs a rollback; fuel costs and drafts are simply not used.

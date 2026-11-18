@@ -250,7 +250,11 @@ export function registerUserRoutes(router: Router, ctx: Ctx): void {
         ctx.clock.now().toISOString(),
         id,
       );
-      if (!nextActive) destroyUserSessions(ctx, id);
+      if (!nextActive) {
+        destroyUserSessions(ctx, id);
+        // A deactivated person gets no more notifications on their devices.
+        run(db, 'DELETE FROM push_subscriptions WHERE user_id = ?', id);
+      }
       return findUser(ctx, id);
     });
     ctx.log({ event: 'user.updated', userId: id, by: req.user?.id });

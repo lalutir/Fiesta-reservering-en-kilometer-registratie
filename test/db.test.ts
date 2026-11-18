@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SCHEMA_VERSION, many, one, openDb, run, schemaVersion, type Db } from '../src/db.ts';
+import { MIGRATIONS, SCHEMA_VERSION, isUniqueViolation, many, one, openDb, run, schemaVersion, type Db } from '../src/db.ts';
 
 const GOOD = '2026-06-15T10:00:00.000Z';
 const LATER = '2026-06-15T12:00:00.000Z';
@@ -215,5 +215,212 @@ test('a migration another process applied while we waited for the lock is skippe
   assert.ok(raced, 'the interleaving did not happen, so this test proved nothing');
   assert.equal(schemaVersion(db), 1);
   assert.deepEqual(columns(db), ['id', 'name']);
+  db.close();
+});
+
+// ------------------------------------------------- schema v2 (drafts, fuel, push)
+
+const SOON = '2026-06-15T10:30:00.000Z';
+
+function addDraft(db: Db, userId: number, fields: { start?: string; end?: string; odoStart?: number | null; odoEnd?: number | null; status?: string } = {}): number {
+  const start = fields.start ?? GOOD;
+  return run(
+    db,
+    `INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, status, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    userId,
+    start,
+    fields.end ?? start,
+    fields.odoStart === undefined ? 1000 : fields.odoStart,
+    fields.odoEnd === undefined ? null : fields.odoEnd,
+    fields.status ?? 'draft',
+    userId,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+}
+
+test('a v1 file with rows upgrades to v2 without losing anything, and leaves a pre-migration copy', (tctx) => {
+  const file = tempFile(tctx);
+  const v1 = openDb(file, MIGRATIONS.slice(0, 1));
+  assert.equal(schemaVersion(v1), 1);
+  const anna = addUser(v1, 'anna');
+  const ben = addUser(v1, 'ben');
+  const res = addReservation(v1, anna);
+  const withReadings = run(
+    v1,
+    'INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, reservation_id, note, created_by, created_at, updated_at) VALUES (?, ?, ?, 100, 160, ?, ?, ?, ?, ?)',
+    anna,
+    GOOD,
+    LATER,
+    res,
+    'with readings',
+    anna,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+  const bare = addUsage(v1, ben, '2026-06-14T10:00:00.000Z', '2026-06-14T12:00:00.000Z');
+  run(v1, 'INSERT INTO sessions (token_hash, user_id, created_at, expires_at, refreshed_at) VALUES (?, ?, ?, ?, ?)', 'tok', anna, GOOD, LATER, GOOD);
+  v1.close();
+
+  const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v1.db');
+  assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
+
+  const v2 = openDb(file);
+  assert.equal(schemaVersion(v2), 2);
+  assert.equal(schemaVersion(v2), SCHEMA_VERSION);
+  assert.deepEqual(
+    many(v2, 'SELECT id, user_id, odometer_start, odometer_end, reservation_id, note, status FROM usage ORDER BY id'),
+    [
+      { id: withReadings, user_id: anna, odometer_start: 100, odometer_end: 160, reservation_id: res, note: 'with readings', status: 'completed' },
+      { id: bare, user_id: ben, odometer_start: null, odometer_end: null, reservation_id: null, note: '', status: 'completed' },
+    ],
+    'existing drives, with or without readings, are kept as completed',
+  );
+  assert.equal(many(v2, 'SELECT id FROM users').length, 2);
+  assert.equal(many(v2, 'SELECT id FROM reservations').length, 1);
+  assert.equal(many(v2, 'SELECT id FROM sessions').length, 1);
+  for (const table of ['fuel', 'fuel_requests', 'push_subscriptions', 'reminders_sent']) {
+    assert.equal(many(v2, `SELECT * FROM ${table}`).length, 0, `${table} starts empty`);
+  }
+  // The new tables hang off the old ones: deleting a reservation drops its reminder claims.
+  run(v2, "INSERT INTO reminders_sent (reservation_id, kind, scheduled_utc, sent_at) VALUES (?, 'start', ?, ?)", res, GOOD, GOOD);
+  run(v2, 'DELETE FROM reservations WHERE id = ?', res);
+  assert.equal(many(v2, 'SELECT * FROM reminders_sent').length, 0);
+  v2.close();
+
+  // The copy is a readable v1 database holding the data as it was before the upgrade.
+  assert.ok(fs.existsSync(copy), 'backups/pre-migrate-v1.db was written');
+  const old = openDb(copy, MIGRATIONS.slice(0, 1));
+  assert.equal(schemaVersion(old), 1);
+  assert.equal(many(old, 'SELECT id FROM usage').length, 2);
+  assert.equal(many(old, 'SELECT id FROM reservations').length, 1, 'the copy still has the reservation');
+  old.close();
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(copy)).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v1.db'],
+    'no temporary file is left behind',
+  );
+
+  // Opening again changes nothing and does not touch the copy.
+  const mtime = fs.statSync(copy).mtimeMs;
+  openDb(file).close();
+  assert.equal(fs.statSync(copy).mtimeMs, mtime);
+});
+
+test('an existing pre-migration copy is kept, a brand-new file gets none, and a copy that cannot be written aborts the upgrade', (tctx) => {
+  const fresh = tempFile(tctx);
+  openDb(fresh).close();
+  assert.equal(fs.existsSync(path.join(path.dirname(fresh), 'backups')), false, 'nothing to protect in a new file');
+
+  const file = tempFile(tctx);
+  openDb(file, MIGRATIONS.slice(0, 1)).close();
+  const dir = path.join(path.dirname(file), 'backups');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'pre-migrate-v1.db'), 'earlier copy');
+  openDb(file).close();
+  assert.equal(fs.readFileSync(path.join(dir, 'pre-migrate-v1.db'), 'utf8'), 'earlier copy', 'an earlier copy is never overwritten');
+
+  // Fail closed: a file where the backups folder should be makes the copy impossible, and the data stays at v1.
+  const blocked = tempFile(tctx);
+  openDb(blocked, MIGRATIONS.slice(0, 1)).close();
+  fs.writeFileSync(path.join(path.dirname(blocked), 'backups'), 'a file, not a folder');
+  assert.throws(() => openDb(blocked), /Cannot write the pre-migration copy.*database was not changed/);
+  fs.rmSync(path.join(path.dirname(blocked), 'backups'));
+  const still = openDb(blocked, MIGRATIONS.slice(0, 1));
+  assert.equal(schemaVersion(still), 1);
+  still.close();
+});
+
+test('the real v2 upgrade is all or nothing: a failure on its last statement leaves the v1 file as it was, and a retry works', (tctx) => {
+  const file = tempFile(tctx);
+  const v1 = openDb(file, MIGRATIONS.slice(0, 1));
+  const anna = addUser(v1);
+  const drive = addUsage(v1, anna);
+  // Something already sits where the last table of v2 goes, so v2 fails after its ALTER TABLE,
+  // its partial index and its other tables have all run inside the transaction.
+  v1.exec('CREATE TABLE reminders_sent (stranger INTEGER)');
+  v1.close();
+
+  assert.throws(() => openDb(file), /reminders_sent already exists/);
+
+  const names = (db: Db, type: 'table' | 'index'): string[] =>
+    many<{ name: string }>(db, 'SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE ? ORDER BY name', type, 'sqlite_%').map((r) => r.name);
+  const after = openDb(file, MIGRATIONS.slice(0, 1));
+  assert.equal(schemaVersion(after), 1, 'the version was not bumped');
+  assert.ok(!many<{ name: string }>(after, 'PRAGMA table_info(usage)').some((c) => c.name === 'status'), 'the ALTER TABLE was rolled back');
+  assert.ok(!names(after, 'index').includes('usage_one_draft'), 'the partial index was rolled back');
+  for (const table of ['fuel', 'fuel_requests', 'push_subscriptions']) assert.ok(!names(after, 'table').includes(table), `${table} was rolled back`);
+  assert.deepEqual(many(after, 'SELECT id, user_id FROM usage'), [{ id: drive, user_id: anna }], 'the data is untouched');
+  // The way out is to clear the obstacle: the same upgrade then runs from the top.
+  after.exec('DROP TABLE reminders_sent');
+  after.close();
+  const v2 = openDb(file);
+  assert.equal(schemaVersion(v2), 2);
+  assert.deepEqual(many(v2, 'SELECT id, status FROM usage'), [{ id: drive, status: 'completed' }]);
+  v2.close();
+});
+
+test('draft rows: a draft has a start reading, no end reading and a placeholder end; nothing else is allowed', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  assert.ok(addDraft(db, anna) > 0, 'a valid draft is accepted');
+  const ben = addUser(db, 'ben');
+  const bad: Array<[string, Parameters<typeof addDraft>[2]]> = [
+    ['with an end reading', { odoEnd: 1100 }],
+    ['without a start reading', { odoStart: null }],
+    ['with a real end time', { end: LATER }],
+    ['with an unknown status', { status: 'open' }],
+  ];
+  for (const [label, fields] of bad) assert.throws(() => addDraft(db, ben, fields), /CHECK constraint failed/, label);
+  // A completed drive keeps working exactly as before, with or without readings.
+  assert.ok(addDraft(db, ben, { status: 'completed', end: LATER, odoStart: 1, odoEnd: 5 }) > 0);
+  assert.ok(addDraft(db, ben, { status: 'completed', start: SOON, end: LATER, odoStart: null }) > 0);
+  assert.throws(
+    () => run(db, "UPDATE usage SET status = 'draft' WHERE status = 'completed' AND odometer_end IS NOT NULL"),
+    /CHECK constraint failed/,
+    'a finished drive cannot be turned back into a draft',
+  );
+  db.close();
+});
+
+test('one open draft per driver: a second one is a unique violation, a finished one makes room', () => {
+  const db = memoryDb();
+  const anna = addUser(db, 'anna');
+  const ben = addUser(db, 'ben');
+  const first = addDraft(db, anna);
+  assert.ok(addDraft(db, ben) > 0, 'another driver can have their own');
+  assert.throws(() => addDraft(db, anna, { start: SOON }), (err: unknown) => isUniqueViolation(err));
+  run(db, "UPDATE usage SET status = 'completed', end_utc = ?, odometer_end = 1040 WHERE id = ?", LATER, first);
+  assert.ok(addDraft(db, anna, { start: LATER }) > 0);
+  db.close();
+});
+
+test('fuel rows only accept sane money, volume and times, and requests are one per person per fill-up', () => {
+  const db = memoryDb();
+  const anna = addUser(db, 'anna');
+  const ben = addUser(db, 'ben');
+  const insert = (at: string, ml: number, cents: number): number =>
+    run(db, 'INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', anna, at, ml, cents, anna, GOOD, GOOD).lastInsertRowid;
+  const fuel = insert(GOOD, 40_000, 6_000);
+  for (const [label, at, ml, cents] of [
+    ['zero litres', GOOD, 0, 6000],
+    ['negative litres', GOOD, -1, 6000],
+    ['huge litres', GOOD, 200_001, 6000],
+    ['zero cents', GOOD, 40_000, 0],
+    ['negative cents', GOOD, 40_000, -5],
+    ['huge cents', GOOD, 40_000, 1_000_001],
+    ['a bad timestamp', '2026-06-15 10:00', 40_000, 6000],
+  ] as const) {
+    assert.throws(() => insert(at, ml, cents), /CHECK constraint failed/, label);
+  }
+  const request = (debtor: number, provider = 'manual', cents = 1500): number =>
+    run(db, 'INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', fuel, debtor, cents, provider, 'pay up', GOOD, GOOD).lastInsertRowid;
+  assert.ok(request(ben) > 0);
+  assert.throws(() => request(ben), (err: unknown) => isUniqueViolation(err));
+  assert.throws(() => request(anna, 'venmo'), /CHECK constraint failed/);
+  assert.throws(() => request(anna, 'manual', 0), /CHECK constraint failed/);
+  run(db, 'DELETE FROM fuel WHERE id = ?', fuel);
+  assert.equal(many(db, 'SELECT id FROM fuel_requests').length, 0, 'requests go with their fill-up');
   db.close();
 });

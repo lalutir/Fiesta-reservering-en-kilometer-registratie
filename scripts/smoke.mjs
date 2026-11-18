@@ -49,8 +49,24 @@ execFileSync(process.execPath, [path.join(root, 'node_modules', 'typescript', 'b
 const port = await freePort();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'car-smoke-'));
 const env = { ...process.env };
-// public/ and shared/ must be found from dist/src without any override.
-for (const key of ['PUBLIC_DIR', 'SHARED_DIR', 'TRUST_PROXY', 'HOUSEHOLD_TZ', 'BACKUP_KEEP_DAYS', 'SCRYPT_R']) delete env[key];
+// public/ and shared/ must be found from dist/src without any override. The push and payment
+// settings are cleared too: the smoke test must never send anything to a push service or to Tikkie.
+for (const key of [
+  'PUBLIC_DIR',
+  'SHARED_DIR',
+  'TRUST_PROXY',
+  'HOUSEHOLD_TZ',
+  'BACKUP_KEEP_DAYS',
+  'SCRYPT_R',
+  'DOMAIN',
+  'PUSH_CONTACT',
+  'PUSH_ENABLED',
+  'TIKKIE_PAYMENT_REQUEST_URL',
+  'TIKKIE_API_KEY',
+  'TIKKIE_ACCESS_TOKEN',
+]) {
+  delete env[key];
+}
 Object.assign(env, {
   PORT: String(port),
   BIND_HOST: '127.0.0.1',
@@ -172,6 +188,38 @@ try {
       body: JSON.stringify({ start, end }),
     });
     expect(clash.status === 409, `overlap ${clash.status}`);
+  });
+  await check('reminders: the key endpoint needs a login and reports push as off without a configured address', async () => {
+    expect((await fetch(`${base}/api/push/key`)).status === 401, 'anonymous');
+    const res = await fetch(`${base}/api/push/key`, { headers: { Cookie: cookie } });
+    expect(res.status === 200, `status ${res.status}`);
+    expect((await res.json()).enabled === false, 'push should be off here');
+  });
+  await check('startup log says why reminders are off when no https address is configured', async () => {
+    expect(output.includes('"event":"server.warning"') && output.includes('Reminders are off'), 'no "Reminders are off" warning in the startup log');
+    expect(!output.includes('mailto:') && !output.includes('BEGIN'), 'the warning must not echo any address or key');
+  });
+  await check('a drive can be started as a draft and shows up as km to register, then finishes', async () => {
+    const json = { 'Content-Type': 'application/json', Cookie: cookie };
+    const started = await fetch(`${base}/api/usage`, {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ status: 'draft', start: new Date().toISOString(), odometerStart: 1000 }),
+    });
+    expect(started.status === 201, `draft ${started.status}`);
+    const draft = (await started.json()).usage;
+    expect(draft.status === 'draft' && draft.end === null, 'draft shape');
+    const pending = await (await fetch(`${base}/api/usage/pending`, { headers: { Cookie: cookie } })).json();
+    expect(pending.count === 1, `pending count ${pending.count}`);
+    const finished = await fetch(`${base}/api/usage/${draft.id}`, {
+      method: 'PATCH',
+      headers: json,
+      body: JSON.stringify({ status: 'completed', end: new Date().toISOString(), odometerEnd: 1042 }),
+    });
+    expect(finished.status === 200, `finish ${finished.status}`);
+    expect((await finished.json()).usage.distanceKm === 42, 'distance');
+    const after = await (await fetch(`${base}/api/usage/pending`, { headers: { Cookie: cookie } })).json();
+    expect(after.count === 0, `pending count after finishing ${after.count}`);
   });
 } catch (err) {
   failures.push('startup');

@@ -35,18 +35,59 @@ export interface ReservationRow {
   updated_at: string;
 }
 
+export type UsageStatus = 'draft' | 'completed';
+
 export interface UsageRow {
   id: number;
   user_id: number;
   start_utc: string;
+  /** For a draft this is a placeholder equal to start_utc (the drive has not ended yet). */
   end_utc: string;
   odometer_start: number | null;
   odometer_end: number | null;
   reservation_id: number | null;
   note: string;
   created_by: number;
+  status: UsageStatus;
   created_at: string;
   updated_at: string;
+}
+
+/** A fill-up: who fuelled, when, how much and what it cost. Money is integer cents, volume integer millilitres. */
+export interface FuelRow {
+  id: number;
+  user_id: number;
+  at_utc: string;
+  millilitres: number;
+  total_cents: number;
+  note: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One payment request per debtor per fill-up; amount and text are a snapshot taken when it was made. */
+export interface FuelRequestRow {
+  id: number;
+  fuel_id: number;
+  debtor_id: number;
+  amount_cents: number;
+  provider: 'manual' | 'tikkie';
+  message: string;
+  link: string;
+  created_at: string;
+  updated_at: string;
+  paid_at: string | null;
+  paid_by: number | null;
+}
+
+export interface PushSubscriptionRow {
+  id: number;
+  user_id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
 }
 
 // Overlap, window and purge logic compares timestamps as text, which is only
@@ -60,7 +101,7 @@ const UTC_MS = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9
 // one (additive first; a table rebuild needs foreign_keys=OFF outside the
 // transaction, which migrate() does not do yet). Each entry runs in its own
 // transaction together with the user_version bump, so a failure changes nothing.
-const MIGRATIONS: readonly string[] = [
+export const MIGRATIONS: readonly string[] = [
   // 1: initial schema
   `
   CREATE TABLE users (
@@ -132,6 +173,71 @@ const MIGRATIONS: readonly string[] = [
     value TEXT NOT NULL
   );
   `,
+
+  // 2: km registration drafts, fuel fill-ups with payment requests, web push.
+  // Additive only (no table rebuild): no other table references usage.
+  // A draft is a usage row whose drive has not ended yet: it carries only the
+  // start reading, and end_utc holds start_utc as a placeholder (the API shows
+  // it as end: null). The CHECK keeps that placeholder from leaking into a
+  // completed row, and the partial unique index allows one open draft per driver.
+  `
+  ALTER TABLE usage ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'
+    CHECK (status IN ('draft', 'completed'))
+    CHECK (status = 'completed' OR (odometer_start IS NOT NULL AND odometer_end IS NULL AND end_utc = start_utc));
+  CREATE UNIQUE INDEX usage_one_draft ON usage(user_id) WHERE status = 'draft';
+
+  -- user_id is who fuelled (and is owed). Money is integer cents, volume integer millilitres.
+  CREATE TABLE fuel (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    at_utc      TEXT NOT NULL CHECK (at_utc GLOB ${UTC_MS}),
+    millilitres INTEGER NOT NULL CHECK (millilitres BETWEEN 1 AND 200000),
+    total_cents INTEGER NOT NULL CHECK (total_cents BETWEEN 1 AND 1000000),
+    note        TEXT NOT NULL DEFAULT '',
+    created_by  INTEGER NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  );
+  CREATE INDEX fuel_at ON fuel(at_utc, id);
+  CREATE INDEX fuel_user ON fuel(user_id);
+
+  -- A snapshot of what was asked of one person for one fill-up.
+  CREATE TABLE fuel_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    fuel_id      INTEGER NOT NULL REFERENCES fuel(id) ON DELETE CASCADE,
+    debtor_id    INTEGER NOT NULL REFERENCES users(id),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    provider     TEXT NOT NULL CHECK (provider IN ('manual', 'tikkie')),
+    message      TEXT NOT NULL,
+    link         TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    paid_at      TEXT CHECK (paid_at IS NULL OR paid_at GLOB ${UTC_MS}),
+    paid_by      INTEGER REFERENCES users(id),
+    UNIQUE (fuel_id, debtor_id)
+  );
+  CREATE INDEX fuel_requests_debtor ON fuel_requests(debtor_id);
+
+  CREATE TABLE push_subscriptions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint   TEXT NOT NULL UNIQUE,
+    p256dh     TEXT NOT NULL,
+    auth       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX push_subscriptions_user ON push_subscriptions(user_id);
+
+  -- One row per reminder that was claimed for sending; the primary key is what
+  -- makes a reminder go out once, also across restarts.
+  CREATE TABLE reminders_sent (
+    reservation_id INTEGER NOT NULL REFERENCES reservations(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL CHECK (kind IN ('start', 'end', 'repeat')),
+    scheduled_utc  TEXT NOT NULL CHECK (scheduled_utc GLOB ${UTC_MS}),
+    sent_at        TEXT NOT NULL,
+    PRIMARY KEY (reservation_id, kind, scheduled_utc)
+  ) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -150,6 +256,7 @@ export function openDb(file: string, migrations: readonly string[] = MIGRATIONS)
     db.exec('PRAGMA synchronous = NORMAL');
     db.exec('PRAGMA foreign_keys = ON');
     db.exec('PRAGMA secure_delete = ON');
+    if (file !== ':memory:') copyBeforeMigrating(db, file, migrations);
     migrate(db, migrations);
   } catch (err) {
     // Do not leave the file locked behind a failed open (a refused or failed migration).
@@ -162,6 +269,35 @@ export function openDb(file: string, migrations: readonly string[] = MIGRATIONS)
 export function schemaVersion(db: Db): number {
   const row = db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined;
   return row?.user_version ?? 0;
+}
+
+/**
+ * Before the first migration step that changes an existing database, write
+ * backups/pre-migrate-v<from>.db next to it (VACUUM INTO), so an upgrade can be
+ * undone with the restore command. A brand-new file has nothing to protect, an
+ * existing copy (another process, an earlier start) is kept, and a copy that
+ * cannot be written aborts the open with the data untouched (fail closed).
+ * The folder is computed here, not imported from retention.ts (that would be a cycle).
+ */
+function copyBeforeMigrating(db: Db, file: string, migrations: readonly string[]): void {
+  const from = schemaVersion(db);
+  // `migrations.length` is only read once there is something to protect: the
+  // migration-race test hooks that read to interleave a second process.
+  if (from === 0 || from >= migrations.length) return;
+  const dir = path.join(path.dirname(file), 'backups');
+  const dest = path.join(dir, `pre-migrate-v${from}.db`);
+  if (fs.existsSync(dest)) return;
+  const tmp = `${dest}.tmp`;
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.rmSync(tmp, { force: true });
+    vacuumInto(db, tmp);
+    fs.renameSync(tmp, dest);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot write the pre-migration copy ${dest}; the database was not changed: ${why}`, { cause: err });
+  }
 }
 
 /** Apply the migrations the file has not seen yet. */
@@ -268,6 +404,9 @@ export function checkDbFile(file: string): { ok: boolean; detail: string; versio
   }
 }
 
-export function countRows(db: Db, table: 'users' | 'reservations' | 'usage' | 'sessions'): number {
+export function countRows(
+  db: Db,
+  table: 'users' | 'reservations' | 'usage' | 'sessions' | 'fuel' | 'fuel_requests' | 'push_subscriptions',
+): number {
   return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
 }

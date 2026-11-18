@@ -75,6 +75,26 @@ export function fmtRange(startIso, endIso, tz) {
 }
 
 /**
+ * Like fmtRange for a drive: a draft has no end yet and shows when it started.
+ * @param {string} startIso
+ * @param {string | null} endIso null while the drive is still open
+ * @param {string} tz
+ */
+export function fmtDriveRange(startIso, endIso, tz) {
+  if (endIso === null) return S.usage.started(fmtWhen(startIso, tz));
+  return fmtRange(startIso, endIso, tz);
+}
+
+/**
+ * "Sat, 20 Nov 09:00": one moment, day and time.
+ * @param {string} iso
+ * @param {string} tz
+ */
+export function fmtWhen(iso, tz) {
+  return `${formatLocal(iso, tz, 'day')}, ${formatLocal(iso, tz, 'time')}`;
+}
+
+/**
  * Group items by the local calendar day of their start, keeping their order.
  * @template T
  * @param {T[]} items
@@ -167,11 +187,13 @@ export function field(label, control, hint) {
  * @param {string} label
  * @param {string | null} iso initial instant (UTC ISO) or null for empty
  * @param {string} tz
- * @returns {Field & { getIso: () => string | null, setIso: (iso: string) => void }}
+ * @param {{ optional?: boolean, hint?: string }} [opts] optional = may be left empty (isEmpty() tells)
+ * @returns {Field & { getIso: () => string | null, setIso: (iso: string) => void, isEmpty: () => boolean, onInput: (fn: () => void) => void }}
  */
-export function dateTimeField(label, iso, tz) {
-  const date = h('input', { type: 'date', required: true, 'aria-label': `${label}: ${S.reserve.date}` });
-  const time = h('input', { type: 'time', required: true, step: '60', 'aria-label': `${label}: ${S.reserve.time}` });
+export function dateTimeField(label, iso, tz, opts = {}) {
+  const required = !opts.optional;
+  const date = h('input', { type: 'date', required, 'aria-label': `${label}: ${S.reserve.date}` });
+  const time = h('input', { type: 'time', required, step: '60', 'aria-label': `${label}: ${S.reserve.time}` });
   /** @param {string} value */
   const setIso = (value) => {
     const parts = utcToLocalInput(value, tz);
@@ -180,21 +202,30 @@ export function dateTimeField(label, iso, tz) {
   };
   if (iso) setIso(iso);
   const errorId = `field-${++fieldSeq}-error`;
+  const hintId = `field-${++fieldSeq}-hint`;
   const error = h('span', { class: 'field-error', role: 'alert', id: errorId });
   const row = h('div', { class: 'field' }, [
     h('span', { class: 'label', text: label }),
     h('div', { class: 'pair' }, [date, time]),
+    opts.hint ? h('small', { class: 'hint', id: hintId, text: opts.hint }) : null,
     error,
   ]);
+  const baseline = opts.hint ? [hintId] : [];
+  markInvalid([date, time], false, baseline);
   return {
     row,
     setError: (code) => {
       error.textContent = code ? fieldErrorText(code) : '';
       row.classList.toggle('invalid', !!code);
-      markInvalid([date, time], !!code, code ? [errorId] : []);
+      markInvalid([date, time], !!code, code ? [...baseline, errorId] : baseline);
     },
     getIso: () => localInputToUtc(date.value, time.value, tz),
     setIso,
+    isEmpty: () => date.value === '' && time.value === '',
+    onInput: (fn) => {
+      date.addEventListener('input', fn);
+      time.addEventListener('input', fn);
+    },
   };
 }
 
@@ -214,12 +245,81 @@ export function readRange(start, end) {
 }
 
 /**
+ * Read the start and the optional end of a drive. A start that is not a valid
+ * date and time is marked; so is an end that is only half filled in. An empty
+ * end is fine (end: null, the drive is still open).
+ * @param {ReturnType<typeof dateTimeField>} start
+ * @param {ReturnType<typeof dateTimeField>} end
+ * @returns {{ start: string, end: string | null } | null}
+ */
+export function readDriveTimes(start, end) {
+  const startIso = start.getIso();
+  if (!startIso) start.setError('invalid_datetime');
+  let endIso = null;
+  let endBad = false;
+  if (!end.isEmpty()) {
+    endIso = end.getIso();
+    if (!endIso) {
+      end.setError('invalid_datetime');
+      endBad = true;
+    }
+  }
+  return startIso && !endBad ? { start: startIso, end: endIso } : null;
+}
+
+/**
+ * The request body for saving a drive from what the form holds, and the
+ * kilometre obligation on the client side (the server enforces it again).
+ * End time and end reading both filled = a finished drive; both empty = a
+ * draft (the drive has started, the end follows); exactly one filled = the
+ * empty one is reported as required. A finished drive cannot go back to a draft.
+ * @param {object} v
+ * @param {'new' | 'draft' | 'completed'} v.mode what is being saved: a new drive, an open draft or a finished drive
+ * @param {string} v.start
+ * @param {string | null} v.end null when the end date-time is empty
+ * @param {number | null} v.odometerStart
+ * @param {number | null} v.odometerEnd
+ * @param {string} v.note
+ * @returns {{ ok: true, status: 'draft' | 'completed', body: Record<string, unknown> } | { ok: false, errors: Record<string, string> }}
+ */
+export function driveBody(v) {
+  /** @type {Record<string, string>} */
+  const errors = {};
+  if (v.odometerStart === null) errors['odometerStart'] = 'required';
+  const hasEnd = v.end !== null;
+  const hasReading = v.odometerEnd !== null;
+  if (hasEnd !== hasReading) errors[hasEnd ? 'odometerEnd' : 'end'] = 'required';
+  if (!hasEnd && !hasReading && v.mode === 'completed') {
+    errors['end'] = 'required';
+    errors['odometerEnd'] = 'required';
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+  const status = hasEnd ? 'completed' : 'draft';
+  return {
+    ok: true,
+    status,
+    body: { status, start: v.start, end: v.end, odometerStart: v.odometerStart, odometerEnd: v.odometerEnd, note: v.note },
+  };
+}
+
+/**
  * Put the per-field codes of an API error on the matching form fields.
  * @param {Record<string, Field>} fields keyed by the API field name
  * @param {{ fields: Record<string, string> }} err
  */
 export function showFieldErrors(fields, err) {
   for (const [name, code] of Object.entries(err.fields)) fields[name]?.setError(code);
+}
+
+/**
+ * After a save that was refused: put keyboard and screen reader focus on the first
+ * field marked invalid. On a long phone form the field is above the Save button,
+ * so without this the person sees nothing happen.
+ * @param {ParentNode} root the form
+ */
+export function focusFirstInvalid(root) {
+  const first = root.querySelector('[aria-invalid="true"]');
+  if (first instanceof HTMLElement) first.focus();
 }
 
 /**
@@ -282,8 +382,9 @@ export function toaster(getEl) {
     el.textContent = message;
     el.className = isError ? 'toast show error' : 'toast show';
     clearTimeout(timer);
-    // An error says what to fix, so it stays long enough to read and act on.
-    timer = setTimeout(() => getEl()?.classList.remove('show'), isError ? 8000 : 4000);
+    // An error says what to fix, so it stays long enough to read and act on. A longer
+    // message (a saved note with the note tip added) gets more time, about 70 ms a character.
+    timer = setTimeout(() => getEl()?.classList.remove('show'), isError ? 8000 : Math.max(4000, message.length * 70));
   };
 }
 

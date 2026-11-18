@@ -12,8 +12,27 @@ plus an admin page for the person who manages it.
   approves or declines it (only they can). You can withdraw your own suggestion. Pending
   suggestions do not block the car, and unanswered ones lapse when their start time passes.
   Approving checks for overlap again.
-- **Drive log.** A separate record of who *actually* drove and when, with optional odometer
-  readings. The history shows reserved versus actual driver and kilometres per person.
+- **Drive log with kilometres.** A separate record of who *actually* drove and when. Every
+  finished drive needs both odometer readings, and the kilometres count for the person who
+  drove. A reservation card has a **Register km** button (from 30 minutes before it starts) that
+  opens the form already linked to it, and shows the drive and kilometres once registered. The
+  history shows reserved versus actual driver and kilometres per person.
+- **Drafts.** Before leaving, save the drive with only the start reading; when back, open it
+  (Drives tab, or the reminder) and add the end reading and time. One unfinished drive per person.
+  Reservations that ended without a completed drive are listed on the Drives tab (with a count
+  on the tab) and for the admin.
+- **Notes.** A note is *recommended* on both a reservation and a drive (a hint and a friendly
+  tip, never a blocker) and is shown wherever the item appears.
+- **Reminders.** A phone notification (Web Push) 30 minutes before a reservation starts, when
+  it ends, and once more an hour later if the kilometres are still missing. Each person turns it
+  on per device on the Account page. On an iPhone the app must be on the Home Screen (iOS 16.4+).
+- **Fuel and costs.** Record who fuelled, when, litres and price. The cost is split by the
+  kilometres each person drove since the previous fill-up, exact to the cent, with a running
+  "who owes whom" and paid status.
+- **Payment requests.** For each share the app writes a message you send yourself (share sheet,
+  text message, WhatsApp, copy), optionally with a payment link you paste. A Tikkie adapter
+  exists but is **optional, off by default and unverified**: Tikkie's API is offered to business
+  customers, so a private household most likely cannot use it (see the deployment guide).
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
   day and at start-up.
@@ -30,7 +49,20 @@ plus an admin page for the person who manages it.
   `node:sqlite`; TypeScript and ESLint are the only (dev) dependencies. This keeps it small
   enough for the cheapest cloud server and easy to keep up to date.
 - **SQLite** in WAL mode on a volume: no database server, and a backup is a file copy.
-- Notifications are in-app only (the Inbox tab and its badge).
+- **A draft is a normal drive row** with `status = 'draft'` and the start time as a placeholder end
+  (the API shows `end: null`); database checks keep that placeholder from leaking into a finished
+  drive, and a partial unique index allows one draft per person. Drafts never count as kilometres.
+- **One definition of "registered".** The reservation card, the pending list and the reminder
+  scheduler share one SQL predicate (`REGISTERED_SQL`), so the banner and the notification agree.
+- **Fuel shares are computed live** from the drives (pure largest-remainder function, integer
+  cents and millilitres, no floats); a payment request is a snapshot of the amount that was asked.
+- **Web Push without a library.** VAPID signing and message encryption use `node:crypto` and
+  `fetch` (checked against the RFC 8291 test vector), so there is still no runtime dependency.
+  Subscription addresses are only accepted for the four push services the browsers use.
+- **Upgrades keep a copy.** Before the first migration that changes an existing database the app
+  writes `backups/pre-migrate-v<old>.db`.
+- The Inbox tab and its badge show suggestions waiting for your answer; the Drives tab and its
+  badge show kilometres still to register.
 
 ## Quick start on Windows (development)
 
@@ -80,9 +112,12 @@ Data lives in `data/` (git-ignored).
 src/        server (TypeScript, run directly by Node in dev, compiled to dist/ for production)
   server.ts   entry point        app.ts      request pipeline     http.ts     router, CSRF, headers
   auth.ts     passwords, sessions, login throttle                  users.ts    login and user admin
-  reservations.ts  reservations, suggestions, permissions          usage.ts    drive log and history
-  retention.ts     the 6-month purge                               maintenance.ts  backups, daily job
-  db.ts       the only file that touches node:sqlite              cli.ts      operator commands
+  reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
+  fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
+  webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
+  reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
+  maintenance.ts  backups, daily job                               cli.ts      operator commands
+  db.ts       the only file that touches node:sqlite (schema v2, migrations)
 shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
 public/     the PWA (vanilla JavaScript modules) and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
@@ -101,6 +136,17 @@ backups, updates and a monthly cost estimate (about $4-6).
 ## Known limits
 
 - Exactly one car; roles are only admin and member.
+- **Tikkie is unverified.** The adapter was only tried against a local stand-in, uses one static
+  token and is off unless all three `TIKKIE_*` settings are filled in. Payment requests work
+  without it.
+- **Reminders are best effort** and real push delivery (Google, Apple, Mozilla) was never tried by
+  the authors; the Account page has a test button. iPhones only get them once the app is on the
+  Home Screen. Without reminders the Drives tab still shows what is waiting.
+- Fuel is entered by hand (no price lookup) in euro. Because everything older than 6 months is
+  deleted, the share of the oldest fill-up can change when its oldest drives disappear.
+- Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,
+  older reservations without a drive show up as "km to register" until they are cancelled or
+  registered.
 - The Docker/Caddy files and the cloud prices have not been run or verified by the authors, and
   installing on real phones and the phone layout are manual checks (the checklist is in the guide).
 - `node:sqlite` is still marked experimental in Node 22; it is confined to `src/db.ts`.

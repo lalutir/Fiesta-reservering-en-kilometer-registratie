@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { createApp, type App } from '../src/app.ts';
@@ -7,12 +8,16 @@ import { loadConfig, type Clock, type Config } from '../src/config.ts';
 import { openDb, run, type Db } from '../src/db.ts';
 import type { Ctx } from '../src/http.ts';
 import { createUser } from '../src/users.ts';
+import { toB64u } from '../src/webpush.ts';
+import { decryptPayload } from './webpush-peer.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Json = any;
 
 export const PASSWORD = 'correct-horse-battery';
 export const DEFAULT_NOW = '2026-06-15T10:00:00.000Z';
+/** Valid odometer readings (50 km) for a completed drive; spread into request bodies. */
+export const ODO = { odometerStart: 10_000, odometerEnd: 10_050 } as const;
 
 export interface TestClock extends Clock {
   set(iso: string): void;
@@ -145,6 +150,41 @@ export interface TestAppOptions {
   now?: string;
   env?: Record<string, string>;
   overrides?: Partial<Config>;
+  /** Replaces the global fetch the app uses for outbound calls (push services, Tikkie). */
+  fetch?: typeof fetch;
+}
+
+export interface StubCall {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: Buffer | undefined;
+  /** How the caller asked redirects to be handled, and whether it set a timeout signal. */
+  redirect: string | undefined;
+  hasSignal: boolean;
+}
+
+export interface StubFetch {
+  fetch: typeof fetch;
+  calls: StubCall[];
+  /** Replace the scripted answer for the following calls. */
+  respond(handler: (call: StubCall) => Response | Promise<Response>): void;
+}
+
+/** A fetch that records every call and answers 201 unless told otherwise. No network is ever touched. */
+export function stubFetch(handler?: (call: StubCall) => Response | Promise<Response>): StubFetch {
+  const calls: StubCall[] = [];
+  let answer: (call: StubCall) => Response | Promise<Response> = handler ?? (() => new Response(null, { status: 201 }));
+  const stub: typeof fetch = async (input, init) => {
+    const headers: Record<string, string> = {};
+    for (const [k, v] of new Headers(init?.headers).entries()) headers[k.toLowerCase()] = v;
+    const raw = init?.body;
+    const body = raw === undefined || raw === null ? undefined : typeof raw === 'string' ? Buffer.from(raw) : Buffer.from(raw as Uint8Array);
+    const call: StubCall = { url: String(input), method: init?.method ?? 'GET', headers, body, redirect: init?.redirect, hasSignal: init?.signal != null };
+    calls.push(call);
+    return answer(call);
+  };
+  return { fetch: stub, calls, respond: (next) => void (answer = next) };
 }
 
 export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp> {
@@ -156,7 +196,7 @@ export async function createTestApp(opts: TestAppOptions = {}): Promise<TestApp>
   const clock = makeClock(opts.now);
   const logs: Array<Record<string, unknown>> = [];
   const db = openDb(path.join(dir, 'car.db'));
-  const app = createApp({ db, clock, config, log: (event) => logs.push(event) });
+  const app = createApp({ db, clock, config, log: (event) => logs.push(event), ...(opts.fetch ? { fetch: opts.fetch } : {}) });
   const address = await app.listen(0, '127.0.0.1');
   const port = address.port;
   const t: TestApp = {
@@ -235,6 +275,83 @@ export function insertUsage(t: TestApp, seed: UsageSeed): number {
     seed.odometerStart ?? null,
     seed.odometerEnd ?? null,
     seed.reservationId ?? null,
+    seed.userId,
+    now,
+    now,
+  ).lastInsertRowid;
+}
+
+/** A pretend browser: a push subscription with real keys, so the messages sent to it can be decrypted. */
+export interface Subscriber {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  /** What PushSubscription.toJSON() gives, ready to POST to /api/push/subscribe. */
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+  /** The JSON message inside a push request made to this subscriber. */
+  read(call: StubCall): Json;
+}
+
+export function makeSubscriber(endpoint = `https://fcm.googleapis.com/fcm/send/${crypto.randomBytes(9).toString('hex')}`): Subscriber {
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.generateKeys();
+  const authSecret = crypto.randomBytes(16);
+  const p256dh = toB64u(ecdh.getPublicKey());
+  const auth = toB64u(authSecret);
+  return {
+    endpoint,
+    p256dh,
+    auth,
+    subscription: { endpoint, keys: { p256dh, auth } },
+    read: (call) => JSON.parse(decryptPayload(call.body as Buffer, ecdh.getPrivateKey(), ecdh.getPublicKey(), authSecret).toString('utf8')) as Json,
+  };
+}
+
+export interface DraftSeed {
+  userId: number;
+  start: string;
+  odometerStart?: number;
+  reservationId?: number | null;
+}
+
+/** Insert an open draft (start reading only; end_utc holds the start as placeholder) directly. */
+export function insertDraft(t: TestApp, seed: DraftSeed): number {
+  const now = t.clock.now().toISOString();
+  return run(
+    t.db,
+    `INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, reservation_id, note, created_by, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, ?, '', ?, 'draft', ?, ?)`,
+    seed.userId,
+    seed.start,
+    seed.start,
+    seed.odometerStart ?? ODO.odometerStart,
+    seed.reservationId ?? null,
+    seed.userId,
+    now,
+    now,
+  ).lastInsertRowid;
+}
+
+export interface FuelSeed {
+  userId: number;
+  at: string;
+  millilitres?: number;
+  totalCents?: number;
+  note?: string;
+}
+
+/** Insert a fill-up directly, bypassing the API rules (for fixtures). Defaults: 40.000 L for 60.00. */
+export function insertFuel(t: TestApp, seed: FuelSeed): number {
+  const now = t.clock.now().toISOString();
+  return run(
+    t.db,
+    `INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, note, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    seed.userId,
+    seed.at,
+    seed.millilitres ?? 40_000,
+    seed.totalCents ?? 6_000,
+    seed.note ?? '',
     seed.userId,
     now,
     now,

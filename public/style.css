@@ -387,7 +387,10 @@ details.earlier summary {
   align-items: center;
   justify-content: center;
   min-height: 44px;
-  padding: 0 14px;
+  /* Vertical padding and centred text only matter for a label that wraps on a narrow phone
+     ("Car not used? Cancel the reservation"): without them the lines touch the border. */
+  padding: 6px 14px;
+  text-align: center;
   border: 1px solid var(--field-border);
   border-radius: 10px;
   background: var(--surface);
@@ -443,7 +446,7 @@ details.earlier summary {
 }
 .btn.small {
   min-height: 34px;
-  padding: 0 10px;
+  padding: 4px 10px;
   font-size: 0.9rem;
 }
 
@@ -497,6 +500,10 @@ select:disabled {
   color: var(--danger);
   font-size: 0.85rem;
 }
+/* Its own line: under a hint the message would otherwise run on from it ("Last known reading: 12075 kmRequired."). */
+.field-error {
+  display: block;
+}
 .field-error:empty {
   display: none;
 }
@@ -521,6 +528,114 @@ select:disabled {
 }
 .login .card {
   text-align: left;
+}
+
+/* ---- kilometres to register, fuel and costs ---------------------------- */
+
+/* A view title with one secondary link beside it; the link drops below the title when there is no room. */
+.view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+.view-head h2 {
+  min-width: 0;
+}
+
+/* The "kilometres to register" box at the top of the Drives tab. */
+.banner {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border: 1px solid var(--warn-text);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.banner h3 {
+  margin-top: 0;
+}
+.banner .hint,
+.banner .note {
+  color: inherit;
+}
+ul.pending,
+ul.shares {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.pending-row,
+.share {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.banner .pending-row {
+  border-top-color: var(--warn-text);
+}
+.pending-row .actions,
+.share .actions {
+  margin-top: 6px;
+}
+/* Name, amount, status: the amounts line up from one share to the next, the status sits at the right edge. */
+.share .row > strong {
+  flex: 0 1 6em;
+}
+.share .row .chip {
+  margin-left: auto;
+}
+
+/* One line on a reservation card about its kilometres. */
+.km-line {
+  margin-top: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.km-line.registered {
+  color: var(--ok-text);
+}
+.km-line.draft,
+.km-line.missing {
+  color: var(--warn-text);
+}
+
+/* A small status pill next to a person's share of a fill-up. */
+.chip {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--off-bg);
+  color: var(--off-text);
+  white-space: nowrap;
+}
+.chip.requested {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.chip.paid {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+.chip.changed {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+}
+
+/* The payment request of one share: message, ways to send it, optional link. */
+.panel-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--field-border);
+  border-radius: 10px;
+}
+.panel-box h4 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+.panel-box textarea {
+  resize: vertical;
+  margin-bottom: 4px;
 }
 
 /* ---- admin page (desktop friendly, same tokens) ----------------------- */
@@ -551,7 +666,9 @@ select:disabled {
 }
 .table-wrap {
   /* On a phone the table scrolls inside this box (focusable, so the keyboard can scroll it);
-     the page itself never scrolls sideways. */
+     the page itself never scrolls sideways. position: relative keeps the visually hidden column
+     headings (.sr-only is absolutely positioned) inside this box instead of widening the page. */
+  position: relative;
   overflow-x: auto;
   overflow-wrap: normal;
   border: 1px solid var(--border);

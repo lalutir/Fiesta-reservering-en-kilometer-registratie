@@ -1,5 +1,5 @@
 import { get } from '../api.js';
-import { fmtRange, groupByDay, h } from '../dom.js';
+import { fmtDriveRange, fmtRange, groupByDay, h } from '../dom.js';
 import { S } from '../strings.js';
 
 export const live = true;
@@ -25,9 +25,10 @@ export function buildTimeline(usage, reservations, nowIso) {
   /** @type {Array<{ kind: 'drive', start: string, usage: HistoryUsage } | { kind: 'unused', start: string, reservation: import('../api.js').Reservation }>} */
   const entries = usage.map((u) => ({ kind: /** @type {const} */ ('drive'), start: u.start, usage: u }));
   for (const r of reservations) {
-    if (r.end >= nowIso || linked.has(r.id)) continue;
+    if (r.end >= nowIso || linked.has(r.id) || r.kmState === 'registered') continue;
     // A drive logged without a link but inside the reserved time also counts as used.
-    const covered = usage.some((u) => u.start < r.end && r.start < u.end);
+    // A drive that is still open (no end yet) runs up to now.
+    const covered = usage.some((u) => u.start < r.end && r.start < (u.end ?? nowIso));
     if (!covered) entries.push({ kind: /** @type {const} */ ('unused'), start: r.start, reservation: r });
   }
   return entries.sort((a, b) => (a.start < b.start ? 1 : a.start > b.start ? -1 : 0));
@@ -51,15 +52,17 @@ export async function render(app) {
       return h('article', { class: 'card history unused' }, [
         h('div', { class: 'row' }, [h('strong', { text: S.history.reservedBy(r.userId === me ? S.me : r.userName) }), h('span', { class: 'badge-status expired', text: S.history.notDriven })]),
         h('div', { class: 'when', text: fmtRange(r.start, r.end, app.tz) }),
+        r.note ? h('div', { class: 'note', text: r.note }) : null,
       ]);
     }
     const u = entry.usage;
     return h('article', { class: 'card history' }, [
       h('div', { class: 'row' }, [
         h('strong', { text: S.history.drivenBy(u.userId === me ? S.me : u.userName) }),
+        u.status === 'draft' ? h('span', { class: 'badge-status expired', text: S.history.notFinished }) : null,
         u.distanceKm !== null ? h('span', { class: 'badge-status confirmed', text: S.usage.km(u.distanceKm) }) : null,
       ]),
-      h('div', { class: 'when', text: fmtRange(u.start, u.end, app.tz) }),
+      h('div', { class: 'when', text: fmtDriveRange(u.start, u.end, app.tz) }),
       h('div', { class: 'sub' }, [
         u.reservation ? S.history.reservedBy(u.reservation.userId === me ? S.me : u.reservation.userName) : S.history.noReservation,
         u.sameDriver === null ? null : ` · ${u.sameDriver ? S.history.sameDriver : S.history.otherDriver}`,

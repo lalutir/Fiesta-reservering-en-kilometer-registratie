@@ -31,7 +31,7 @@ export async function render(app, route) {
   const end = dateTimeField(S.reserve.end, existing?.end ?? new Date(firstStart.getTime() + 2 * 3_600_000).toISOString(), app.tz);
   const note = h('input', { type: 'text', name: 'note', maxlength: '500', value: existing?.note ?? '', autocomplete: 'off' });
   const driverField = field(S.reserve.driver, driver);
-  const noteField = field(S.reserve.note, note);
+  const noteField = field(S.reserve.note, note, S.noteHint);
   const submit = h('button', { class: 'btn primary block', type: 'submit' });
   const hint = h('p', { class: 'hint', text: S.reserve.suggestionHint, hidden: true });
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
@@ -67,7 +67,9 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/reservations/${existing.id}`, body);
           else await post('/api/reservations', body);
-          app.toast(existing ? S.reserve.updated : isOther() ? S.reserve.suggested : S.reserve.created);
+          const saved = existing ? S.reserve.updated : isOther() ? S.reserve.suggested : S.reserve.created;
+          // A note is recommended, never required: an empty one only earns a friendly tip.
+          app.toast(note.value.trim() === '' ? `${saved} ${S.noteTip}` : saved);
           app.navigate('#/');
         } catch (err) {
           const apiErr = /** @type {import('../api.js').ApiError} */ (err);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { many, one, run } from '../src/db.ts';
 import { purge } from '../src/retention.ts';
-import { at, createHousehold, createTestApp, insertReservation, insertUsage, type TestApp } from './helpers.ts';
+import { ODO, at, createHousehold, createTestApp, insertDraft, insertFuel, insertReservation, insertUsage, type TestApp } from './helpers.ts';
 
 const TZ = 'Europe/Amsterdam';
 const NOW = '2026-06-15T10:00:00.000Z';
@@ -40,7 +40,7 @@ test('a row exactly at the cutoff is both accepted by validation and kept by the
   try {
     const res = await anna.post('/api/reservations', { start: shift(CUTOFF, -HOUR), end: CUTOFF });
     assert.equal(res.status, 201);
-    const use = await anna.post('/api/usage', { start: shift(CUTOFF, -3 * HOUR), end: CUTOFF });
+    const use = await anna.post('/api/usage', { start: shift(CUTOFF, -3 * HOUR), end: CUTOFF, ...ODO });
     assert.equal(use.status, 201);
     purge(t.db, t.clock.now(), TZ, t.ctx.log);
     assert.equal(ids(t, 'reservations').length, 1);
@@ -119,18 +119,18 @@ test('the deleted-row counts are logged as one JSON line and kept for the admin 
     t.logs.length = 0;
     const res = await admin.post('/api/admin/retention/run');
     assert.equal(res.status, 200);
-    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, sessions: 0 });
+    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
     const lines = t.logs.filter((l) => l['event'] === 'retention.purge');
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, sessions: 0 });
+    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
 
     const status = (await admin.get('/api/admin/retention')).body;
     assert.equal(status.cutoff, CUTOFF);
     assert.equal(status.windowMonths, 6);
     assert.deepEqual(status.window, { from: CUTOFF, to: '2026-12-15T11:00:00.000Z' });
     assert.equal(status.lastPurgeAt, NOW);
-    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, sessions: 0 });
-    assert.deepEqual(status.counts, { reservations: 0, usage: 0, sessions: status.counts.sessions });
+    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
+    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, sessions: status.counts.sessions });
     assert.equal(status.oldest.reservationEnd, null);
     assert.equal(status.timeZone, 'Europe/Amsterdam');
   } finally {
@@ -167,6 +167,79 @@ test('purge is idempotent and leaves an empty database alone', async () => {
     const first = purge(t.db, t.clock.now(), TZ, t.ctx.log);
     const second = purge(t.db, t.clock.now(), TZ, t.ctx.log);
     assert.deepEqual([first.reservations, first.usage, second.reservations, second.usage], [0, 0, 0, 0]);
+  } finally {
+    await t.close();
+  }
+});
+
+test('old fill-ups are purged with their payment requests, current ones stay (boundary +/- 1 ms)', async () => {
+  const { t, anna, ben } = await createHousehold();
+  try {
+    const before = insertFuel(t, { userId: anna.id, at: shift(CUTOFF, -1) });
+    const atCutoff = insertFuel(t, { userId: anna.id, at: CUTOFF });
+    const recent = insertFuel(t, { userId: anna.id, at: at(t.clock, -48) });
+    for (const fuelId of [before, atCutoff, recent]) {
+      run(
+        t.db,
+        "INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, created_at, updated_at) VALUES (?, ?, 1500, 'manual', 'pay', ?, ?)",
+        fuelId,
+        ben.id,
+        NOW,
+        NOW,
+      );
+    }
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.fuel, 1);
+    assert.equal(result.fuelRequests, 1, 'the unpaid request of the old fill-up goes with it');
+    assert.deepEqual(
+      many<{ id: number }>(t.db, 'SELECT id FROM fuel ORDER BY id').map((r) => r.id),
+      [atCutoff, recent],
+    );
+    assert.equal(one<{ n: number }>(t.db, 'SELECT COUNT(*) AS n FROM fuel_requests')?.n, 2);
+    assert.equal(
+      one<{ n: number }>(t.db, 'SELECT COUNT(*) AS n FROM fuel_requests WHERE fuel_id = ?', before)?.n,
+      0,
+    );
+  } finally {
+    await t.close();
+  }
+});
+
+test('the admin retention page reports fill-ups and requests, and the CLI-style counts include them', async () => {
+  const { t, admin, anna, ben } = await createHousehold();
+  try {
+    const fuel = insertFuel(t, { userId: anna.id, at: at(t.clock, -10) });
+    run(
+      t.db,
+      "INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, created_at, updated_at) VALUES (?, ?, 1500, 'manual', 'pay', ?, ?)",
+      fuel,
+      ben.id,
+      NOW,
+      NOW,
+    );
+    const status = (await admin.get('/api/admin/retention')).body;
+    assert.equal(status.counts.fuel, 1);
+    assert.equal(status.counts.fuelRequests, 1);
+    assert.equal(status.oldest.fuelAt, at(t.clock, -10));
+    // A purge result stored by the previous release has no fuel keys: the page must cope (it reads them with ?? 0).
+    run(t.db, "INSERT INTO meta (key, value) VALUES ('last_purge', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify({ cutoff: CUTOFF, reservations: 1, usage: 2, sessions: 3 }));
+    const old = (await admin.get('/api/admin/retention')).body;
+    assert.equal(old.lastPurge.fuel, undefined);
+    assert.equal(old.lastPurge.reservations, 1);
+  } finally {
+    await t.close();
+  }
+});
+
+test('an abandoned old draft is purged like any other old row, a recent one is kept', async () => {
+  const { t, anna, ben } = await createHousehold();
+  try {
+    const stale = insertDraft(t, { userId: anna.id, start: shift(CUTOFF, -2 * HOUR) });
+    const fresh = insertDraft(t, { userId: ben.id, start: at(t.clock, -1) });
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.usage, 1);
+    assert.deepEqual(ids(t, 'usage'), [fresh]);
+    assert.ok(!ids(t, 'usage').includes(stale));
   } finally {
     await t.close();
   }

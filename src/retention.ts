@@ -8,6 +8,9 @@ export interface PurgeResult {
   cutoff: string;
   reservations: number;
   usage: number;
+  /** Fill-ups older than the window, and (with them) their payment requests. */
+  fuel: number;
+  fuelRequests: number;
   sessions: number;
 }
 
@@ -24,8 +27,13 @@ export function purge(db: Db, now: Date, tz: string, log: Logger, months = 6): P
   const result = tx(db, () => {
     const usage = run(db, 'DELETE FROM usage WHERE end_utc < ?', cutoff).changes;
     const reservations = run(db, 'DELETE FROM reservations WHERE end_utc < ?', cutoff).changes;
+    // Count the requests first: the cascade removes them with their fill-up, and an unpaid
+    // request older than the window goes with it (the window is the whole retention promise).
+    const fuelRequests =
+      one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM fuel_requests WHERE fuel_id IN (SELECT id FROM fuel WHERE at_utc < ?)', cutoff)?.n ?? 0;
+    const fuel = run(db, 'DELETE FROM fuel WHERE at_utc < ?', cutoff).changes;
     const sessions = run(db, 'DELETE FROM sessions WHERE expires_at < ?', nowIso).changes;
-    const r: PurgeResult = { cutoff, reservations, usage, sessions };
+    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, sessions };
     setMeta(db, 'last_purge_at', nowIso);
     setMeta(db, 'last_purge', JSON.stringify(r));
     return r;
@@ -93,11 +101,14 @@ export function retentionStatus(ctx: Ctx): Record<string, unknown> {
     counts: {
       reservations: countRows(db, 'reservations'),
       usage: countRows(db, 'usage'),
+      fuel: countRows(db, 'fuel'),
+      fuelRequests: countRows(db, 'fuel_requests'),
       sessions: countRows(db, 'sessions'),
     },
     oldest: {
       reservationEnd: one<{ v: string | null }>(db, 'SELECT MIN(end_utc) AS v FROM reservations')?.v ?? null,
       usageEnd: one<{ v: string | null }>(db, 'SELECT MIN(end_utc) AS v FROM usage')?.v ?? null,
+      fuelAt: one<{ v: string | null }>(db, 'SELECT MIN(at_utc) AS v FROM fuel')?.v ?? null,
     },
   };
 }
