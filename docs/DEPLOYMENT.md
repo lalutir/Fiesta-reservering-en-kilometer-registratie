@@ -357,6 +357,12 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       the notification appears. On an iPhone this needs the app on the Home Screen (section 18).
 - [ ] A drive can be saved as a draft with only the start reading and finished later;
       a fill-up shows each person's share, and a payment request can be copied or shared.
+- [ ] After an update from the version with fuel costs: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v2.db`, and existing drives still show as the driver's own (section 18).
+- [ ] Tick **I drove, but the kilometres aren't mine** on a drive: it needs a note, and the
+      fuel share moves to the other person. With reminders on for a second phone, registering a
+      fill-up sends that person a notification, and **I have paid this request** on the
+      History screen marks their share paid.
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -428,6 +434,18 @@ The first start of this version upgrades the database from schema v1 to v2
   `pre-migrate-v1.db` first: the app never overwrites an existing copy, so
   otherwise it would keep the old one instead of making a fresh copy of the
   database as it is by then.
+- **Coming from the version that already had fuel costs (schema v2)?** The first
+  start of the current version upgrades the database once more, to schema v3
+  (whose kilometres a drive is, and what a payment request covers). Nothing is
+  removed, and the same rules apply with a second copy,
+  `/data/backups/pre-migrate-v2.db`: take a backup first, treat the copy as a
+  secret, delete it when you are happy, and to go back stop the app, restore that
+  file and start the previous version (an older app refuses to open a v3
+  database). If you come straight from the first version, the app upgrades
+  v1 to v3 in one start and writes only `pre-migrate-v1.db`. After the upgrade
+  every existing drive reads as the driver's own kilometres, and a payment
+  request made before it keeps asking for the share alone and settles nothing
+  but itself.
 - **What people see on the first day:** reservations from before the update have
   no completed drive with odometer readings, so they count as "kilometres to
   register". A member's Drives tab lists their reservations that ended in the
@@ -440,14 +458,40 @@ The first start of this version upgrades the database from schema v1 to v2
 ### Kilometre registration
 
 - Every finished drive has an end time and both odometer readings; the kilometres
-  count for the person who drove (not for the person who reserved).
+  count for the person who drove (not for the person who reserved), unless the
+  driver says they are someone else's or shared (see below).
 - A drive can be saved as a **draft** with only the start reading, before leaving,
   and finished with the end reading and end time when back. Each person can have
   one unfinished drive at a time.
 - A reservation card offers **Register km** from 30 minutes before it starts and
   shows who registered it and how far. Someone else who drove a reservation uses
   **I drove this**, once it has started.
-- The note on a reservation or a drive is recommended, never required.
+- The note on a reservation or a drive is recommended, never required, except when
+  the kilometres are not the driver's own (next).
+
+### Kilometres that are not the driver's own
+
+A driver (or an admin, for any drive) can tick **I drove, but the kilometres
+aren't mine** on the drive form and choose **another person** or **Together**.
+A note is then compulsory: say why. It is the only way to charge the fuel to
+the right person, for example when you take someone to the station in their
+errand, or when a trip is for the whole household.
+
+- The driver stays the driver. The obligation to register the drive, the
+  reminders and the overlap check all follow the driver; only the kilometre
+  totals and the fuel split follow whose kilometres they are. No approval from the
+  other person is needed: it is visible, with the note, in History, in the Drives
+  list, on the reservation card and in the admin Drives table.
+- **Together** kilometres are not anybody's: when fuel is shared out they are a
+  pool that is split **equally over everybody who is active** (to the cent, the
+  odd cent goes to the lowest user id), on top of everyone's own kilometres. The
+  Drives tab lists them on their own line; a person's own total never includes them.
+- Kilometres per person count under their owner; the grand total is unchanged.
+  The number of drives still counts for the driver.
+- A member cannot change this on a drive that a payment request depends on
+  (the same rule as for the other fields of such a drive); an admin can.
+- A person who is deactivated later keeps the kilometres already given to them,
+  but cannot be chosen for new ones, and does not take part in the equal split.
 
 ### Reminders (Web Push)
 
@@ -502,11 +546,45 @@ than 15 minutes in the past.
   whom" counts every unpaid share at what is owed now and nothing for a paid one,
   so a paid request whose share changed afterwards is not settled by the balances:
   read the difference on its card and mark it unpaid to ask again.
-- Only the person who fuelled (or an admin) can edit, delete, request or mark paid,
-  and a fill-up with a payment marked as paid is locked until it is marked unpaid.
+- Only the person who fuelled (or an admin) can edit, delete or request, and a
+  fill-up with a payment marked as paid, or one whose share a later payment settled
+  (below), is locked until that payment is marked unpaid. Marking paid is also open
+  to the person who owes the money, for their own share only (next).
 - Once a payment request exists for a fill-up, the drives that ended in its period
   can no longer be edited, moved or deleted by their owners (the drive says so);
   an admin still can. Registering a new drive is always possible.
+
+### Telling people, "I have paid" and amounts carried over
+
+- **A push when a fill-up is registered.** Everybody with a share above zero who
+  has reminders turned on gets one notification per device, naming who fuelled and
+  the amount due, and opening the History screen. It is sent after the fill-up is
+  saved, so a slow or broken push service never delays or fails the save; a failure
+  is logged (host and status, never the address or keys) and not retried. Nothing is
+  sent when reminders are switched off, for people without a device, for deactivated
+  people, or when a fill-up is edited or deleted. The amount can still change when
+  more drives are registered, and the message says so.
+- **"I have paid this request."** The person who owes money sees their open shares
+  on the History screen (under **Fuel you owe**) and on the Fuel card, each with the
+  amount due and this button. It works with or without a payment request, marks the
+  share paid and records who and when. Only the person who is owed (or an admin) can
+  undo it. It is a self-report: nothing is checked against a bank.
+- **Unpaid amounts are carried over.** What a person still owes the same fueler from
+  earlier fill-ups is added to their share of the next one, and what the fueler
+  still owes them in return is taken off (never below zero). The card, the payment
+  request text and the push show the share, what is carried and the total. When
+  that request is marked paid, the earlier shares it included are settled with it,
+  in one step: the request's paid mark is the only thing written, and the settled
+  shares follow from it. Marking it unpaid opens them again. Only fill-ups that
+  existed when the request was made are included, so a forgotten fill-up added
+  afterwards stays owed. A debtor with nothing owed on the new fill-up is not
+  asked anything: their old amounts wait until they next have a share.
+- **Where it can mislead.** A settled share is no longer counted, even if a drive
+  that changes it is added to its period afterwards; the request that settled it
+  is then marked "amount changed" with the difference, and that flag is the only
+  signal, so read it. A fill-up whose share was settled by a later payment is
+  locked like one with a paid request. Money is whole cents everywhere and the
+  sums are exact; the app does not move money.
 
 ### Payment requests (and Tikkie)
 
@@ -527,6 +605,6 @@ than 15 minutes in the past.
 
 ### Switching things off
 
-- Reminders: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
+- Reminders and the push for a new fill-up: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
 - Nothing else needs a rollback; fuel costs and drafts are simply not used.

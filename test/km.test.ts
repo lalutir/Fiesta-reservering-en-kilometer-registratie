@@ -42,6 +42,9 @@ test('a drive can be started against an upcoming or a running reservation, and b
         odometerEnd: null,
         distanceKm: null,
         linked: true,
+        kmFor: 'self',
+        kmUserId: null,
+        kmUserName: null,
       },
     );
     assert.equal(reservationItem(list, running).kmState, 'draft');
@@ -74,6 +77,9 @@ test('reservation lists, detail, inbox and history all carry the linked drive an
       odometerEnd: 10_050,
       distanceKm: 50,
       linked: true,
+      kmFor: 'self',
+      kmUserId: null,
+      kmUserName: null,
     };
     const fromList = reservationItem((await ben.get('/api/reservations')).body, res);
     assert.deepEqual({ ...fromList.drive }, expected);

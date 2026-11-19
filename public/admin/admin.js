@@ -11,6 +11,9 @@ import {
   fmtWhen,
   formatLocal,
   h,
+  kmOwnerControl,
+  kmOwnerLabel,
+  linkNoteToOwner,
   localInputToUtc,
   numberInput,
   readDriveTimes,
@@ -438,7 +441,8 @@ async function renderUsage() {
     h('span', { class: `badge-status ${u.status === 'draft' ? 'expired' : 'confirmed'}`, text: S.admin.usage.statusLabel[u.status] }),
     fmtDriveRange(u.start, u.end, tz),
     u.odometerStart !== null || u.odometerEnd !== null ? `${text(u.odometerStart)} → ${text(u.odometerEnd)}` : '–',
-    u.distanceKm === null ? '–' : S.usage.km(u.distanceKm),
+    // Whose kilometres they are, when not the driver's own: another person's or the shared pool.
+    [u.distanceKm === null ? '–' : S.usage.km(u.distanceKm), kmOwnerLabel(u, session.user.id)].filter(Boolean).join(' · '),
     text(u.reservationId),
     text(u.note),
     h('div', { class: 'actions' }, [
@@ -483,7 +487,16 @@ function usageEditor(record, users) {
   const fOdoStart = field(S.usage.odometerStart, odoStart);
   const fOdoEnd = field(S.usage.odometerEnd, odoEnd);
   const fRes = field(`${S.usage.reservation} #`, reservation);
-  const fNote = field(S.usage.note, note);
+  const fNote = field(S.usage.note, note, S.noteHint);
+  // Whose kilometres these are: an admin can set it for any drive (the person must be active, and not the driver).
+  const kmOwner = kmOwnerControl({
+    users: users.filter((u) => u.active),
+    meId: session.user.id,
+    driverId: Number(driver.value),
+    current: existing,
+  });
+  linkNoteToOwner(kmOwner, fNote, note);
+  driver.addEventListener('change', () => kmOwner.setDriver(Number(driver.value)));
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
   return h(
     'form',
@@ -492,10 +505,11 @@ function usageEditor(record, users) {
       novalidate: true,
       onsubmit: async (/** @type {Event} */ e) => {
         e.preventDefault();
-        for (const f of [fDriver, start, end, fOdoStart, fOdoEnd, fRes, fNote]) f.setError(null);
+        for (const f of [fDriver, start, end, fOdoStart, fOdoEnd, fRes, kmOwner.field, fNote]) f.setError(null);
         formError.hidden = true;
         const times = readDriveTimes(start, end);
         if (!times) return;
+        const owner = kmOwner.read();
         const built = driveBody({
           mode,
           start: times.start,
@@ -503,12 +517,15 @@ function usageEditor(record, users) {
           odometerStart: readNumber(odoStart.value),
           odometerEnd: readNumber(odoEnd.value),
           note: note.value,
+          owner,
         });
         if (!built.ok) {
-          showFieldErrors({ end, odometerStart: fOdoStart, odometerEnd: fOdoEnd }, { fields: built.errors });
+          showFieldErrors({ end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, kmUserId: kmOwner.field, note: fNote }, { fields: built.errors });
           return;
         }
         const body = { ...built.body, userId: Number(driver.value), reservationId: readNumber(reservation.value) };
+        // Going back to "mine" on an edit has to be said, since "self" is otherwise left out of the request.
+        if (existing && owner.kmFor === 'self' && (existing.kmFor ?? 'self') !== 'self') Object.assign(body, { kmFor: 'self', kmUserId: null });
         try {
           if (existing) await patch(`/api/usage/${existing.id}`, body);
           else await post('/api/usage', body);
@@ -518,7 +535,10 @@ function usageEditor(record, users) {
           await showTab('usage');
         } catch (err) {
           const apiErr = /** @type {ApiError} */ (err);
-          showFieldErrors({ userId: fDriver, start, end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, reservationId: fRes, note: fNote }, apiErr);
+          showFieldErrors(
+            { userId: fDriver, start, end, odometerStart: fOdoStart, odometerEnd: fOdoEnd, reservationId: fRes, kmFor: kmOwner.field, kmUserId: kmOwner.field, note: fNote },
+            apiErr,
+          );
           formError.textContent = saveErrorText(apiErr, tz, S.usage.overlap);
           formError.hidden = false;
         }
@@ -527,7 +547,7 @@ function usageEditor(record, users) {
     [
       h('h2', { text: existing ? `${S.admin.usage.editTitle} #${existing.id}` : S.admin.usage.newRecord }),
       mode === 'completed' ? null : h('p', { class: 'hint', text: S.admin.usage.editHint }),
-      h('div', { class: 'inline-form' }, [fDriver.row, start.row, end.row, fOdoStart.row, fOdoEnd.row, fRes.row, fNote.row]),
+      h('div', { class: 'inline-form' }, [fDriver.row, start.row, end.row, fOdoStart.row, fOdoEnd.row, fRes.row, kmOwner.row, fNote.row]),
       formError,
       h('div', { class: 'actions' }, [
         h('button', { class: 'btn primary', type: 'submit' }, S.admin.usage.save),

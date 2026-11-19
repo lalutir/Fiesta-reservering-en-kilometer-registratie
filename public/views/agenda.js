@@ -1,5 +1,5 @@
 import { del, get, post } from '../api.js';
-import { fmtRange, groupByDay, h, setBusy } from '../dom.js';
+import { fmtRange, groupByDay, h, kmOwnerLabel, setBusy } from '../dom.js';
 import { S, errorText } from '../strings.js';
 
 export const live = true;
@@ -23,7 +23,10 @@ export function kmAction(r, meId, isAdmin, nowIso) {
   if (r.status !== 'confirmed') return none;
   const drive = r.drive;
   if (r.kmState === 'registered' && drive) {
-    return { line: S.agenda.kmRegistered(drive.distanceKm ?? 0, drive.userId === meId ? S.me : drive.userName), state: 'registered', action: null };
+    // The driver stays the driver; when the kilometres are someone else's or shared, the line says so.
+    const owner = kmOwnerLabel(drive, meId);
+    const line = S.agenda.kmRegistered(drive.distanceKm ?? 0, drive.userId === meId ? S.me : drive.userName);
+    return { line: owner ? `${line} · ${owner}` : line, state: 'registered', action: null };
   }
   if (r.kmState === 'draft' && drive) {
     const own = drive.userId === meId;

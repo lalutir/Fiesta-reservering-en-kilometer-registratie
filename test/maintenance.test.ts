@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, type Config } from '../src/config.ts';
-import { MIGRATIONS, getMeta, many, one, openDb, run, schemaVersion, type Db } from '../src/db.ts';
+import { MIGRATIONS, SCHEMA_VERSION, getMeta, many, one, openDb, run, schemaVersion, type Db } from '../src/db.ts';
 import { createBackup, dbPath, restoreBackup, rotateBackups, startMaintenance, tick, type MaintCtx } from '../src/maintenance.ts';
 import { backupDir, listBackups } from '../src/retention.ts';
 import { makeClock, type TestClock } from './helpers.ts';
@@ -277,7 +277,7 @@ test('startMaintenance keeps the process free to exit (the timer is unref-ed) an
   handle.stop();
 });
 
-test('a backup taken at schema v1 restores, and the app then upgrades it to v2 with the data intact', (tctx) => {
+test('a backup taken at schema v1 restores, and the app then upgrades it to the current version with the data intact', (tctx) => {
   const e = setup(tctx);
   e.db.close();
   // Build what the previous release wrote: a v1 file with a user, a reservation and a drive without readings.
@@ -290,14 +290,16 @@ test('a backup taken at schema v1 restores, and the app then upgrades it to v2 w
 
   restoreBackup(e.config, v1File, e.clock.now());
   const upgraded = openDb(dbPath(e.dir));
-  assert.equal(schemaVersion(upgraded), 2);
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
   assert.equal(many(upgraded, 'SELECT id FROM reservations').length, 1);
-  assert.deepEqual(many(upgraded, 'SELECT status, odometer_start FROM usage'), [{ status: 'completed', odometer_start: null }]);
+  assert.deepEqual(many(upgraded, 'SELECT status, odometer_start, km_for, km_user_id FROM usage'), [
+    { status: 'completed', odometer_start: null, km_for: 'self', km_user_id: null },
+  ]);
   assert.ok(fs.existsSync(path.join(backupDir(e.dir), 'pre-migrate-v1.db')), 'the upgrade left its own copy');
   upgraded.close();
 });
 
-test('a v2 backup (drafts, fuel) restores as it was', (tctx) => {
+test('a backup of the current version (drafts, fuel) restores as it was', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');
   run(e.db, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, status, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', 500, 'draft', 1, 'now', 'now')");
@@ -309,7 +311,7 @@ test('a v2 backup (drafts, fuel) restores as it was', (tctx) => {
 
   restoreBackup(e.config, backup.path, e.clock.now());
   const restored = openDb(dbPath(e.dir));
-  assert.equal(schemaVersion(restored), 2);
+  assert.equal(schemaVersion(restored), SCHEMA_VERSION);
   assert.deepEqual(many(restored, 'SELECT status, odometer_start, odometer_end FROM usage'), [{ status: 'draft', odometer_start: 500, odometer_end: null }]);
   assert.deepEqual(many(restored, 'SELECT total_cents FROM fuel'), [{ total_cents: 6000 }]);
   restored.close();

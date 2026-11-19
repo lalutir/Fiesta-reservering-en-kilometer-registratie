@@ -221,6 +221,42 @@ try {
     const after = await (await fetch(`${base}/api/usage/pending`, { headers: { Cookie: cookie } })).json();
     expect(after.count === 0, `pending count after finishing ${after.count}`);
   });
+  await check('kilometres for another person need a note, the fuel share follows them, and the debtor can say "I have paid"', async () => {
+    const json = { 'Content-Type': 'application/json', Cookie: cookie };
+    const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+    const password = 'smoke-ben-password-1';
+    const made = await fetch(`${base}/api/admin/users`, { method: 'POST', headers: json, body: JSON.stringify({ username: 'smokeben', displayName: 'Ben', password }) });
+    expect(made.status === 201, `create user ${made.status}`);
+    const ben = (await made.json()).user;
+
+    const drive = (start, end, odometerStart, odometerEnd, extra = {}) =>
+      fetch(`${base}/api/usage`, { method: 'POST', headers: json, body: JSON.stringify({ start: hoursAgo(start), end: hoursAgo(end), odometerStart, odometerEnd, ...extra }) });
+    expect((await drive(10, 9, 2000, 2100)).status === 201, 'the admin\'s own drive');
+    const noNote = await drive(8, 7, 2100, 2150, { kmFor: 'person', kmUserId: ben.id });
+    expect(noNote.status === 422 && (await noNote.json()).error.fields.note === 'required', `a drive for somebody else without a note gave ${noNote.status}`);
+    const forBen = await drive(8, 7, 2100, 2150, { kmFor: 'person', kmUserId: ben.id, note: 'Took Ben to the station' });
+    expect(forBen.status === 201, `the drive for Ben ${forBen.status}`);
+    expect((await forBen.json()).usage.kmUserName === 'Ben', 'the answer names whose kilometres they are');
+
+    const summary = await (await fetch(`${base}/api/usage/summary`, { headers: { Cookie: cookie } })).json();
+    const bens = summary.items.find((i) => i.userId === ben.id);
+    expect(bens?.km === 50 && summary.together.km === 0, `summary: Ben ${bens?.km}, together ${summary.together?.km}`);
+
+    const fuel = await fetch(`${base}/api/fuel`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(1), millilitres: 40000, totalCents: 6000 }) });
+    expect(fuel.status === 201, `fill-up ${fuel.status}`);
+    const fuelId = (await fuel.json()).fuel.id;
+
+    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'smokeben', password }) });
+    expect(login.status === 200, `Ben signs in ${login.status}`);
+    const benCookie = (login.headers.getSetCookie()[0] ?? '').split(';')[0];
+    const listed = await (await fetch(`${base}/api/fuel`, { headers: { Cookie: benCookie } })).json();
+    const share = listed.items.find((f) => f.id === fuelId)?.shares.find((s) => s.userId === ben.id);
+    expect(share?.dueCents === 2000 && share.can.selfPaid === true, `Ben's share ${JSON.stringify(share)}`);
+    const paid = await fetch(`${base}/api/fuel/${fuelId}/requests/${ben.id}/paid`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: benCookie }, body: JSON.stringify({ paid: true }) });
+    expect(paid.status === 200, `I have paid ${paid.status}`);
+    const after = await (await fetch(`${base}/api/fuel`, { headers: { Cookie: benCookie } })).json();
+    expect(after.balances.length === 0, `balances after paying ${JSON.stringify(after.balances)}`);
+  });
 } catch (err) {
   failures.push('startup');
   console.log(`  FAIL startup: ${err instanceof Error ? err.message : err}`);

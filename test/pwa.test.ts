@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { fmtRange, groupByDay, nextFullHour } from '../public/dom.js';
 import { buildTimeline } from '../public/views/history.js';
+import { fuelMessage } from '../src/fuel-notify.ts';
 import { createTestApp, rawRequest, type Json } from './helpers.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -536,4 +537,39 @@ test('history timeline: drives with their reservation, plus reservations nobody 
     [['drive', 10], ['drive', 11], ['unused', 3]],
     'newest first',
   );
+});
+
+test('service worker: the notification for a new fill-up is shown whole whatever the names and amounts, and a tap opens the History screen', async () => {
+  const worst = [
+    fuelMessage({ id: 1_234_567, userName: 'N'.repeat(300) }, { cents: 99_999_999, carriedCents: 99_999_999, dueCents: 199_999_998 }),
+    fuelMessage({ id: 1_234_567, userName: 'N'.repeat(300) }, { cents: 99_999_999, carriedCents: -99_999_999, dueCents: 1 }),
+    fuelMessage({ id: 7, userName: 'Anna' }, { cents: 1500, carriedCents: 0, dueCents: 1500 }),
+  ];
+  for (const message of worst) {
+    // The worker cuts titles at 100, bodies at 300, tags at 64 and addresses at 300 characters, and the push at 1000 bytes: none of it may bite.
+    assert.ok(message.title.length <= 100 && message.body.length <= 300 && message.tag.length <= 64 && message.url.length <= 300, JSON.stringify(message));
+    assert.ok(Buffer.byteLength(JSON.stringify(message)) < 1000, 'small enough for the push service');
+    const sw = loadServiceWorker(async () => ({ ok: true }));
+    await firePush(sw, JSON.stringify(message));
+    assert.equal(sw.shown.length, 1);
+    const shown = sw.shown[0] as { title: string; options: Json };
+    assert.deepEqual([shown.title, shown.options.body, shown.options.tag], [message.title, message.body, message.tag], 'shown as sent, nothing cut off');
+    assert.deepEqual(plain(shown.options.data), { url: '/#/history' });
+  }
+  assert.ok(worst[0]?.title.includes('…'), 'a long name is shortened on purpose, not cut off by the worker');
+
+  // A tap goes to the History screen of this app, and History is a route the app has.
+  const calls: string[] = [];
+  const open = {
+    url: 'https://car.example/#/usage',
+    navigate: async (to: string) => {
+      calls.push(`navigate ${to}`);
+      return { focus: async () => void calls.push('focus') };
+    },
+  } as Json;
+  const sw = loadServiceWorker(async () => ({ ok: true }), [open]);
+  await firePush(sw, JSON.stringify(worst[2]));
+  await fireClick(sw, (sw.shown[0] as { options: Json }).options.data);
+  assert.deepEqual(calls, ['navigate https://car.example/#/history', 'focus']);
+  assert.match(read(publicDir, 'app.js'), /const VIEWS = \{[^}]*\bhistory\b[^}]*\}/, 'the hash the notification opens belongs to a view');
 });

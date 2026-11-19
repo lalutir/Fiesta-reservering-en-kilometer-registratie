@@ -17,6 +17,7 @@ import {
   type Logger,
 } from './http.ts';
 import { registerFuelRoutes } from './fuel.ts';
+import { createFuelNotifier } from './fuel-notify.ts';
 import { startMaintenance, tick } from './maintenance.ts';
 import { createPush, registerPushRoutes } from './push.ts';
 import { createReminders, type Reminders } from './reminders.ts';
@@ -41,6 +42,8 @@ export interface App {
   router: Router;
   listen(port?: number, host?: string): Promise<AddressInfo>;
   close(): Promise<void>;
+  /** Resolves when background work started by requests (the notifications for a new fill-up) has finished. */
+  idle(): Promise<void>;
   /** The daily purge and backup. Nothing runs until start() is called (by server.ts). */
   maintenance: { tick(): boolean; start(): { stop(): void } };
   /** The push reminder scheduler. Nothing runs until start() is called (by server.ts). */
@@ -64,8 +67,9 @@ export function createApp(deps: AppDeps): App {
   registerUserRoutes(router, ctx);
   registerReservationRoutes(router, ctx);
   registerUsageRoutes(router, ctx);
-  registerFuelRoutes(router, ctx);
   const push = createPush(ctx);
+  const fuelNotifier = createFuelNotifier(ctx, push);
+  registerFuelRoutes(router, ctx, fuelNotifier);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);
@@ -157,8 +161,8 @@ export function createApp(deps: AppDeps): App {
         });
       });
     },
-    close() {
-      return new Promise((resolve) => {
+    async close() {
+      await new Promise<void>((resolve) => {
         const force = setTimeout(() => server.closeAllConnections(), 5_000);
         force.unref();
         server.close(() => {
@@ -167,7 +171,10 @@ export function createApp(deps: AppDeps): App {
         });
         server.closeIdleConnections();
       });
+      // Let the notifications for a fill-up that was just saved finish (each send has its own timeout).
+      await fuelNotifier.idle();
     },
+    idle: () => fuelNotifier.idle(),
     maintenance: { tick: () => tick(ctx), start: () => startMaintenance(ctx) },
     reminders,
   };

@@ -585,6 +585,35 @@ ul.shares {
 .share .row .chip {
   margin-left: auto;
 }
+/* On the History screen the header of a share is a sentence ("Anna fuelled, Tuesday 17 November, 22:31"), not a name column. */
+.share .row.owed-head > strong {
+  flex: 1 1 12em;
+}
+
+/* What the debtor has to pay once earlier amounts ride along: the one figure that matters on the card. */
+.sub.due {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* "I drove, but the kilometres aren't mine": a checkbox row that reveals the choice below it. */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.check input[type='checkbox'] {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--primary);
+}
 
 /* One line on a reservation card about its kilometres. */
 .km-line {
@@ -613,7 +642,8 @@ ul.shares {
   background: var(--warn-bg);
   color: var(--warn-text);
 }
-.chip.paid {
+.chip.paid,
+.chip.settled {
   background: var(--ok-bg);
   color: var(--ok-text);
 }

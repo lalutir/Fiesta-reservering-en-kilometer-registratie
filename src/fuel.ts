@@ -9,9 +9,20 @@
 // them; a payment request is a snapshot of the amount that was asked. Everybody a
 // request was made for stays on the card, also when their share has dropped to
 // nothing, and a drive that a request depends on is locked for its owner (usage.ts).
-import { many, one, run, tx, type Db, type FuelRequestRow, type FuelRow } from './db.ts';
+//
+// Kilometres count for whoever they are attributed to (usage.km_for): the driver's own,
+// another person's, or "together". Together kilometres are a pool that is split equally
+// over the active users, next to the personal kilometres that weigh each person.
+//
+// What a person still owes the same fueler from earlier fill-ups rides along with their
+// next share, and a payment request settles those earlier shares when it is paid: the
+// rules are in fuel-carry.ts. Registering a fill-up tells everybody who owes money
+// (fuel-notify.ts).
+import { many, one, run, tx, type Db, type FuelRequestRow, type FuelRow, type KmFor } from './db.ts';
+import { carryKey, carryOver } from './fuel-carry.ts';
+import type { FuelNotifier } from './fuel-notify.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
-import { isHttpsLink, manualProvider, tikkieProvider, type PaymentProvider } from './payments.ts';
+import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, type PaymentInput, type PaymentProvider } from './payments.ts';
 import { Fields, ValidationError, windowBounds } from './validate.ts';
 import { formatLocal } from '../shared/time.js';
 
@@ -28,10 +39,13 @@ export interface ShareFuel {
 }
 
 export interface ShareDrive {
+  /** Whose kilometres these are (the owner, not necessarily the driver). Ignored for together drives. */
   userId: number;
   /** When the drive ended; decides which fill-up period it belongs to. */
   endUtc: string;
   km: number;
+  /** The kilometres belong to the shared pool: split equally over the active users. */
+  together?: boolean;
 }
 
 export interface Allocation {
@@ -46,9 +60,13 @@ export interface FuelShares {
   fromUtc: string | null;
   /** Inclusive upper bound: the time of the fill-up. */
   toUtc: string;
+  /** Personal and together kilometres of the period. */
   totalKm: number;
+  /** Of which driven together: a pool split equally over the active users. */
+  togetherKm: number;
   /** Nobody drove in the period, so the cost is split equally over the active users. */
   equalSplit: boolean;
+  /** `km` is the person's own kilometres; their part of the together pool is not in it. */
   shares: Allocation[];
 }
 
@@ -72,22 +90,44 @@ export function splitCents(total: number, weights: Array<{ userId: number; weigh
   return rows.map((r) => ({ userId: r.userId, cents: Number(r.base) + (extra.has(r.userId) ? 1 : 0) }));
 }
 
-/** The share of every fill-up per driver. Pure: the caller loads the data, this decides. */
+/**
+ * The share of every fill-up per person. Pure: the caller loads the data, this decides.
+ *
+ * Personal kilometres weigh their owner. Together kilometres are a pool that every active user
+ * carries an equal part of: with A active users, each weight is scaled by A so the pool part
+ * (pool / A) stays an integer, and the largest-remainder split keeps the cents exact. Without
+ * together kilometres (or without any active user to share them) the weights are the plain
+ * personal kilometres, as before.
+ */
 export function computeShares(fuels: ShareFuel[], drives: ShareDrive[], activeUserIds: number[]): FuelShares[] {
   const sorted = [...fuels].sort((a, b) => (a.atUtc < b.atUtc ? -1 : a.atUtc > b.atUtc ? 1 : a.id - b.id));
   const active = [...new Set(activeUserIds)].sort((a, b) => a - b);
   return sorted.map((fuel, i) => {
     const fromUtc = i === 0 ? null : (sorted[i - 1] as ShareFuel).atUtc;
     const kmBy = new Map<number, number>();
+    let pool = 0;
     for (const d of drives) {
-      if ((fromUtc === null || d.endUtc > fromUtc) && d.endUtc <= fuel.atUtc) kmBy.set(d.userId, (kmBy.get(d.userId) ?? 0) + d.km);
+      if (!((fromUtc === null || d.endUtc > fromUtc) && d.endUtc <= fuel.atUtc)) continue;
+      if (d.together) pool += d.km;
+      else kmBy.set(d.userId, (kmBy.get(d.userId) ?? 0) + d.km);
     }
     const drivers = [...kmBy].filter(([, km]) => km > 0).sort((a, b) => a[0] - b[0]);
-    const totalKm = drivers.reduce((n, [, km]) => n + km, 0);
+    const totalKm = drivers.reduce((n, [, km]) => n + km, 0) + pool;
     const equalSplit = totalKm === 0;
-    const weights = equalSplit ? active.map((userId) => ({ userId, weight: 1 })) : drivers.map(([userId, km]) => ({ userId, weight: km }));
+    const sharePool = pool > 0 && active.length > 0;
+    const scale = sharePool ? active.length : 1;
+    let weights: Array<{ userId: number; weight: number }>;
+    if (equalSplit) {
+      weights = active.map((userId) => ({ userId, weight: 1 }));
+    } else {
+      const ids = new Set(drivers.map(([userId]) => userId));
+      if (sharePool) for (const userId of active) ids.add(userId);
+      weights = [...ids]
+        .sort((a, b) => a - b)
+        .map((userId) => ({ userId, weight: (kmBy.get(userId) ?? 0) * scale + (sharePool && active.includes(userId) ? pool : 0) }));
+    }
     const shares = splitCents(fuel.totalCents, weights).map((s) => ({ userId: s.userId, km: kmBy.get(s.userId) ?? 0, cents: s.cents }));
-    return { fuelId: fuel.id, fromUtc, toUtc: fuel.atUtc, totalKm, equalSplit, shares };
+    return { fuelId: fuel.id, fromUtc, toUtc: fuel.atUtc, totalKm, togetherKm: pool, equalSplit, shares };
   });
 }
 
@@ -109,17 +149,27 @@ export interface FuelRequestDto {
   paidBy: number | null;
   /** The live share differs from the amount that was asked (a drive or the fill-up changed since). */
   changed: boolean;
+  /** What a request for this share would ask right now; the share alone for a request made before carry-over existed. */
+  currentCents: number;
 }
 
 export interface FuelShareDto {
   userId: number;
   userName: string;
+  /** The person's own kilometres in the period (their part of the together pool is not in it). */
   km: number;
   cents: number;
   /** Owes the fueler: not the fueler themselves, and either more than zero or a request was made for them. */
   owes: boolean;
+  /** Net of the earlier open shares between the fueler and this person: more than zero is still owed to the fueler, less than zero is what the fueler owes them back. */
+  carriedCents: number;
+  /** What a request for this share asks: the share plus carriedCents, never below zero. */
+  dueCents: number;
+  /** A payment on a later fill-up settled this share; null when it is not settled. */
+  settledBy: { fuelId: number; at: string } | null;
   request: FuelRequestDto | null;
-  can: { request: boolean; markPaid: boolean };
+  /** selfPaid: the person can say "I have paid this" for their own share (with or without a request). */
+  can: { request: boolean; markPaid: boolean; selfPaid: boolean };
 }
 
 export interface FuelDto {
@@ -136,11 +186,15 @@ export interface FuelDto {
   updatedAt: string;
   period: { from: string | null; to: string };
   totalKm: number;
+  /** Of totalKm: driven together, a pool split equally over the active users. */
+  togetherKm: number;
   equalSplit: boolean;
   /** The first fill-up in the data: it also pays for every drive before it. */
   firstInData: boolean;
   shares: FuelShareDto[];
   hasPaidRequests: boolean;
+  /** A payment on a later fill-up settled a share of this one: it is locked like one with a paid request. */
+  settledByLater: boolean;
   can: { edit: boolean; delete: boolean };
 }
 
@@ -182,11 +236,17 @@ export function requestedPeriods(db: Db): (endUtc: string) => boolean {
 /** Everything the fuel view shows, computed from the current data. */
 export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; balances: BalanceDto[] } {
   const fuels = many<FuelJoin>(db, 'SELECT f.*, u.display_name AS user_name FROM fuel f JOIN users u ON u.id = f.user_id ORDER BY f.at_utc, f.id');
-  const drives = many<{ user_id: number; end_utc: string; km: number }>(
+  const drives = many<{ user_id: number; km_for: KmFor; km_user_id: number | null; end_utc: string; km: number }>(
     db,
-    `SELECT user_id, end_utc, odometer_end - odometer_start AS km FROM usage
+    `SELECT user_id, km_for, km_user_id, end_utc, odometer_end - odometer_start AS km FROM usage
       WHERE status = 'completed' AND odometer_start IS NOT NULL AND odometer_end IS NOT NULL`,
-  ).map((d) => ({ userId: d.user_id, endUtc: d.end_utc, km: d.km }));
+  ).map((d) => ({
+    // The kilometres count for their owner; the driver only matters for the registration, not for the money.
+    userId: d.km_for === 'person' ? (d.km_user_id as number) : d.user_id,
+    endUtc: d.end_utc,
+    km: d.km,
+    together: d.km_for === 'together',
+  }));
   const activeIds = many<{ id: number }>(db, 'SELECT id FROM users WHERE active = 1').map((u) => u.id);
   const names = new Map(many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users').map((u) => [u.id, u.display_name]));
   const requests = many<FuelRequestRow>(db, 'SELECT * FROM fuel_requests');
@@ -194,21 +254,36 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
   const shareOf = new Map(
     computeShares(fuels.map((f) => ({ id: f.id, atUtc: f.at_utc, totalCents: f.total_cents })), drives, activeIds).map((s) => [s.fuelId, s]),
   );
+  // The live shares, plus everybody a request was made for who has no live share any more (their drive was
+  // deleted or changed, or a fill-up moved the period): without them the request would vanish from the card.
+  const listedOf = new Map<number, Allocation[]>(
+    fuels.map((fuel) => {
+      const calc = shareOf.get(fuel.id) as FuelShares;
+      const live = new Set(calc.shares.map((s) => s.userId));
+      const asked = requests.filter((r) => r.fuel_id === fuel.id && !live.has(r.debtor_id));
+      return [fuel.id, [...calc.shares, ...asked.map((r) => ({ userId: r.debtor_id, km: 0, cents: 0 }))].sort((a, b) => a.userId - b.userId)];
+    }),
+  );
+  const carry = carryOver(
+    fuels.map((f) => ({ id: f.id, userId: f.user_id, atUtc: f.at_utc })),
+    fuels.flatMap((f) => (listedOf.get(f.id) as Allocation[]).filter((s) => s.userId !== f.user_id).map((s) => ({ fuelId: f.id, debtorId: s.userId, cents: s.cents }))),
+    requests.map((r) => ({ fuelId: r.fuel_id, debtorId: r.debtor_id, paid: r.paid_at !== null, coversFuelId: r.covers_fuel_id })),
+  );
+  const atOf = new Map(fuels.map((f) => [f.id, f.at_utc]));
 
   const items: FuelDto[] = fuels.map((fuel, index) => {
     const calc = shareOf.get(fuel.id) as FuelShares;
     const manage = mayManage(actor, fuel);
-    const asked = requests.filter((r) => r.fuel_id === fuel.id);
-    const hasPaidRequests = asked.some((r) => r.paid_at !== null);
-    // The live shares, plus everybody a request was made for who has no live share any more (their drive was
-    // deleted or changed, or a fill-up moved the period): without them the request would vanish from the card.
-    const live = new Set(calc.shares.map((s) => s.userId));
-    const listed: Allocation[] = [...calc.shares, ...asked.filter((r) => !live.has(r.debtor_id)).map((r) => ({ userId: r.debtor_id, km: 0, cents: 0 }))].sort(
-      (a, b) => a.userId - b.userId,
-    );
-    const shares = listed.map((s): FuelShareDto => {
+    const hasPaidRequests = requests.some((r) => r.fuel_id === fuel.id && r.paid_at !== null);
+    const shares = (listedOf.get(fuel.id) as Allocation[]).map((s): FuelShareDto => {
       const row = requestOf.get(`${fuel.id}:${s.userId}`);
       const owes = s.userId !== fuel.user_id && (s.cents > 0 || row !== undefined);
+      const c = carry.get(carryKey(fuel.id, s.userId));
+      const carried = c?.carriedCents ?? 0;
+      const due = c?.dueCents ?? 0;
+      const settled = c?.settledBy ?? null;
+      // A request made before carry-over existed asked for the share alone.
+      const currentCents = row?.covers_fuel_id === null ? s.cents : due;
       const request: FuelRequestDto | null = row
         ? {
             id: row.id,
@@ -219,20 +294,31 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
             createdAt: row.created_at,
             paidAt: row.paid_at,
             paidBy: row.paid_by,
-            changed: row.amount_cents !== s.cents,
+            changed: row.amount_cents !== currentCents,
+            currentCents,
           }
         : null;
+      // Still to be paid: not paid itself and not settled by a later payment.
+      const open = settled === null && request?.paidAt == null;
       return {
         userId: s.userId,
         userName: names.get(s.userId) ?? '?',
         km: s.km,
         cents: s.cents,
         owes,
+        carriedCents: carried,
+        dueCents: due,
+        settledBy: settled ? { fuelId: settled.fuelId, at: atOf.get(settled.fuelId) as string } : null,
         request,
-        // Nothing to ask for when the live share is zero (only the request that was made is left to see and settle).
-        can: { request: manage && owes && s.cents > 0 && request?.paidAt == null, markPaid: manage && request !== null },
+        can: {
+          // Nothing to ask for when the live share is zero (only the request that was made is left to see and settle).
+          request: manage && owes && s.cents > 0 && due > 0 && open,
+          markPaid: manage && request !== null && settled === null,
+          selfPaid: actor.id === s.userId && owes && open && (request !== null || due > 0),
+        },
       };
     });
+    const settledByLater = shares.some((s) => s.settledBy !== null);
     return {
       id: fuel.id,
       userId: fuel.user_id,
@@ -247,11 +333,13 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
       updatedAt: fuel.updated_at,
       period: { from: calc.fromUtc, to: calc.toUtc },
       totalKm: calc.totalKm,
+      togetherKm: calc.togetherKm,
       equalSplit: calc.equalSplit,
       firstInData: index === 0,
       shares,
       hasPaidRequests,
-      can: { edit: manage && !hasPaidRequests, delete: manage && !hasPaidRequests },
+      settledByLater,
+      can: { edit: manage && !hasPaidRequests && !settledByLater, delete: manage && !hasPaidRequests && !settledByLater },
     };
   });
 
@@ -261,15 +349,17 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
 /**
  * Who owes whom, netted per pair. A debt counts at the live share, so the balances always follow
  * the drives that really count (an unpaid request whose share changed is flagged on its card, and
- * counts at what is owed now, not at the amount that was asked). Nothing counts once it is paid;
- * a paid request whose share changed afterwards is flagged on its card with the difference.
+ * counts at what is owed now, not at the amount that was asked). Nothing counts once it is paid or
+ * settled by a later payment (fuel-carry.ts); a paid request whose amount changed afterwards is
+ * flagged on its card with the difference. The carried amount is not added here: the earlier shares
+ * it consists of are already counted, once, in their own fill-ups.
  */
 function balancesOf(items: FuelDto[], names: Map<number, string>): BalanceDto[] {
   const owed = new Map<string, number>(); // "debtor>creditor" -> cents
   for (const fuel of items) {
     for (const share of fuel.shares) {
       if (!share.owes) continue;
-      const cents = share.request?.paidAt ? 0 : share.cents;
+      const cents = share.request?.paidAt || share.settledBy ? 0 : share.cents;
       if (cents === 0) continue;
       const key = `${share.userId}>${fuel.userId}`;
       owed.set(key, (owed.get(key) ?? 0) + cents);
@@ -295,7 +385,25 @@ function litresText(millilitres: number): string {
 
 // ------------------------------------------------------------------ routes
 
-export function registerFuelRoutes(router: Router, ctx: Ctx): void {
+/** What a payment request for one share says; the amount is what is due (the share plus what is carried). */
+function paymentInputOf(fuel: FuelDto, share: FuelShareDto, tz: string): PaymentInput {
+  return {
+    amountCents: share.dueCents,
+    shareCents: share.cents,
+    carriedCents: share.carriedCents,
+    creditorName: fuel.userName,
+    debtorName: share.userName,
+    litres: litresText(fuel.millilitres),
+    date: formatLocal(fuel.at, tz, 'day'),
+    km: share.km,
+    kmTotal: fuel.totalKm,
+    togetherKm: fuel.togetherKm,
+    equalSplit: fuel.equalSplit,
+    reference: `fuel-${fuel.id}-${share.userId}`,
+  };
+}
+
+export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNotifier): void {
   const { db, config } = ctx;
   // Chosen once: without all three Tikkie settings nothing outbound is ever called.
   const provider: PaymentProvider = config.tikkie ? tikkieProvider(config.tikkie, ctx.fetch, ctx.log) : manualProvider;
@@ -307,11 +415,19 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
     return dto;
   };
 
-  /** Edit and delete: the fueler or an admin, and never once a payment for it is marked as paid. */
+  /** The highest fill-up id there is: what a request made right now covers (ids are creation order). */
+  const newestFuelId = (): number => one<{ id: number | null }>(db, 'SELECT MAX(id) AS id FROM fuel')?.id ?? 0;
+
+  /**
+   * Edit and delete: the fueler or an admin, and never once a payment for it is marked as paid, or a
+   * later payment settled a share of it (mark that one unpaid first).
+   */
   function guardChange(actor: Principal, fuel: Pick<FuelRow, 'id' | 'user_id'>): void {
     if (!mayManage(actor, fuel)) throw new HttpError(403, 'forbidden', 'Only the person who fuelled or an admin can change a fill-up');
-    const paid = one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM fuel_requests WHERE fuel_id = ? AND paid_at IS NOT NULL', fuel.id)?.n ?? 0;
-    if (paid > 0) throw new HttpError(409, 'has_paid_requests', 'A payment for this fill-up is marked as paid. Mark it unpaid first.');
+    const dto = fuelOverview(db, actor).items.find((f) => f.id === fuel.id);
+    if (dto && (dto.hasPaidRequests || dto.settledByLater)) {
+      throw new HttpError(409, 'has_paid_requests', 'A payment for this fill-up, or a later one that settled it, is marked as paid. Mark it unpaid first.');
+    }
   }
 
   /** The time of a fill-up: not in the future (beyond clock slack) and inside the six-month window. */
@@ -361,8 +477,12 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
         nowIso,
       ).lastInsertRowid;
     });
+    const created = view(actor, id);
     ctx.log({ event: 'fuel.created', id, by: actor.id, userId });
-    return ok({ fuel: view(actor, id) }, 201);
+    // Everybody who owes money hears about it. Fire and forget: the fill-up is saved, so a slow or
+    // broken push service can neither delay nor fail this answer.
+    notifier?.fuelCreated(created);
+    return ok({ fuel: created }, 201);
   });
 
   router.add('PATCH', '/api/fuel/:id', 'user', async (req) => {
@@ -427,24 +547,17 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
     if (pasted !== undefined && !isHttpsLink(pasted)) f.fail('link', 'invalid_link');
     f.done();
     const fuel = view(actor, id);
+    // Taken together with the view, with nothing awaited in between: a fill-up registered while the
+    // provider answers has an id above this, so it is not covered by an amount that does not include it.
+    const covers = newestFuelId();
     if (!mayManage(actor, { user_id: fuel.userId })) {
       throw new HttpError(403, 'forbidden', 'Only the person who fuelled or an admin can ask for the money');
     }
     const share = fuel.shares.find((s) => s.userId === debtorId);
-    if (!share?.owes || share.cents === 0) throw new ValidationError({ debtorId: 'nothing_owed' });
-    if (share.request?.paidAt) throw new HttpError(409, 'already_paid', 'That share is already marked as paid');
+    if (!share?.owes || share.cents === 0 || share.dueCents === 0) throw new ValidationError({ debtorId: 'nothing_owed' });
+    if (share.request?.paidAt || share.settledBy) throw new HttpError(409, 'already_paid', 'That share is already marked as paid');
 
-    const made = await provider.create({
-      amountCents: share.cents,
-      creditorName: fuel.userName,
-      debtorName: share.userName,
-      litres: litresText(fuel.millilitres),
-      date: formatLocal(fuel.at, config.tz, 'day'),
-      km: share.km,
-      kmTotal: fuel.totalKm,
-      equalSplit: fuel.equalSplit,
-      reference: `fuel-${fuel.id}-${share.userId}`,
-    });
+    const made = await provider.create(paymentInputOf(fuel, share, config.tz));
     const link = pasted ?? made.link ?? '';
     const message = link ? `${made.message} Pay here: ${link}` : made.message;
     const nowIso = ctx.clock.now().toISOString();
@@ -455,11 +568,12 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
       if (current) {
         run(
           db,
-          'UPDATE fuel_requests SET amount_cents = ?, provider = ?, message = ?, link = ?, updated_at = ? WHERE id = ?',
-          share.cents,
+          'UPDATE fuel_requests SET amount_cents = ?, provider = ?, message = ?, link = ?, covers_fuel_id = ?, updated_at = ? WHERE id = ?',
+          share.dueCents,
           made.provider,
           message,
           link,
+          covers,
           nowIso,
           current.id,
         );
@@ -467,14 +581,15 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
       }
       run(
         db,
-        `INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, link, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, link, covers_fuel_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id,
         share.userId,
-        share.cents,
+        share.dueCents,
         made.provider,
         message,
         link,
+        covers,
         nowIso,
         nowIso,
       );
@@ -492,13 +607,45 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
     const paid = f.bool('paid');
     f.done();
     const fuel = loadFuel(db, id);
-    if (!mayManage(actor, fuel)) throw new HttpError(403, 'forbidden', 'Only the person who is owed the money or an admin can mark it as paid');
-    const current = one<FuelRequestRow>(db, 'SELECT * FROM fuel_requests WHERE fuel_id = ? AND debtor_id = ?', id, debtorId);
-    if (!current) throw new HttpError(404, 'not_found', 'There is no payment request for that person yet');
-    // Idempotent: asking for the state it is already in (a double tap, a retry) changes nothing,
-    // so the person who first marked it keeps their name and time on it.
-    if ((current.paid_at !== null) !== (paid === true)) {
-      const nowIso = ctx.clock.now().toISOString();
+    // The person who is owed (or an admin) marks either way. The debtor may only say "I have paid"
+    // for their own share: it is a self-report, and undoing one stays with the person who is owed.
+    const manager = mayManage(actor, fuel);
+    const selfPaid = actor.id === debtorId && paid === true;
+    if (!manager && !selfPaid) throw new HttpError(403, 'forbidden', 'Only the person who is owed the money or an admin can change whether it is paid');
+    const nowIso = ctx.clock.now().toISOString();
+    // One transaction: the optional snapshot and the paid mark go in together or not at all. What the
+    // payment settles of earlier fill-ups follows from this one flag (fuel-carry.ts), nothing else is written.
+    const changed = tx(db, () => {
+      let current = one<FuelRequestRow>(db, 'SELECT * FROM fuel_requests WHERE fuel_id = ? AND debtor_id = ?', id, debtorId);
+      if (!current) {
+        if (!selfPaid) throw new HttpError(404, 'not_found', 'There is no payment request for that person yet');
+        // Paid without a request: record what is due now as a manual request nobody sent, so the lock and the snapshot behave as always.
+        const dto = view(actor, id);
+        const share = dto.shares.find((s) => s.userId === debtorId);
+        if (!share?.owes || share.dueCents <= 0) throw new ValidationError({ debtorId: 'nothing_owed' });
+        if (share.settledBy) throw new HttpError(409, 'already_paid', 'That share is already settled by a later payment');
+        run(
+          db,
+          `INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, link, covers_fuel_id, created_at, updated_at)
+           VALUES (?, ?, ?, 'manual', ?, '', ?, ?, ?)`,
+          id,
+          debtorId,
+          share.dueCents,
+          requestMessage(paymentInputOf(dto, share, config.tz)),
+          newestFuelId(),
+          nowIso,
+          nowIso,
+        );
+        current = one<FuelRequestRow>(db, 'SELECT * FROM fuel_requests WHERE fuel_id = ? AND debtor_id = ?', id, debtorId) as FuelRequestRow;
+      } else if (paid === true && current.paid_at === null) {
+        // A share that a later payment already settled has no button on any card; the server says the same
+        // (a stale page or a retry must not count the payment twice, and the later request would then be flagged as changed).
+        const settledBy = view(actor, id).shares.find((s) => s.userId === debtorId)?.settledBy;
+        if (settledBy) throw new HttpError(409, 'already_paid', 'That share is already settled by a later payment');
+      }
+      // Idempotent: asking for the state it is already in (a double tap, a retry) changes nothing,
+      // so the person who first marked it keeps their name and time on it.
+      if ((current.paid_at !== null) === (paid === true)) return false;
       run(
         db,
         'UPDATE fuel_requests SET paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?',
@@ -507,8 +654,9 @@ export function registerFuelRoutes(router: Router, ctx: Ctx): void {
         nowIso,
         current.id,
       );
-      ctx.log({ event: paid ? 'fuel.paid' : 'fuel.unpaid', id, by: actor.id, debtorId });
-    }
+      return true;
+    });
+    if (changed) ctx.log({ event: paid ? 'fuel.paid' : 'fuel.unpaid', id, by: actor.id, debtorId });
     return ok({ fuel: view(actor, id) });
   });
 }
