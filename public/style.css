@@ -350,6 +350,109 @@ img {
   font-size: 0.9rem;
   font-weight: 600;
 }
+
+/* ---- agenda views: switcher, day / 3 days / week sections, month grid ---- */
+
+/* Five equal columns down to 320 px; a label that does not fit ("3 days") wraps instead of widening the page. */
+.view-switch {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 12px 0 0;
+}
+.view-switch .btn {
+  min-width: 0;
+  padding: 6px 2px;
+  font-size: 0.85rem;
+}
+.cal-title {
+  margin-top: 0.9rem;
+}
+.cal-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.cal-nav .btn,
+.cal-cell {
+  min-width: 0;
+}
+.cal-nav .btn:disabled,
+.cal-cell:disabled {
+  cursor: default;
+}
+/* Today is also said in words in its heading ("(today)"); the colour only adds to it. */
+.cal-day.today .day-heading {
+  color: var(--text);
+}
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 10px;
+}
+.cal-head {
+  padding: 4px 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.cal-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  min-height: 52px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .cal-cell:hover:not(:disabled) {
+    background: var(--off-bg);
+  }
+}
+/* After the hover rule, like .btn:active: a tap shows at once that the day was hit, also on a touch screen without hover. */
+.cal-cell:active:not(:disabled) {
+  background: var(--off-bg);
+}
+/* The days of the neighbouring months: quieter through the muted text colour, not through opacity. */
+.cal-cell.out {
+  background: transparent;
+  color: var(--muted);
+}
+.cal-cell.today {
+  border: 2px solid var(--primary);
+  font-weight: 700;
+}
+.cal-cell:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+/* The number of reservations on the day. A dashed edge (not only the colour) marks that one is still waiting for an answer. */
+.cal-count {
+  min-width: 1.4em;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.cal-cell.has-pending .cal-count {
+  border-style: dashed;
+  border-color: var(--warn-text);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
 details.earlier {
   margin-top: 1.2rem;
 }
@@ -688,8 +791,9 @@ ul.shares {
   flex-wrap: wrap;
   margin: 12px 0;
 }
-/* Same weight as the .btn hover/active rules above and later in the file, so the current tab keeps its colours. */
-.admin-tabs .btn[aria-pressed='true'] {
+/* Same weight as the .btn hover/active rules above and later in the file, so the current tab (or Agenda view) keeps its colours. */
+.admin-tabs .btn[aria-pressed='true'],
+.view-switch .btn[aria-pressed='true'] {
   background: var(--primary);
   border-color: var(--primary);
   color: var(--on-primary);

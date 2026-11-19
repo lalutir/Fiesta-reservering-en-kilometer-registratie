@@ -328,6 +328,117 @@ Defaults taken for six open questions (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/km-for-others-and-fuel-payment-push` (git-excluded). Base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`.
 <!-- implement:run:km-for-others-and-fuel-payment-push:end -->
 
+<!-- implement:run:calendar-views-fuel-admin-exempt-ratio:start -->
+### Agenda calendar views, admin exempt from fuel costs, together kilometres split by driven ratio (calendar-views-fuel-admin-exempt-ratio)
+
+Date 2026-11-19. Branch `implement/calendar-views-fuel-admin-exempt-ratio`. Base branch `main`, base commit `9a7f98ae276d8ec372af40e8ca1465cdeb29d41a`.
+
+### Request
+
+> I want to have different options for calendar views (list, which is currently and should be default; week; day; three days; month). The admin should never have to pay for fuel, so don't include him into that calculation. And lastly, the 'together' fuel should not be split 50/50, but to the ratio each person drove.
+
+### What was built
+
+The Agenda tab gets a view switcher (List, Day, 3 days, Week, Month): List stays the default and renders as before, the other views show reservations per local day, Previous/Today/Next stop at the 6-month window, and view and day live in the hash query so the minute refresh keeps them. Users with the admin role pay no fuel (no share, request, push or "I have paid") and their own kilometres are left out of the split, so the others carry the whole fill-up. The together pool is split by the ratio of each person's personal kilometres in the same fill-up period instead of equally, with an equal split over active non-admin members when nobody has personal kilometres. There is no API, migration or dependency change; nothing is committed: git shows 20 modified tracked files (+592/-141) and 3 untracked (`public/calendar.js`, `test/calendar.test.ts`, `test/fuel-admin.test.ts`) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 8): views as hash-query state in the Agenda, the admin exemption as one filter in `fuelOverview`, the pool rule as a deletion in `computeShares` (pool by personal ratio equals the whole fill-up split by personal km). Smallest blast radius, keeps the positional `computeShares` signature as a regression net.
+- Rejected: idiomatic (router-hash views, exemption inside `computeShares`): widest surface, new `shared/time.js` kinds and an extra admin note; only its `owes = false` rule and string `aria-pressed` were adopted.
+- Rejected: robust (pure calendar module, explicit `{active, exempt}` input to `computeShares`): rewrites all 22 positional test calls, adds an unrequested `exemptKm` DTO field, and omitted the smoke check 12 fix.
+- Rejected: splitting the pool in a second pass (same result, keeps the scaling code this change deletes); a per-user "pays no fuel" flag, remembering the view in `localStorage`, an hour-grid timeline (non-goals, or blocked by the CSP and the 640 px shell).
+
+### How it works
+
+Start with `src/fuel.ts` (`fuelOverview`, `computeShares`), then `public/calendar.js` (pure range maths) and `public/views/agenda.js` (switcher, navigation, views).
+
+- Fuel: `fuelOverview` drops every user with `role = 'admin'` (active or not) from the payers and ignores kilometres owned by an admin; kilometres an admin drove for a member or for together still count under that owner. `computeShares` weighs personal km only, with one largest-remainder `splitCents`, so shares sum to the total to the cent. No personal km in the period gives an equal split over active non-admin members, flagged `equalSplit`. An admin who fuels is still owed money; with no eligible payer there are no shares and no error.
+- One gate: `owes` is read by the request route, the paid route, the push, `selfPaid` and the balances. The rule is derived live from `users.role`, so it is retroactive: existing fill-ups re-split, a stored request keeps its amount and shows "amount changed", and a request already made for an admin stays visible.
+- Calendar: `#/?view=..&date=..`; an unknown view falls back to List, a malformed or out-of-window date to the nearest valid day. Day ranges use `shared/time.js` (23 and 25 hour days), a reservation shows on every local day it overlaps, declined and expired suggestions are not shown, month day-cells open the Day view. Building a view never takes focus; after Previous/Next focus moves to the period heading.
+- Service worker: cache name `car-static-v3`, `/calendar.js` added to `PRECACHE`.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/fuel.ts`, `src/payments.ts` | modified | Admin filter, pool-by-ratio, equal fallback over non-admin, `fuel.created` log fields; request text no longer says "equally" |
+| `src/users.ts` | modified | `user.updated` audit line carries the saved role and active flag |
+| `public/calendar.js` | added | Pure view range and date helpers (251 lines) |
+| `public/views/agenda.js` | modified | Switcher, navigation, Day, 3 days, Week, Month views, hash query state |
+| `public/views/fuel.js` | modified | Equal-split and pool notes, admin hint line |
+| `public/strings.js`, `public/style.css` | modified | `S.agenda` texts, `S.fuel` notes and `adminNote`, calendar styles with a pressed state |
+| `public/sw.js` | modified | Cache name `car-static-v3`, `/calendar.js` in `PRECACHE` |
+| `public/api.js`, `public/dom.js`, `public/views/usage.js` | modified | Comment and JSDoc text only |
+| `scripts/smoke.mjs` | modified | Check 12: the admin has no share, the member pays the whole 60.00 |
+| `test/calendar.test.ts`, `test/fuel-admin.test.ts` | added | Date maths and fake-DOM views; admin exemption through the API |
+| `test/attribution`, `fuel`, `fuel-carry`, `payments`, `forms`, `pwa` `.test.ts` | modified | Equal-pool tests replaced by ratio tests; request texts; fuel card notes; `PRECACHE` and cache name |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | New rules and views, this entry |
+
+`package.json`, the lockfile, `Dockerfile`, compose, `Caddyfile` and `src/db.ts` are unchanged.
+
+### How to run and test
+
+Last test stage, Windows, Node 22.23.1, all exit 0. This documentation step ran no test command.
+
+- `npm run typecheck` (server and client `checkJs`) and `npm run lint`: clean. `npm test`: 502 of 502 (443 on `main`, 486 after build, 487 after specialists, 500 at the start of the test pass). `npm run build`: clean. `npm run smoke`: 12 of 12 over real HTTP. `npm run check` runs all five.
+- Headless Chromium (driver scripts outside the repo): 192 checks in the build stage (390 and 320 px, light and dark) and 196 in the test stage (a copy with a focus-on-refresh check); no horizontal scroll, contrast at least 4.5:1, view and day survive a background refresh, focus is not stolen.
+- Mutation checks: 15 of 15 killed in build; 8 of 8 killed in the test stage (2 in `agenda.js`, 6 in `fuel.ts`); files restored and SHA-256 compared.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design | No | Month hint now says what the day-cell number counts; month cells got a pressed state; Chromium pass (390 px light, 320 px dark), other points declined |
+| Backend | engineering-skills:senior-backend | No | No defect; `user.updated` and `fuel.created` log lines extended; 1 test (role change through the admin route) |
+| Security | security-review | No | No finding at the confidence bar; no change; summary only, no `07-security.md` |
+| Simplicity | simplify | No | Single inline pass (Agent tool unavailable): 2 behaviour-neutral cleanups in `calendar.js` and `agenda.js` |
+
+No Data or DevOps specialist ran (no ledger entry; no migration, Docker or Caddy change).
+
+### Verification
+
+Verified (ran and saw pass): the five commands and the browser and mutation checks above; every acceptance criterion maps to at least one test (two were added by the test stage: focus is not taken on render, one `GET /api/reservations` per view and no writes on presses); working tree identical before and after build, smoke and browser runs.
+
+NOT verified:
+- Real phones, installed PWA, service worker in a real browser, screen readers (VoiceOver, TalkBack), real push delivery (a fill-up now skips admins).
+- Docker, Caddy, a droplet deploy; the retroactive re-split on real fill-ups and requests (covered only by a test with a live role change and a legacy request).
+- Keyboard focus on the minute refresh was read in code, not exercised with a keyboard; `public/app.js` (hash router, `landOnView`) has no unit test.
+- At 320 px the month cells are 37.7 px wide (above the 24 px minimum, below 44 px); the month grid is divs and buttons with aria-labels, not a table.
+
+Test confidence: high for what the commands cover (ledger); not for the items above.
+
+### Review
+
+One round recorded, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 13 findings, 0 confirmed, nothing blocking, no code change from review.
+
+Remaining minor notes (not fixed): the admin hint on the Fuel page is unrequested and always shown; kilometres marked together or attributed to an admin now cost the driver nothing; stale requests for admins cannot be removed, keep their period locked, and paid ones are orphaned by a role change; no automated test for app-level refresh and focus; unrequested audit-log fields in `users.ts` and `fuel.ts`; the `src/db.ts` migration v3 comment (line 250) still says the pool is split equally, and some `fuel.ts` doc comments about the pool and admin `owes` are stale; Week and 3 days headings name days clipped at the window edge; an over-long JSDoc line in `kmOwnerControl`; test section dividers in `fuel-admin.test.ts` carry pipeline stage names.
+
+### Assumptions and open questions
+
+Defaults taken (none scope-changing; no one was asked):
+- "The admin" is every user with role `admin`, live and retroactive; role-based, no per-person flag, no migration. The admin's own kilometres are left out, so the others pay everything.
+- "Ratio each person drove" is each person's own attributed km in the same fill-up period; consequence: when anyone has personal km the result equals splitting the whole fill-up by personal km, together km only matter for the fallback and the display. Deactivated non-admin owners of personal km still count.
+- Calendar views apply to the Agenda only; Monday-first week; "3 days" is the anchor day plus two; per-day lists and a month grid instead of an hour grid; pending suggestions shown with distinct text; the view is not remembered between launches (List opens first).
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, ledger caveats none; the test stage is recorded as one run.
+- Ledger and git disagree on tests: the ledger names 36 tests in `test/calendar.test.ts` (34 + 2) and 8 in `test/fuel-admin.test.ts` (7 + 1), git shows 44 and 13 test declarations; the suite grew from 487 to 500 before the test pass with no stage naming it, and the test record cites an "earlier pass of this stage" although `runs` is 1. Git is trusted; which stage added them is not recorded.
+- Deviation from the chosen plan: the calendar helpers are in a new `public/calendar.js` (the plan said no new public file); the build stage recorded it.
+- Existing tests were changed: equal-pool tests (including a 500-seed property test) replaced by ratio tests, and in `fuel-carry.test.ts` test 30 the late fill-up went from 20.00 to 15.00 so the request still differs. The ledger does not say new tests were run red on the untouched tree; mutation checks are the evidence.
+- Unrequested extras kept: `S.fuel.adminNote` hint line and the extra audit-log fields (both in the review notes).
+- 24 mutation checks from an earlier test pass are cited from its write-up; only 8 were re-run in the recorded run. Security returned a summary without a write-up file; simplify ran inline, not as a 4-agent fan-out.
+- The ledger lists the stale migration comment three times (13 findings, about 11 distinct). The review finding "CLAUDE.md has no run-log entry" is closed by this entry.
+- Build used the installed Chromium 153 via `executablePath` because the bundled Playwright build did not match.
+
+### Reproduce
+
+- Invocation: `/implement I want to have different options for calendar views (list, which is currently and should be default; week; day; three days; month). The admin should never have to pay for fuel, so don't include him into that calculation. And lastly, the 'together' fuel should not be split 50/50, but to the ratio each person drove.` Flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3.
+- Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/calendar-views-fuel-admin-exempt-ratio` (git-excluded). Base commit `9a7f98ae276d8ec372af40e8ca1465cdeb29d41a`.
+<!-- implement:run:calendar-views-fuel-admin-exempt-ratio:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

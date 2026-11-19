@@ -8,6 +8,13 @@ plus an admin page for the person who manages it.
 
 - **Reservations.** Everyone has their own login. You book the car for yourself and it is
   confirmed at once. Two confirmed reservations can never overlap (touching ends are fine).
+- **Agenda views.** The Agenda tab opens as a list (coming up, with Earlier folded away). A switcher
+  above it also offers **Day**, **3 days**, **Week** (Monday to Sunday) and **Month**, each with
+  Previous, Today and Next, limited to the six-month window. A reservation shows on every day it
+  touches, with the same actions as in the list; in the month grid a day shows how many
+  reservations it has (a dashed count means a suggestion is waiting) and opens the Day view. The
+  view and the day live in the address (`#/?view=week&date=2026-11-18`), so a refresh keeps them;
+  opening the app always starts at the list.
 - **Suggestions.** You can suggest a time to someone else. It stays *pending* until that person
   approves or declines it (only they can). You can withdraw your own suggestion. Pending
   suggestions do not block the car, and unanswered ones lapse when their start time passes.
@@ -21,7 +28,7 @@ plus an admin page for the person who manages it.
   them somewhere) or for the whole household, tick *I drove, but the kilometres aren't mine* and
   choose the person or *Together*. A note is then compulsory. You stay the driver (registration,
   reminders and overlap follow you); the kilometre totals and the fuel split follow the owner, and
-  *Together* kilometres are split equally over everybody active.
+  *Together* kilometres are split in the same ratio as everybody's own kilometres.
 - **Drafts.** Before leaving, save the drive with only the start reading; when back, open it
   (Drives tab, or the reminder) and add the end reading and time. One unfinished drive per person.
   Reservations that ended without a completed drive are listed on the Drives tab (with a count
@@ -33,7 +40,9 @@ plus an admin page for the person who manages it.
   on per device on the Account page. On an iPhone the app must be on the Home Screen (iOS 16.4+).
 - **Fuel and costs.** Record who fuelled, when, litres and price. The cost is split by the
   kilometres that count for each person since the previous fill-up, exact to the cent, with a
-  running "who owes whom" and paid status. Registering a fill-up sends a push to everybody who owes
+  running "who owes whom" and paid status. **Admins do not pay for fuel**: their own kilometres are
+  not counted and they get no share, so the others pay the whole fill-up (an admin who fuels is
+  still owed the money). Registering a fill-up sends a push to everybody who owes
   money. A person who owes presses **I have paid this request** (History screen or Fuel card) for
   their own share; what is still unpaid from earlier fill-ups between the same two people is
   carried into the next amount due (and what the fueler owes back is taken off), and paying that
@@ -65,8 +74,11 @@ plus an admin page for the person who manages it.
   scheduler share one SQL predicate (`REGISTERED_SQL`), so the banner and the notification agree.
 - **Fuel shares are computed live** from the drives (pure largest-remainder function, integer
   cents and millilitres, no floats); a payment request is a snapshot of the amount that was asked.
-  Personal kilometres weigh their owner; *Together* kilometres are a pool every active user carries
-  an equal part of (each weight is scaled by the number of active users, so it stays an integer).
+  Personal kilometres weigh their owner (admins are left out: they do not pay for fuel); *Together*
+  kilometres are split in the same ratio, which comes down to weighing the whole fill-up by
+  personal kilometres, so the pool changes nobody's share. Only when nobody has personal kilometres
+  in the period (nobody drove, or only together) is the cost split equally over the active members.
+  The date maths of the Agenda views sits in `public/calendar.js` (pure functions, unit tested).
 - **Settlement is derived, not stored.** A request remembers the highest fill-up id that existed
   when it was made (ids are creation order, no clock involved). Paying it settles the earlier shares
   of the same two people up to that id; marking it unpaid opens them again. `src/fuel-carry.ts` is
@@ -135,7 +147,8 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   maintenance.ts  backups, daily job                               cli.ts      operator commands
   db.ts       the only file that touches node:sqlite (schema v3, migrations)
 shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
-public/     the PWA (vanilla JavaScript modules) and public/admin/ (admin page)
+public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views)
+            and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator and the built-output smoke test
 docs/       DEPLOYMENT.md
@@ -158,6 +171,12 @@ backups, updates and a monthly cost estimate (about $4-6).
 - **Reminders are best effort** and real push delivery (Google, Apple, Mozilla) was never tried by
   the authors; the Account page has a test button. iPhones only get them once the app is on the
   Home Screen. Without reminders the Drives tab still shows what is waiting.
+- The Agenda views Day, 3 days and Week are lists per day, not an hour-by-hour grid; the view is not
+  remembered between launches (the app opens at the list), and the layout at 320 and 390 px, tap
+  size and contrast were only checked in a headless browser, never on a real phone.
+- Admins pay no fuel. This follows the role every time, so changing a role re-splits the existing
+  fill-ups, and a request made earlier for someone who is an admin now keeps its amount and is
+  flagged "amount changed".
 - Fuel is entered by hand (no price lookup) in euro. Because everything older than 6 months is
   deleted, the share of the oldest fill-up can change when its oldest drives disappear.
 - **"I have paid" is a self-report** (the person who is owed or an admin can undo it) and the app

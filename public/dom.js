@@ -363,7 +363,7 @@ export function kmOwnerLine(drive, meId) {
 /**
  * The control that says whose kilometres a drive is. By default they are the driver's own; the checkbox
  * "I drove, but the kilometres aren't mine" reveals one choice: another person or Together (split
- * equally over everybody). The note then becomes required (the caller listens with onChange and says so).
+ * in the same ratio as everybody's own kilometres). The note then becomes required (the caller listens with onChange and says so).
  * @param {object} o
  * @param {Array<{ id: number, displayName: string }>} o.users active users
  * @param {number} o.meId

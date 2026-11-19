@@ -177,7 +177,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v2'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v3'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };

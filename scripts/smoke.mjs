@@ -221,7 +221,7 @@ try {
     const after = await (await fetch(`${base}/api/usage/pending`, { headers: { Cookie: cookie } })).json();
     expect(after.count === 0, `pending count after finishing ${after.count}`);
   });
-  await check('kilometres for another person need a note, the fuel share follows them, and the debtor can say "I have paid"', async () => {
+  await check('kilometres for another person need a note, the fuel share follows them (the admin pays none), and the debtor can say "I have paid"', async () => {
     const json = { 'Content-Type': 'application/json', Cookie: cookie };
     const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
     const password = 'smoke-ben-password-1';
@@ -251,7 +251,10 @@ try {
     const benCookie = (login.headers.getSetCookie()[0] ?? '').split(';')[0];
     const listed = await (await fetch(`${base}/api/fuel`, { headers: { Cookie: benCookie } })).json();
     const share = listed.items.find((f) => f.id === fuelId)?.shares.find((s) => s.userId === ben.id);
-    expect(share?.dueCents === 2000 && share.can.selfPaid === true, `Ben's share ${JSON.stringify(share)}`);
+    // The admin's own kilometres (the 100 km above) do not count: Ben, whose 50 km the admin drove, pays the whole 60.00.
+    expect(share?.dueCents === 6000 && share.can.selfPaid === true, `Ben's share ${JSON.stringify(share)}`);
+    const shares = listed.items.find((f) => f.id === fuelId)?.shares ?? [];
+    expect(shares.length === 1 && shares[0].userId === ben.id, `only Ben has a share, the admin has none: ${JSON.stringify(shares.map((s) => s.userName))}`);
     const paid = await fetch(`${base}/api/fuel/${fuelId}/requests/${ben.id}/paid`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: benCookie }, body: JSON.stringify({ paid: true }) });
     expect(paid.status === 200, `I have paid ${paid.status}`);
     const after = await (await fetch(`${base}/api/fuel`, { headers: { Cookie: benCookie } })).json();

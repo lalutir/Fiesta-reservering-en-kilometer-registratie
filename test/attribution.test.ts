@@ -362,23 +362,33 @@ const F = (id: number, totalCents: number, minutesBefore = 0) => ({
 });
 const cents = (calc: ReturnType<typeof computeShares>[number]): Array<[number, number]> => calc.shares.map((s) => [s.userId, s.cents]);
 
-test('computeShares: personal kilometres weigh their owner and the together pool is split equally over the active users', () => {
-  // 60.00: Anna 100 km, Ben 100 km, and 100 km together over three active users (1, 2, 3).
+test('computeShares: the together pool is split in the ratio of the personal kilometres, so nobody without personal kilometres pays any of it', () => {
+  // 60.00: Anna 100 km, Ben 100 km, and 100 km together; Carla (3) is a payer but drove nothing of her own.
   const [calc] = computeShares([F(1, 6000)], [D(1, 60, 100), D(2, 50, 100), D(9, 40, 100, true)], [1, 2, 3]);
   assert.equal(calc?.totalKm, 300);
   assert.equal(calc?.togetherKm, 100);
   assert.equal(calc?.equalSplit, false);
-  // Weights (x3): Anna 300+100, Ben 300+100, Carla 0+100 -> 400:400:100 of 900 = 2666.67, 2666.67, 666.67 (equal remainders: the odd cents go to the lowest ids).
-  assert.deepEqual(cents(calc!), [[1, 2667], [2, 2667], [3, 666]]);
+  assert.deepEqual(cents(calc!), [[1, 3000], [2, 3000]], '100:100 of the personal kilometres; the pool does not move money');
   assert.equal(calc!.shares.reduce((n, s) => n + s.cents, 0), 6000, 'to the cent');
-  assert.deepEqual(calc!.shares.map((s) => s.km), [100, 100, 0], 'km is the person\'s own; the pool is not in it');
+  assert.deepEqual(calc!.shares.map((s) => s.km), [100, 100], "km is the person's own; the pool is not in it");
+
+  // 60.00 with Anna 100 km, Ben 50 km and 90 km together: the whole fill-up goes 100:50, which is what 100:50 of the personal part
+  // and the same ratio of the pool add up to (Anna 40.00, Ben 20.00).
+  const [uneven] = computeShares([F(1, 6000)], [D(1, 60, 100), D(2, 50, 50), D(9, 40, 90, true)], [1, 2, 3]);
+  assert.deepEqual(cents(uneven!), [[1, 4000], [2, 2000]]);
+  assert.equal(uneven?.totalKm, 240);
+
+  // The cents stay exact when the ratio does not divide: 100 : 100 : 100 of 10.00, the odd cent to the lowest id.
+  const [thirds] = computeShares([F(1, 1000)], [D(1, 60, 100), D(2, 50, 100), D(3, 40, 100)], [1, 2, 3]);
+  assert.deepEqual(cents(thirds!), [[1, 334], [2, 333], [3, 333]]);
 });
 
-test('computeShares: only together kilometres split equally; nobody driving at all is the old equal split; no active user means no pool', () => {
+test('computeShares: only together kilometres fall back to an equal split over the payers, flagged; nobody driving at all is the old equal split; no payers means no shares', () => {
   const [pool] = computeShares([F(1, 1000)], [D(7, 30, 50, true)], [1, 2, 3]);
   assert.deepEqual(cents(pool!), [[1, 334], [2, 333], [3, 333]], 'the odd cent goes to the lowest id');
-  assert.equal(pool?.equalSplit, false, 'somebody did drive');
+  assert.equal(pool?.equalSplit, true, 'nobody has personal kilometres');
   assert.equal(pool?.totalKm, 50);
+  assert.equal(pool?.togetherKm, 50);
 
   const [nobody] = computeShares([F(1, 1000)], [], [1, 2, 3]);
   assert.equal(nobody?.equalSplit, true);
@@ -386,17 +396,21 @@ test('computeShares: only together kilometres split equally; nobody driving at a
   assert.deepEqual(cents(nobody!), [[1, 334], [2, 333], [3, 333]]);
 
   const [nobodyHome] = computeShares([F(1, 1000)], [D(1, 30, 50), D(7, 20, 50, true)], []);
-  assert.deepEqual(cents(nobodyHome!), [[1, 1000]], 'with no active user the pool has nobody to go to; the personal kilometres still pay');
+  assert.deepEqual(cents(nobodyHome!), [[1, 1000]], 'with no payer the personal kilometres still pay');
+
+  const [nobodyAtAll] = computeShares([F(1, 1000)], [D(7, 20, 50, true)], []);
+  assert.deepEqual(nobodyAtAll?.shares, [], 'no payer and no personal kilometres: no shares, and no error');
+  assert.equal(nobodyAtAll?.equalSplit, true);
 });
 
-test('computeShares: a deactivated owner still pays for their own kilometres but not for the pool; self drives are exactly as before', () => {
+test('computeShares: a deactivated owner still pays for their own kilometres; the pool goes nowhere on its own; self drives are exactly as before', () => {
   const [calc] = computeShares([F(1, 3000)], [D(4, 30, 100), D(5, 20, 100, true)], [1, 2]);
-  // Weights (x2): user 4 (inactive) 200, users 1 and 2 100 each: 200:100:100 of 400.
-  assert.deepEqual(cents(calc!), [[1, 750], [2, 750], [4, 1500]]);
+  assert.deepEqual(cents(calc!), [[4, 3000]], 'user 4 (not a payer) has the only personal kilometres, so pays the whole fill-up');
 
   const [before] = computeShares([F(1, 6000)], [D(1, 30, 100), D(2, 20, 50), D(3, 10, 50)], [1, 2, 3]);
   assert.deepEqual(cents(before!), [[1, 3000], [2, 1500], [3, 1500]], 'plain 100/50/50 km is unchanged');
   assert.equal(before?.togetherKm, 0);
+  assert.equal(before?.equalSplit, false);
 });
 
 test('computeShares: periods keep apart, and together kilometres belong to the period they ended in', () => {
@@ -405,38 +419,45 @@ test('computeShares: periods keep apart, and together kilometres belong to the p
   assert.deepEqual(cents(calcs[1]!), [[2, 1000]], 'the second only had Ben\'s own');
 });
 
-test('property: for 500 seeded random fill-ups with personal and together kilometres the shares add up to the total, to the cent', () => {
+test('property: for 500 seeded random fill-ups the shares add up to the total, to the cent, and follow the personal kilometres', () => {
   let seed = 20260615;
   const rand = (n: number): number => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed % n;
   };
   for (let i = 0; i < 500; i++) {
-    const active = [1, 2, 3, 4, 5].slice(0, rand(6));
+    const payers = [1, 2, 3, 4, 5].slice(0, rand(6));
     const drives = Array.from({ length: rand(8) }, () => D(1 + rand(6), 10 + rand(50), rand(400), rand(3) === 0));
     const total = 1 + rand(100_000);
-    const [calc] = computeShares([F(1, total)], drives, active);
+    const [calc] = computeShares([F(1, total)], drives, payers);
     const shares = calc!.shares;
     const sum = shares.reduce((n, s) => n + s.cents, 0);
-    const label = `case ${i}: ${JSON.stringify({ drives, active, total })}`;
-    // Somebody is always left to pay unless there is nobody at all (no owner of kilometres and no active user).
+    const label = `case ${i}: ${JSON.stringify({ drives, payers, total })}`;
+    // Somebody is always left to pay unless there is nobody at all (no owner of personal kilometres and no payer).
     assert.equal(sum, shares.length === 0 ? 0 : total, label);
     assert.ok(shares.every((s) => s.cents >= 0), `never negative, ${label}`);
-    // Nobody is a full cent away from their exact weighted share.
-    const poolKm = drives.filter((d) => d.together).reduce((n, d) => n + d.km, 0);
-    const sharesThePool = poolKm > 0 && active.length > 0;
-    const scale = sharesThePool ? active.length : 1;
-    const weightOf = (id: number): number =>
-      drives.filter((d) => !d.together && d.userId === id).reduce((n, d) => n + d.km, 0) * scale + (sharesThePool && active.includes(id) ? poolKm : 0);
-    const weights = shares.map((s) => weightOf(s.userId));
-    const weightSum = weights.reduce((n, w) => n + w, 0);
-    if (weightSum > 0 && calc!.equalSplit === false) {
-      shares.forEach((s, j) => assert.ok(Math.abs(s.cents - (total * (weights[j] as number)) / weightSum) < 1, `share ${j} is within a cent, ${label}`));
+    // The pool never moves money: only personal kilometres weigh, so the exact share is total * km / personal kilometres.
+    const personal = drives.filter((d) => !d.together).reduce((n, d) => n + d.km, 0);
+    if (personal > 0) {
+      assert.equal(calc!.equalSplit, false, label);
+      assert.deepEqual(
+        shares.map((s) => s.userId),
+        [...new Set(drives.filter((d) => !d.together && d.km > 0).map((d) => d.userId))].sort((x, y) => x - y),
+        `exactly the people with personal kilometres pay, ${label}`,
+      );
+      shares.forEach((s, j) => assert.ok(Math.abs(s.cents - (total * s.km) / personal) < 1, `share ${j} is within a cent of total * km / personal km, ${label}`));
+    } else {
+      assert.equal(calc!.equalSplit, true, label);
+      assert.deepEqual(shares.map((s) => s.userId), [...payers].sort((x, y) => x - y), `equal split over the payers, ${label}`);
+      if (shares.length > 0) {
+        const cs = shares.map((x) => x.cents);
+        assert.ok(Math.max(...cs) - Math.min(...cs) <= 1, `equal within a cent, ${label}`);
+      }
     }
   }
 });
 
-test('the fuel split follows the owner: kilometres Anna drove for Ben are Ben\'s share, together kilometres are everybody\'s', async () => {
+test('the fuel split follows the owner: kilometres Anna drove for Ben are Ben\'s share, and together kilometres follow the personal ratio', async () => {
   const { t, anna, ben, carla } = await createHousehold();
   try {
     await anna.post('/api/usage', drive(t, -40, -39, { odometerStart: 0, odometerEnd: 100 }));
@@ -447,19 +468,19 @@ test('the fuel split follows the owner: kilometres Anna drove for Ben are Ben\'s
     assert.equal(first.totalKm, 200);
     assert.equal(first.togetherKm, 0);
 
-    // 100 km together over the four active users (admin, Anna, Ben, Carla), plus Ben's own 100 km.
+    // 100 km together, plus Ben's own 100 km: Ben has the only personal kilometres of this period, so he pays all of it,
+    // and the admin (who does not pay for fuel) has no share either way.
     await anna.post('/api/usage', drive(t, -18, -17, { odometerStart: 200, odometerEnd: 300, kmFor: 'together', note: 'for all' }));
     await ben.post('/api/usage', drive(t, -16, -15, { odometerStart: 300, odometerEnd: 400 }));
     const second = (await carla.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 8000 })).body.fuel;
     assert.equal(second.totalKm, 200);
     assert.equal(second.togetherKm, 100);
-    // Weights (x4): Ben 400+100, everybody else 100: 500:100:100:100 of 800.
-    assert.deepEqual(names(second), [['Admin', 0, 1000], ['Anna', 0, 1000], ['Ben', 100, 5000], ['Carla', 0, 1000]]);
-    assert.equal(second.shares.reduce((n: number, s: Json) => n + s.cents, 0), 8000);
+    assert.deepEqual(names(second), [['Ben', 100, 8000]]);
+    assert.equal(second.equalSplit, false);
     const list = (await carla.get('/api/fuel')).body;
     assert.equal(list.items[0].togetherKm, 100);
-    // Carla fuelled both, so everybody else owes her: Ben 30.00 + 50.00, Anna 30.00 + 10.00, Admin 10.00.
-    assert.deepEqual(list.balances.map((b: Json) => [b.fromName, b.toName, b.cents]), [['Ben', 'Carla', 8000], ['Anna', 'Carla', 4000], ['Admin', 'Carla', 1000]]);
+    // Carla fuelled both: Ben owes her 30.00 + 80.00, Anna 30.00.
+    assert.deepEqual(list.balances.map((b: Json) => [b.fromName, b.toName, b.cents]), [['Ben', 'Carla', 11000], ['Anna', 'Carla', 3000]]);
   } finally {
     await t.close();
   }

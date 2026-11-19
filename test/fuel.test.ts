@@ -59,7 +59,7 @@ test('property: for 500 seeded random fill-ups the shares always add up to the t
   }
 });
 
-test('no kilometres in the period: the cost is split equally over the active users and flagged', () => {
+test('no kilometres in the period: the cost is split equally over the people who pay and flagged', () => {
   const [none] = computeShares([fuel(1, T1, 1000)], [], []);
   assert.deepEqual(none!.shares, [], 'nobody to split over');
   const [first, second] = computeShares([fuel(1, T1, 1000), fuel(2, T2, 1000)], [drive(1, before(T1, 1), 80)], [3, 1, 2]) as [ReturnType<typeof computeShares>[number], ReturnType<typeof computeShares>[number]];
@@ -228,7 +228,7 @@ test('editing or deleting a fill-up recalculates the next one', async () => {
     const after = (await anna.get('/api/fuel')).body.items[0];
     assert.equal(after.equalSplit, true);
     assert.equal(after.totalKm, 0);
-    assert.deepEqual(after.shares.map((s: Json) => s.cents), [500, 500, 500, 500], 'equal over the four active users');
+    assert.deepEqual(after.shares.map((s: Json) => s.cents), [667, 667, 666], 'equal over the three active members (the admin does not pay for fuel)');
 
     // Deleting the first one makes the second the first in the data: it now pays for everything before it.
     assert.equal((await anna.del(`/api/fuel/${first.id}`)).status, 204);
@@ -526,20 +526,19 @@ test('balances net each pair and leave out what is paid', async () => {
   const { t, anna, ben, carla } = await household();
   try {
     const a = (await anna.post('/api/fuel', body(t, { at: at(t.clock, -15), totalCents: 6000 }))).body.fuel; // Ben owes Anna 1500, Carla 1500
-    // Ben fuels later, when nobody drove: 6.00 split equally over the four active users, so Anna owes Ben 1.50.
+    // Ben fuels later, when nobody drove: 6.00 split equally over the three paying users (the admin does not pay), so Anna and Carla each owe Ben 2.00.
     const b = (await ben.post('/api/fuel', body(t, { at: at(t.clock, -5), totalCents: 600, millilitres: 4000 }))).body.fuel;
     assert.equal(b.equalSplit, true);
     const balances = (await carla.get('/api/fuel')).body.balances;
     assert.deepEqual(balances.map((x: Json) => [x.fromName, x.toName, x.cents]), [
       ['Carla', 'Anna', 1500],
-      ['Ben', 'Anna', 1350],
-      ['Admin', 'Ben', 150],
-      ['Carla', 'Ben', 150],
+      ['Ben', 'Anna', 1300],
+      ['Carla', 'Ben', 200],
     ]);
     await anna.post(`/api/fuel/${a.id}/requests`, { debtorId: carla.id });
     await anna.post(`/api/fuel/${a.id}/requests/${carla.id}/paid`, { paid: true });
     const after = (await carla.get('/api/fuel')).body.balances;
-    assert.deepEqual(after.map((x: Json) => [x.fromName, x.toName, x.cents]), [['Ben', 'Anna', 1350], ['Admin', 'Ben', 150], ['Carla', 'Ben', 150]]);
+    assert.deepEqual(after.map((x: Json) => [x.fromName, x.toName, x.cents]), [['Ben', 'Anna', 1300], ['Carla', 'Ben', 200]]);
   } finally {
     await t.close();
   }

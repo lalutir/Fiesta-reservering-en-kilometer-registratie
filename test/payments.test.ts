@@ -45,7 +45,31 @@ test('the manual provider writes the request text with the amount, the names and
   assert.match(made.message, /Anna fuelled the shared car on Saturday 13 June \(40\.00 L\)/);
   assert.match(made.message, /EUR 15\.00/);
   assert.match(made.message, /50 of 200 km driven/);
-  assert.match(requestMessage({ ...INPUT, equalSplit: true }), /nobody drove in that period, so the cost is split equally/);
+  assert.match(requestMessage({ ...INPUT, equalSplit: true }), /no kilometres count in that period, so the cost is split equally/);
+});
+
+test('the request text explains the split: personal kilometres, the pool in the same ratio, only the pool, or nothing counted', () => {
+  // Personal kilometres only: as it always was.
+  assert.match(requestMessage(INPUT), /Your share is EUR 15\.00 \(50 of 200 km driven\)\./);
+  assert.match(requestMessage({ ...INPUT, togetherKm: 0 }), /\(50 of 200 km driven\)/);
+
+  // Personal kilometres plus a pool: the ratio is told against the personal total, and the pool follows it.
+  const withPool = requestMessage({ ...INPUT, km: 50, kmTotal: 260, togetherKm: 60 });
+  assert.match(withPool, /\(50 of 200 km driven; the 60 km driven together are split in the same ratio\)/);
+  assert.doesNotMatch(withPool, /equal part|equally/);
+
+  // Only the pool: an equal split, and it says why.
+  const onlyPool = requestMessage({ ...INPUT, km: 0, kmTotal: 60, togetherKm: 60, equalSplit: true });
+  assert.match(onlyPool, /\(only 60 km were driven together in that period, so the cost is split equally\)/);
+
+  // Nothing counted at all.
+  assert.match(requestMessage({ ...INPUT, km: 0, kmTotal: 0, equalSplit: true }), /\(no kilometres count in that period, so the cost is split equally\)/);
+
+  // Without a pool and with nothing carried, only the no-kilometres sentence differs from the old text.
+  assert.equal(
+    requestMessage(INPUT),
+    'Hi Ben, Anna fuelled the shared car on Saturday 13 June (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). Please pay Anna.',
+  );
 });
 
 test('only https links on tikkie.me count as a Tikkie link', () => {

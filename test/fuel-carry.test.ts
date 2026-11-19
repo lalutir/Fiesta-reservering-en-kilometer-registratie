@@ -159,7 +159,10 @@ test('the request text: nothing carried reads exactly as before, carried amounts
     requestMessage({ ...base, amountCents: 500, shareCents: 1500, carriedCents: -1000 }),
     'Hi Ben, Anna fuelled the shared car on Sat 14 Nov (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). EUR 10.00 that Anna still owes you from earlier is taken off, so the total is EUR 5.00. Please pay Anna.',
   );
-  assert.match(requestMessage({ ...base, togetherKm: 80 }), /\(50 km of your own and an equal part of 80 km driven together, 200 km in all\)/);
+  // 200 km in all, of which 80 together: the share is 50 of the 120 personal km, and the pool follows that ratio.
+  const pooled = requestMessage({ ...base, togetherKm: 80 });
+  assert.match(pooled, /\(50 of 120 km driven; the 80 km driven together are split in the same ratio\)/);
+  assert.doesNotMatch(pooled, /equal part/);
 });
 
 test('the push text names the fueler and the amount, and says what is carried', () => {
@@ -355,7 +358,9 @@ test('a fill-up registered after the request was made, even one dated before it,
     assert.equal((await ben.post(`/api/fuel/${late.id}/requests/${ben.id}/paid`, { paid: true })).status, 200);
     const { items, balances } = (await anna.get('/api/fuel')).body;
     assert.equal(benOf(items.find((f: Json) => f.id === back.id)).settledBy, null, 'created after the request: still owed');
-    assert.deepEqual(pairs(balances), [['Ben', 'Anna', 2000], ['Admin', 'Anna', 1500], ['Carla', 'Anna', 1500]]);
+    // The later fill-up now pays for nothing, so 60.00 is split equally over the three paying users (the admin does not pay):
+    // Ben's 20.00 of it is paid, Carla owes 20.00; Ben still owes the 20.00 of the earlier fill-up.
+    assert.deepEqual(pairs(balances), [['Ben', 'Anna', 2000], ['Carla', 'Anna', 2000]]);
     assert.equal(benOf(items.find((f: Json) => f.id === late.id)).request.changed, true, 'and the request says it moved');
   } finally {
     await t.close();
@@ -670,25 +675,26 @@ test('"I have paid" with no request on a share that carries earlier ones records
   try {
     const url = `/api/fuel/${second.id}/requests/${ben.id}/paid`;
     // A forgotten fill-up, dated between the two, is registered before Ben pays: nobody asked him for it, but it existed when he paid.
-    // It takes no drive (Ben's 50 km come after it), so its 20.00 is split equally over the four of them: 5.00 for Ben.
+    // It takes no drive (Ben's 50 km come after it), so its 20.00 is split equally over the three who pay (the admin does not):
+    // 6.67, 6.67 and 6.66 by id, so Anna (the fueler) 6.67, Ben 6.67 and Carla 6.66.
     const late = (await anna.post('/api/fuel', { at: at(t.clock, -17), millilitres: 15_000, totalCents: 2000 })).body.fuel;
     assert.ok(late.id > second.id);
     const before = benOf((await ben.get('/api/fuel')).body.items.find((f: Json) => f.id === second.id));
-    assert.deepEqual([before.cents, before.carriedCents, before.dueCents], [3000, 6500, 9500], 'the 60.00 and the 5.00 are both carried');
+    assert.deepEqual([before.cents, before.carriedCents, before.dueCents], [3000, 6667, 9667], 'the 60.00 and the 6.67 are both carried');
 
     const paid = await ben.post(url, { paid: true });
     assert.equal(paid.status, 200, paid.text);
     const row = one<Json>(t.db, 'SELECT * FROM fuel_requests WHERE fuel_id = ?', second.id);
     assert.deepEqual(
       { provider: row?.provider, amount: row?.amount_cents, covers: row?.covers_fuel_id, paidBy: row?.paid_by, link: row?.link },
-      { provider: 'manual', amount: 9500, covers: late.id, paidBy: ben.id, link: '' },
-      'the snapshot asks for the share (30.00) and the 65.00 it carries, and covers everything that existed',
+      { provider: 'manual', amount: 9667, covers: late.id, paidBy: ben.id, link: '' },
+      'the snapshot asks for the share (30.00) and the 66.67 it carries, and covers everything that existed',
     );
-    assert.match(row?.message as string, /EUR 65\.00 from earlier fill-ups is still open, so the total is EUR 95\.00/);
+    assert.match(row?.message as string, /EUR 66\.67 from earlier fill-ups is still open, so the total is EUR 96\.67/);
     assert.equal(many(t.db, 'SELECT id FROM fuel_requests').length, 1, 'one row: the earlier fill-ups got none of their own');
 
     const after = (await anna.get('/api/fuel')).body;
-    assert.deepEqual(pairs(after.balances).sort(), [['Admin', 'Anna', 500], ['Carla', 'Anna', 500]], 'one payment settled all three of Ben\'s shares; the others still owe theirs');
+    assert.deepEqual(pairs(after.balances), [['Carla', 'Anna', 666]], 'one payment settled all three of Ben\'s shares; Carla still owes hers (the admin owes nothing)');
     for (const earlier of [first, late]) {
       assert.deepEqual({ ...benOf(after.items.find((f: Json) => f.id === earlier.id)).settledBy }, { fuelId: second.id, at: second.at });
     }
@@ -696,7 +702,7 @@ test('"I have paid" with no request on a share that carries earlier ones records
 
     // The person who is owed can take it back: all three shares are open again and nothing else was written.
     assert.equal((await anna.post(url, { paid: false })).status, 200);
-    assert.deepEqual(pairs((await anna.get('/api/fuel')).body.balances).sort(), [['Admin', 'Anna', 500], ['Ben', 'Anna', 9500], ['Carla', 'Anna', 500]]);
+    assert.deepEqual(pairs((await anna.get('/api/fuel')).body.balances), [['Ben', 'Anna', 9667], ['Carla', 'Anna', 666]]);
     assert.equal(many(t.db, 'SELECT id FROM fuel_requests').length, 1);
   } finally {
     await t.close();
@@ -717,17 +723,18 @@ test('asking again after an earlier fill-up was registered late refreshes the am
     const coversOf = (fuelId: number): unknown => one<Json>(t.db, 'SELECT covers_fuel_id FROM fuel_requests WHERE fuel_id = ?', fuelId)?.covers_fuel_id;
     assert.equal(coversOf(second.id), second.id);
 
-    // A forgotten fill-up, dated in between, is registered afterwards: it takes Ben's 50 km, and the later one is split equally.
-    const late = (await anna.post('/api/fuel', { at: at(t.clock, -22), millilitres: 15_000, totalCents: 2000 })).body.fuel;
+    // A forgotten fill-up (15.00), dated in between, is registered afterwards: it takes Ben's 50 km, and the later one is
+    // split equally over the three who pay (the admin does not): 10.00 each.
+    const late = (await anna.post('/api/fuel', { at: at(t.clock, -22), millilitres: 11_000, totalCents: 1500 })).body.fuel;
     assert.ok(late.id > second.id);
     const moved = benOf((await anna.get('/api/fuel')).body.items.find((f: Json) => f.id === second.id));
-    assert.deepEqual([moved.cents, moved.carriedCents, moved.dueCents], [750, 6000, 6750], 'what it would ask now');
-    assert.deepEqual([moved.request.amountCents, moved.request.changed, moved.request.currentCents], [7000, true, 6750], 'the request says it moved');
+    assert.deepEqual([moved.cents, moved.carriedCents, moved.dueCents], [1000, 5500, 6500], 'what it would ask now: 10.00 plus the 40.00 and the 15.00 it carries');
+    assert.deepEqual([moved.request.amountCents, moved.request.changed, moved.request.currentCents], [7000, true, 6500], 'the request says it moved');
 
     // Asking again redoes the same request (200, not 201) with the amount and the cover of now.
     const redone = await anna.post(`/api/fuel/${second.id}/requests`, { debtorId: ben.id });
     assert.equal(redone.status, 200, redone.text);
-    assert.deepEqual([benOf(redone.body.fuel).request.amountCents, benOf(redone.body.fuel).request.changed], [6750, false]);
+    assert.deepEqual([benOf(redone.body.fuel).request.amountCents, benOf(redone.body.fuel).request.changed], [6500, false]);
     assert.equal(coversOf(second.id), late.id, 'it now covers the fill-up registered late');
     assert.equal(many(t.db, 'SELECT id FROM fuel_requests').length, 1);
 
@@ -735,7 +742,7 @@ test('asking again after an earlier fill-up was registered late refreshes the am
     assert.equal((await ben.post(`/api/fuel/${second.id}/requests/${ben.id}/paid`, { paid: true })).status, 200);
     const { items, balances } = (await anna.get('/api/fuel')).body;
     assert.deepEqual([first.id, late.id].map((id) => benOf(items.find((f: Json) => f.id === id)).settledBy?.fuelId), [second.id, second.id]);
-    assert.deepEqual(pairs(balances).sort(), [['Admin', 'Anna', 750], ['Carla', 'Anna', 750]]);
+    assert.deepEqual(pairs(balances), [['Carla', 'Anna', 1000]]);
   } finally {
     await t.close();
   }
@@ -1016,22 +1023,25 @@ test('together: kilometres driven for others set who owes what, the push and the
     await drive(anna, -56, -54, 1100, 1150, { kmFor: 'together', note: 'Groceries for the house' });
     await drive(carla, -52, -50, 1150, 1200);
 
-    // Anna fuels for 80.00. Four active people: the 50 km pool is 12.5 km each. Ben 112.5 of 200 km, Carla 62.5, Anna and the admin 12.5.
+    // Anna fuels for 80.00. The personal kilometres are Ben's 100 (driven by Anna) and Carla's 50; the 50 km pool follows
+    // that ratio, so Ben pays 100 of 150 (53.33) and Carla 50 of 150 (26.67). Anna drove 150 km but none of them are
+    // hers, and the admin does not pay for fuel: neither has a share.
     const first = await anna.post('/api/fuel', { at: at(t.clock, -40), millilitres: 40_000, totalCents: 8000 });
     assert.equal(first.status, 201, first.text);
     await t.app.idle();
     const cents = (f: Json): Record<number, number> => Object.fromEntries((f.shares as Json[]).map((s) => [s.userId, s.cents]));
-    assert.deepEqual(cents(first.body.fuel), { [anna.id]: 500, [ben.id]: 4500, [carla.id]: 2500, [admin.id]: 500 }, 'the driver of the 150 km pays 5.00; Ben, who did not drive, pays for his 100 km');
+    assert.deepEqual(cents(first.body.fuel), { [ben.id]: 5333, [carla.id]: 2667 }, 'Ben, who did not drive, pays for his 100 km; the driver of them pays nothing');
+    assert.equal(cents(first.body.fuel)[admin.id], undefined, 'no share for the admin');
     assert.equal(Object.values(cents(first.body.fuel)).reduce((a, b) => a + b, 0), 8000, 'to the cent');
 
-    // The push says what the card says, to the people who owe and have a device; not to Anna (she fuelled) nor to the admin (no device).
+    // The push says what the card says, to the people who owe and have a device; not to Anna (she fuelled) nor to the admin (who does not pay).
     const firstId = first.body.fuel.id;
-    assert.deepEqual(messagesFor(ben.id, firstId).map((m) => m['body']), ['You owe Anna EUR 45.00. This can still change when more drives are registered.']);
-    assert.deepEqual(messagesFor(carla.id, firstId).map((m) => m['body']), ['You owe Anna EUR 25.00. This can still change when more drives are registered.']);
+    assert.deepEqual(messagesFor(ben.id, firstId).map((m) => m['body']), ['You owe Anna EUR 53.33. This can still change when more drives are registered.']);
+    assert.deepEqual(messagesFor(carla.id, firstId).map((m) => m['body']), ['You owe Anna EUR 26.67. This can still change when more drives are registered.']);
     assert.deepEqual(messagesFor(anna.id, firstId), []);
     const mine = ((await ben.get('/api/fuel')).body.items as Json[]).find((f) => f['id'] === firstId) as Json;
     const bensShare = (mine.shares as Json[]).find((s) => s['userId'] === ben.id) as Json;
-    assert.deepEqual([bensShare['cents'], bensShare['dueCents'], bensShare['can'].selfPaid], [4500, 4500, true], 'the History screen offers Ben the same 45.00 and his button');
+    assert.deepEqual([bensShare['cents'], bensShare['dueCents'], bensShare['can'].selfPaid], [5333, 5333, true], 'the History screen offers Ben the same 53.33 and his button');
 
     // Ben says he paid, Carla does not. Then Ben (20 km) and Carla (20 km) drive their own, and Anna fuels again for 40.00.
     assert.equal((await ben.post(`/api/fuel/${firstId}/requests/${ben.id}/paid`, { paid: true })).status, 200);
@@ -1045,15 +1055,16 @@ test('together: kilometres driven for others set who owes what, the push and the
     assert.deepEqual(cents(second.body.fuel), { [ben.id]: 2000, [carla.id]: 2000 }, 'only the two who drove in this period have a share (there is no pool this time)');
     const carlaShare = (second.body.fuel.shares as Json[]).find((s) => s['userId'] === carla.id) as Json;
     const benShare = (second.body.fuel.shares as Json[]).find((s) => s['userId'] === ben.id) as Json;
-    assert.deepEqual([carlaShare['carriedCents'], carlaShare['dueCents']], [2500, 4500], 'Carla\'s unpaid 25.00 rides along');
+    assert.deepEqual([carlaShare['carriedCents'], carlaShare['dueCents']], [2667, 4667], 'Carla\'s unpaid 26.67 rides along');
     assert.deepEqual([benShare['carriedCents'], benShare['dueCents']], [0, 2000], 'Ben paid, so nothing rides along');
     assert.deepEqual(messagesFor(ben.id, secondId).map((m) => m['body']), ['You owe Anna EUR 20.00. This can still change when more drives are registered.']);
-    assert.deepEqual(messagesFor(carla.id, secondId).map((m) => m['body']), ['You owe Anna EUR 45.00 (EUR 20.00 now plus EUR 25.00 still open from earlier). This can still change when more drives are registered.']);
+    assert.deepEqual(messagesFor(carla.id, secondId).map((m) => m['body']), ['You owe Anna EUR 46.67 (EUR 20.00 now plus EUR 26.67 still open from earlier). This can still change when more drives are registered.']);
 
-    // "Who owes whom" agrees: Carla 45.00, Ben 20.00 and the admin's 5.00 from the first fill-up, all to Anna; nothing twice.
+    // "Who owes whom" agrees: Carla 46.67 and Ben 20.00, both to Anna (the admin owes nothing); nothing twice.
     const balances = (await anna.get('/api/fuel')).body.balances as Json[];
-    assert.equal(balances.reduce((n, b) => n + (b['cents'] as number), 0), 7000);
-    assert.equal(balances.find((b) => b['fromName'] === 'Carla')?.['cents'], 4500);
+    assert.equal(balances.reduce((n, b) => n + (b['cents'] as number), 0), 6667);
+    assert.equal(balances.find((b) => b['fromName'] === 'Admin'), undefined);
+    assert.equal(balances.find((b) => b['fromName'] === 'Carla')?.['cents'], 4667);
     assert.equal(balances.find((b) => b['fromName'] === 'Ben')?.['cents'], 2000);
   } finally {
     await t.close();

@@ -257,7 +257,8 @@ export function registerUserRoutes(router: Router, ctx: Ctx): void {
       }
       return findUser(ctx, id);
     });
-    ctx.log({ event: 'user.updated', userId: id, by: req.user?.id });
+    // The role decides who pays for fuel (admins do not, fuel.ts), so the role a person ends up with is part of the audit line.
+    ctx.log({ event: 'user.updated', userId: id, by: req.user?.id, role: updated.role, active: updated.active === 1 });
     return ok({ user: toUserDto(updated) });
   });
 
