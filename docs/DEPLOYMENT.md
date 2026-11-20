@@ -483,15 +483,43 @@ errand, or when a trip is for the whole household.
   other person is needed: it is visible, with the note, in History, in the Drives
   list, on the reservation card and in the admin Drives table.
 - **Together** kilometres are not anybody's: when fuel is shared out they are a
-  pool that is split **equally over everybody who is active** (to the cent, the
-  odd cent goes to the lowest user id), on top of everyone's own kilometres. The
-  Drives tab lists them on their own line; a person's own total never includes them.
+  pool that is split **in the same ratio as the personal kilometres of the same
+  period** (to the cent, the odd cent goes to the lowest user id). That comes down to
+  splitting the whole fill-up by each person's own kilometres, so a person who drove
+  nothing of their own in that period pays none of the pool, and the pool only
+  matters when nobody has personal kilometres (then the cost is split equally over
+  the active members, and the card says so). The Drives tab lists the pool on its
+  own line; a person's own total never includes it.
 - Kilometres per person count under their owner; the grand total is unchanged.
   The number of drives still counts for the driver.
 - A member cannot change this on a drive that a payment request depends on
   (the same rule as for the other fields of such a drive); an admin can.
 - A person who is deactivated later keeps the kilometres already given to them,
-  but cannot be chosen for new ones, and does not take part in the equal split.
+  but cannot be chosen for new ones, and does not take part in the equal split
+  (they still pay for personal kilometres already given to them).
+
+### Agenda views
+
+The Agenda tab opens as the list. The switcher above it adds **Day**, **3 days**
+(the chosen day and the two after it), **Week** (Monday to Sunday) and **Month**.
+Previous, Today and Next step by one day, three days, a week or a month and stop
+at the edges of the six-month window; days outside the window are not shown. A
+reservation appears on every day of the household time zone it touches (a night
+booking is on both days; one that ends exactly at midnight is not on the next
+day), with the same buttons as in the list, and says in words whether it is
+confirmed or waiting for an answer. Declined and expired suggestions are not
+shown, as in the list. In the month grid each day shows a count (a dashed edge
+means a suggestion is waiting) and opens the Day view.
+
+The view and the day are kept in the address (`#/?view=week&date=2026-11-18`), so
+the refresh every minute, a reload and every action keep them; nothing is stored
+on the phone, so opening the app always starts at the list. An address with an
+unknown view or a date that does not exist falls back to the list or to today,
+and a date outside the window to the nearest day inside it. Known limits: the
+views are lists per day, not an hour-by-hour grid; after Previous or Next the
+screen reader focus moves to the heading of the new period; and a button that has
+keyboard focus loses it when the page refreshes itself after a minute (like every
+other screen).
 
 ### Reminders (Web Push)
 
@@ -535,8 +563,21 @@ than 15 minutes in the past.
 - Each fill-up is split over the kilometres of the **finished drives that ended
   between the previous fill-up and this one**, to the cent (leftover cents go to
   the largest shares). The person who fuelled does not owe themselves. If nobody
-  drove in that period the cost is split equally over everyone active, and the
-  card says so. The first fill-up covers every drive before it.
+  has personal kilometres in that period (nobody drove, or only together) the cost
+  is split equally over the active members, and the card says so. The first
+  fill-up covers every drive before it.
+- **Admins do not pay for fuel.** Every user with the admin role (active or not)
+  is left out of the split: they get no share, no payment request, no push and no
+  "I have paid" button, their own kilometres are not counted, and the other people
+  pay the whole fill-up. An admin who fuels is still owed the money, and
+  kilometres an admin drove *for* a member or for *Together* count under that
+  owner. The rule is read from the user's role every time, so it is retroactive:
+  making someone an admin (or a member again) re-splits the existing fill-ups at
+  once, like any other change of drives or users. A payment request that was made
+  earlier for a person who is an admin now keeps the amount that was asked, is
+  marked "amount changed", stays on the card of the person who fuelled (who can
+  still mark it paid or unpaid) and is no longer counted as a debt. If everybody
+  is an admin a fill-up is saved without any shares.
 - Fill-ups follow the 6 month retention like everything else, together with their
   payment requests, so an unpaid request older than that disappears. When old
   drives are deleted the share of the oldest fill-up can change; a request that

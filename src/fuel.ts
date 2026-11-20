@@ -11,8 +11,14 @@
 // nothing, and a drive that a request depends on is locked for its owner (usage.ts).
 //
 // Kilometres count for whoever they are attributed to (usage.km_for): the driver's own,
-// another person's, or "together". Together kilometres are a pool that is split equally
-// over the active users, next to the personal kilometres that weigh each person.
+// another person's, or "together". Together kilometres are a pool that is split in the same
+// ratio as the personal kilometres of the period, so the whole fill-up follows the kilometres
+// each person drove; only when nobody has personal kilometres (nobody drove, or only together)
+// is it split equally over the people who pay.
+//
+// Admins do not pay for fuel (fuelOverview): their own kilometres are left out of the split, they
+// get no share, request or push, and the others pay the whole fill-up. An admin who fuels is still
+// owed the money, and kilometres an admin drove for a member (or together) count under that owner.
 //
 // What a person still owes the same fueler from earlier fill-ups rides along with their
 // next share, and a payment request settles those earlier shares when it is paid: the
@@ -44,7 +50,7 @@ export interface ShareDrive {
   /** When the drive ended; decides which fill-up period it belongs to. */
   endUtc: string;
   km: number;
-  /** The kilometres belong to the shared pool: split equally over the active users. */
+  /** The kilometres belong to the shared pool: split in the ratio of the personal kilometres of the period. */
   together?: boolean;
 }
 
@@ -62,11 +68,11 @@ export interface FuelShares {
   toUtc: string;
   /** Personal and together kilometres of the period. */
   totalKm: number;
-  /** Of which driven together: a pool split equally over the active users. */
+  /** Of which driven together: a pool split in the same ratio as the personal kilometres. */
   togetherKm: number;
-  /** Nobody drove in the period, so the cost is split equally over the active users. */
+  /** Nobody has personal kilometres in the period (nobody drove, or only together), so the cost is split equally over the people who pay. */
   equalSplit: boolean;
-  /** `km` is the person's own kilometres; their part of the together pool is not in it. */
+  /** `km` is the person's own kilometres; the together pool is not in it. */
   shares: Allocation[];
 }
 
@@ -93,15 +99,19 @@ export function splitCents(total: number, weights: Array<{ userId: number; weigh
 /**
  * The share of every fill-up per person. Pure: the caller loads the data, this decides.
  *
- * Personal kilometres weigh their owner. Together kilometres are a pool that every active user
- * carries an equal part of: with A active users, each weight is scaled by A so the pool part
- * (pool / A) stays an integer, and the largest-remainder split keeps the cents exact. Without
- * together kilometres (or without any active user to share them) the weights are the plain
- * personal kilometres, as before.
+ * Personal kilometres weigh their owner. Together kilometres are split in the ratio of the personal
+ * kilometres of the same period, and that comes down to the same thing as weighing the whole
+ * fill-up by personal kilometres: a person's part is total * km / personalKm, and the pool changes
+ * nobody's weight. So the weights are the plain personal kilometres, one largest-remainder split
+ * keeps the cents exact, and a person without personal kilometres in the period pays none of the
+ * pool. Only when nobody has personal kilometres (nobody drove, or only together) the cost is
+ * split equally over `payerIds` and flagged. `payerIds` are the people who pay by default; a person
+ * with personal kilometres pays for them even when they are not listed (a deactivated user). Which
+ * drives are passed in, and who may pay at all (admins do not), is decided by the caller.
  */
-export function computeShares(fuels: ShareFuel[], drives: ShareDrive[], activeUserIds: number[]): FuelShares[] {
+export function computeShares(fuels: ShareFuel[], drives: ShareDrive[], payerIds: number[]): FuelShares[] {
   const sorted = [...fuels].sort((a, b) => (a.atUtc < b.atUtc ? -1 : a.atUtc > b.atUtc ? 1 : a.id - b.id));
-  const active = [...new Set(activeUserIds)].sort((a, b) => a - b);
+  const payers = [...new Set(payerIds)].sort((a, b) => a - b);
   return sorted.map((fuel, i) => {
     const fromUtc = i === 0 ? null : (sorted[i - 1] as ShareFuel).atUtc;
     const kmBy = new Map<number, number>();
@@ -112,20 +122,10 @@ export function computeShares(fuels: ShareFuel[], drives: ShareDrive[], activeUs
       else kmBy.set(d.userId, (kmBy.get(d.userId) ?? 0) + d.km);
     }
     const drivers = [...kmBy].filter(([, km]) => km > 0).sort((a, b) => a[0] - b[0]);
-    const totalKm = drivers.reduce((n, [, km]) => n + km, 0) + pool;
-    const equalSplit = totalKm === 0;
-    const sharePool = pool > 0 && active.length > 0;
-    const scale = sharePool ? active.length : 1;
-    let weights: Array<{ userId: number; weight: number }>;
-    if (equalSplit) {
-      weights = active.map((userId) => ({ userId, weight: 1 }));
-    } else {
-      const ids = new Set(drivers.map(([userId]) => userId));
-      if (sharePool) for (const userId of active) ids.add(userId);
-      weights = [...ids]
-        .sort((a, b) => a - b)
-        .map((userId) => ({ userId, weight: (kmBy.get(userId) ?? 0) * scale + (sharePool && active.includes(userId) ? pool : 0) }));
-    }
+    const personalKm = drivers.reduce((n, [, km]) => n + km, 0);
+    const totalKm = personalKm + pool;
+    const equalSplit = personalKm === 0;
+    const weights = equalSplit ? payers.map((userId) => ({ userId, weight: 1 })) : drivers.map(([userId, km]) => ({ userId, weight: km }));
     const shares = splitCents(fuel.totalCents, weights).map((s) => ({ userId: s.userId, km: kmBy.get(s.userId) ?? 0, cents: s.cents }));
     return { fuelId: fuel.id, fromUtc, toUtc: fuel.atUtc, totalKm, togetherKm: pool, equalSplit, shares };
   });
@@ -186,8 +186,9 @@ export interface FuelDto {
   updatedAt: string;
   period: { from: string | null; to: string };
   totalKm: number;
-  /** Of totalKm: driven together, a pool split equally over the active users. */
+  /** Of totalKm: driven together, a pool split in the same ratio as the personal kilometres. */
   togetherKm: number;
+  /** Split equally because nobody has personal kilometres in the period. */
   equalSplit: boolean;
   /** The first fill-up in the data: it also pays for every drive before it. */
   firstInData: boolean;
@@ -236,23 +237,31 @@ export function requestedPeriods(db: Db): (endUtc: string) => boolean {
 /** Everything the fuel view shows, computed from the current data. */
 export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; balances: BalanceDto[] } {
   const fuels = many<FuelJoin>(db, 'SELECT f.*, u.display_name AS user_name FROM fuel f JOIN users u ON u.id = f.user_id ORDER BY f.at_utc, f.id');
+  // Admins do not pay for fuel: every user with the admin role, active or not, is left out of the split.
+  // Payers are the active people who are not admins; a deactivated member with personal kilometres in the
+  // period still pays for them (computeShares).
+  const users = many<{ id: number; display_name: string; role: 'admin' | 'member'; active: number }>(db, 'SELECT id, display_name, role, active FROM users');
+  const names = new Map(users.map((u) => [u.id, u.display_name]));
+  const admins = new Set(users.filter((u) => u.role === 'admin').map((u) => u.id));
+  const payerIds = users.filter((u) => u.active === 1 && u.role !== 'admin').map((u) => u.id);
   const drives = many<{ user_id: number; km_for: KmFor; km_user_id: number | null; end_utc: string; km: number }>(
     db,
     `SELECT user_id, km_for, km_user_id, end_utc, odometer_end - odometer_start AS km FROM usage
       WHERE status = 'completed' AND odometer_start IS NOT NULL AND odometer_end IS NOT NULL`,
-  ).map((d) => ({
-    // The kilometres count for their owner; the driver only matters for the registration, not for the money.
-    userId: d.km_for === 'person' ? (d.km_user_id as number) : d.user_id,
-    endUtc: d.end_utc,
-    km: d.km,
-    together: d.km_for === 'together',
-  }));
-  const activeIds = many<{ id: number }>(db, 'SELECT id FROM users WHERE active = 1').map((u) => u.id);
-  const names = new Map(many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users').map((u) => [u.id, u.display_name]));
+  )
+    .map((d) => ({
+      // The kilometres count for their owner; the driver only matters for the registration, not for the money.
+      userId: d.km_for === 'person' ? (d.km_user_id as number) : d.user_id,
+      endUtc: d.end_utc,
+      km: d.km,
+      together: d.km_for === 'together',
+    }))
+    // An admin's own kilometres are left out; kilometres an admin drove for a member (or together) stay under that owner.
+    .filter((d) => d.together || !admins.has(d.userId));
   const requests = many<FuelRequestRow>(db, 'SELECT * FROM fuel_requests');
   const requestOf = new Map(requests.map((r) => [`${r.fuel_id}:${r.debtor_id}`, r]));
   const shareOf = new Map(
-    computeShares(fuels.map((f) => ({ id: f.id, atUtc: f.at_utc, totalCents: f.total_cents })), drives, activeIds).map((s) => [s.fuelId, s]),
+    computeShares(fuels.map((f) => ({ id: f.id, atUtc: f.at_utc, totalCents: f.total_cents })), drives, payerIds).map((s) => [s.fuelId, s]),
   );
   // The live shares, plus everybody a request was made for who has no live share any more (their drive was
   // deleted or changed, or a fill-up moved the period): without them the request would vanish from the card.
@@ -277,7 +286,9 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
     const hasPaidRequests = requests.some((r) => r.fuel_id === fuel.id && r.paid_at !== null);
     const shares = (listedOf.get(fuel.id) as Allocation[]).map((s): FuelShareDto => {
       const row = requestOf.get(`${fuel.id}:${s.userId}`);
-      const owes = s.userId !== fuel.user_id && (s.cents > 0 || row !== undefined);
+      // An admin owes nothing: no request, no push and no "I have paid" (a request made before this rule
+      // stays visible on the fueler's card, where it can still be marked paid or unpaid).
+      const owes = s.userId !== fuel.user_id && !admins.has(s.userId) && (s.cents > 0 || row !== undefined);
       const c = carry.get(carryKey(fuel.id, s.userId));
       const carried = c?.carriedCents ?? 0;
       const due = c?.dueCents ?? 0;
@@ -478,7 +489,8 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
       ).lastInsertRowid;
     });
     const created = view(actor, id);
-    ctx.log({ event: 'fuel.created', id, by: actor.id, userId });
+    // shares: how many people the cost was split over (0 when nobody pays, for example a household of admins).
+    ctx.log({ event: 'fuel.created', id, by: actor.id, userId, shares: created.shares.length, equalSplit: created.equalSplit });
     // Everybody who owes money hears about it. Fire and forget: the fill-up is saved, so a slow or
     // broken push service can neither delay nor fail this answer.
     notifier?.fuelCreated(created);

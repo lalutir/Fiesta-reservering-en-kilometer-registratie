@@ -100,7 +100,7 @@
  * @property {string} note
  * @property {{ from: string | null, to: string }} period
  * @property {number} totalKm
- * @property {number} [togetherKm] of totalKm: driven together, split equally over everybody
+ * @property {number} [togetherKm] of totalKm: driven together, split in the same ratio as the personal kilometres
  * @property {boolean} equalSplit
  * @property {boolean} firstInData
  * @property {FuelShare[]} shares

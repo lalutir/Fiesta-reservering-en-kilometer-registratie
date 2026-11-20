@@ -365,7 +365,7 @@ export async function render(app, route) {
           h('h3', { text: S.usage.kmTotals }),
           h('ul', { class: 'totals' }, [
             summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.me : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
-            // The shared pool is not anybody's: it is shown on its own line (split equally when fuel is paid).
+            // The shared pool is not anybody's: it is shown on its own line (split in the same ratio as the personal kilometres when fuel is paid).
             summary.together && summary.together.km > 0
               ? h('li', {}, [h('span', { text: S.usage.kmTogetherTotal }), h('span', { text: `${S.usage.km(summary.together.km)} · ${S.usage.trips(summary.together.trips)}` })])
               : null,

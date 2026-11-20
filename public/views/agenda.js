@@ -1,5 +1,6 @@
 import { del, get, post } from '../api.js';
-import { fmtRange, groupByDay, h, kmOwnerLabel, setBusy } from '../dom.js';
+import { VIEWS, calendarHash, clampKey, keyLabel, keysBetween, monthGrid, monthLabel, parseCalendar, reservationDays, stepTarget, viewRange, windowKeys } from '../calendar.js';
+import { fmtRange, groupByDay, h, kmOwnerLabel, localDateKey, setBusy } from '../dom.js';
 import { S, errorText } from '../strings.js';
 
 export const live = true;
@@ -146,20 +147,181 @@ function dayGroups(app, items, past) {
   );
 }
 
+// ------------------------------------------------------------------ calendar views
+// The view and the day live in the hash query (#/?view=week&date=2026-11-16), so the minute refresh,
+// a reload and every action keep them. The date maths is in ../calendar.js; this part only draws.
+
+/**
+ * One button per view, the current one marked. aria-pressed is given as the strings 'true' and 'false':
+ * h() leaves out a false attribute and writes a true one as an empty string, which is neither.
+ * @param {import('../api.js').App} app
+ * @param {import('../calendar.js').CalendarState} state
+ */
+function viewSwitcher(app, state) {
+  return h(
+    'div',
+    { class: 'view-switch', role: 'group', 'aria-label': S.agenda.viewSwitchLabel },
+    VIEWS.map((view) =>
+      h(
+        'button',
+        { class: 'btn', type: 'button', 'aria-pressed': view === state.view ? 'true' : 'false', onclick: () => app.navigate(calendarHash(view, state.anchor)) },
+        S.agenda.views[view],
+      ),
+    ),
+  );
+}
+
+/**
+ * Previous, Today and Next for a calendar view. Previous and Next are disabled when the period they lead to
+ * is completely outside the six-month window; Today stays available.
+ * @param {import('../api.js').App} app
+ * @param {Exclude<import('../calendar.js').ViewName, 'list'>} view
+ * @param {string} anchor
+ * @param {import('../calendar.js').KeyWindow} win
+ * @param {string} today
+ */
+function periodNav(app, view, anchor, win, today) {
+  /** @param {-1 | 1} direction */
+  const step = (direction) => {
+    const target = stepTarget(view, anchor, direction, win);
+    return h(
+      'button',
+      {
+        class: 'btn',
+        type: 'button',
+        disabled: target.disabled,
+        'aria-label': S.agenda.stepLabel[direction < 0 ? 'prev' : 'next'][view],
+        onclick: () => app.navigate(calendarHash(view, target.key)),
+      },
+      direction < 0 ? S.agenda.prev : S.agenda.next,
+    );
+  };
+  return h('div', { class: 'cal-nav' }, [
+    step(-1),
+    h('button', { class: 'btn', type: 'button', onclick: () => app.navigate(calendarHash(view, today)) }, S.agenda.today),
+    step(1),
+  ]);
+}
+
+/**
+ * The reservations per local day for the days from..to: one that spans midnight is on every day it touches.
+ * @param {import('../api.js').Reservation[]} items
+ * @param {string} tz
+ * @param {string} from
+ * @param {string} to
+ * @returns {Map<string, import('../api.js').Reservation[]>}
+ */
+function reservationsByDay(items, tz, from, to) {
+  /** @type {Map<string, import('../api.js').Reservation[]>} */
+  const byDay = new Map();
+  const ordered = [...items].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : a.id - b.id));
+  for (const r of ordered) {
+    for (const key of reservationDays(r, tz, from, to)) {
+      const list = byDay.get(key);
+      if (list) list.push(r);
+      else byDay.set(key, [r]);
+    }
+  }
+  return byDay;
+}
+
+/**
+ * Day, 3 days and Week: one section per local day (inside the window), each with the cards of the
+ * reservations that touch it. The single h2 is the period; landOnView focuses it after a step.
+ * @param {import('../api.js').App} app
+ * @param {'day' | '3days' | 'week'} view
+ * @param {import('../calendar.js').CalendarState} state
+ * @param {import('../api.js').Reservation[]} items
+ * @param {import('../calendar.js').KeyWindow} win
+ * @param {string} today
+ * @param {string} nowIso
+ */
+function daysView(app, view, state, items, win, today, nowIso) {
+  const range = viewRange(view, state.anchor);
+  const keys = keysBetween(clampKey(range.from, win), clampKey(range.to, win));
+  const byDay = reservationsByDay(items, app.tz, keys[0] ?? range.from, keys[keys.length - 1] ?? range.to);
+  const title =
+    view === 'day' ? S.agenda.dayHeading(keyLabel(state.anchor, 'day'), state.anchor === today) : S.agenda.range(keyLabel(range.from, 'date'), keyLabel(range.to, 'date'));
+  return [
+    h('h2', { class: 'cal-title', text: title }),
+    periodNav(app, view, state.anchor, win, today),
+    keys.map((key) => {
+      const list = byDay.get(key) ?? [];
+      return h('section', { class: `day cal-day${key === today ? ' today' : ''}` }, [
+        // A single day is named by the h2 already.
+        view === 'day' ? null : h('h3', { class: 'day-heading', text: S.agenda.dayHeading(keyLabel(key, 'day'), key === today) }),
+        list.length === 0 ? h('p', { class: 'hint', text: S.agenda.nothingThisDay }) : list.map((r) => reservationCard(app, r, r.end < nowIso)),
+      ]);
+    }),
+  ];
+}
+
+/**
+ * Month: a grid of days, Monday first, with the number of reservations on each; a day opens the Day view.
+ * Days of the neighbouring months are shown muted, days outside the window cannot be opened.
+ * @param {import('../api.js').App} app
+ * @param {import('../calendar.js').CalendarState} state
+ * @param {import('../api.js').Reservation[]} items
+ * @param {import('../calendar.js').KeyWindow} win
+ * @param {string} today
+ */
+function monthView(app, state, items, win, today) {
+  const keys = monthGrid(state.anchor).flat();
+  const byDay = reservationsByDay(items, app.tz, keys[0] ?? state.anchor, keys[keys.length - 1] ?? state.anchor);
+  const month = state.anchor.slice(0, 7);
+  const cells = keys.map((key) => {
+    const list = byDay.get(key) ?? [];
+    const pending = list.filter((r) => r.status === 'pending').length;
+    const classes = ['cal-cell'];
+    if (!key.startsWith(month)) classes.push('out');
+    if (key === today) classes.push('today');
+    if (pending > 0) classes.push('has-pending');
+    return h(
+      'button',
+      {
+        class: classes.join(' '),
+        type: 'button',
+        disabled: key < win.min || key > win.max,
+        'aria-label': S.agenda.cellLabel(keyLabel(key, 'day'), key === today, list.length, pending),
+        'aria-current': key === today ? 'date' : false,
+        onclick: () => app.navigate(calendarHash('day', key)),
+      },
+      [h('span', { class: 'cal-num', 'aria-hidden': 'true', text: String(Number(key.slice(8))) }), list.length > 0 ? h('span', { class: 'cal-count', 'aria-hidden': 'true', text: String(list.length) }) : null],
+    );
+  });
+  return [
+    h('h2', { class: 'cal-title', text: monthLabel(state.anchor) }),
+    periodNav(app, 'month', state.anchor, win, today),
+    h('div', { class: 'cal-grid' }, [S.agenda.weekdays.map((d) => h('div', { class: 'cal-head', 'aria-hidden': 'true', text: d })), cells]),
+    h('p', { class: 'hint', text: S.agenda.monthHint }),
+  ];
+}
+
 /**
  * @param {import('../api.js').App} app
+ * @param {{ query?: URLSearchParams }} [route] the hash route; its query holds view and date
  * @returns {Promise<HTMLElement>}
  */
-export async function render(app) {
+export async function render(app, route) {
   /** @type {{ items: import('../api.js').Reservation[] }} */
   const { items: all } = await get('/api/reservations');
   // Declined and expired suggestions live in the inbox, not in the agenda.
   const items = all.filter((r) => r.status === 'confirmed' || r.status === 'pending');
   const nowIso = new Date().toISOString();
+  const win = windowKeys(nowIso, app.tz, app.session.windowMonths);
+  const today = localDateKey(nowIso, app.tz);
+  const state = parseCalendar(route?.query, today, win);
+  const switcher = viewSwitcher(app, state);
+  const windowNote = h('p', { class: 'hint center', text: S.agenda.windowNote(app.session.windowMonths) });
+  const view = state.view;
+  if (view !== 'list') {
+    return h('div', { class: 'agenda calendar' }, [switcher, view === 'month' ? monthView(app, state, items, win, today) : daysView(app, view, state, items, win, today, nowIso), windowNote]);
+  }
   const upcoming = items.filter((r) => r.end >= nowIso);
   // Newest first for what is behind us, oldest first for what is coming.
   const earlier = items.filter((r) => r.end < nowIso).reverse();
   return h('div', { class: 'agenda' }, [
+    switcher,
     h('h2', { text: S.agenda.upcoming }),
     upcoming.length === 0
       ? h('div', { class: 'empty' }, [h('p', { text: S.agenda.nothingUpcoming }), h('a', { class: 'btn primary', href: '#/reserve' }, S.agenda.reserveCta)])
@@ -167,6 +329,6 @@ export async function render(app) {
     earlier.length > 0
       ? h('details', { class: 'earlier' }, [h('summary', { text: `${S.agenda.past} (${earlier.length})` }), dayGroups(app, earlier, true)])
       : null,
-    h('p', { class: 'hint center', text: S.agenda.windowNote(app.session.windowMonths) }),
+    windowNote,
   ]);
 }

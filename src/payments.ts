@@ -35,9 +35,9 @@ export interface PaymentInput {
   /** Kilometres the debtor drove in the period and kilometres everyone drove. */
   km: number;
   kmTotal: number;
-  /** Of kmTotal: driven together, split equally over everybody. Default 0. */
+  /** Of kmTotal: driven together, split in the same ratio as the personal kilometres. Default 0. */
   togetherKm?: number;
-  /** Equal split because nobody drove in the period. */
+  /** Equal split because nobody has personal kilometres in the period (nobody drove, or only together). */
   equalSplit: boolean;
   /** Identifies the fill-up and the debtor to the provider; contains no personal data. */
   reference: string;
@@ -67,10 +67,13 @@ export function requestMessage(input: PaymentInput): string {
   const together = input.togetherKm ?? 0;
   const carried = input.carriedCents ?? 0;
   const share = input.shareCents ?? input.amountCents;
+  // The pool is split in the same ratio as the personal kilometres, so the ratio is told against the personal total.
   const why = input.equalSplit
-    ? 'nobody drove in that period, so the cost is split equally'
+    ? together > 0
+      ? `only ${together} km were driven together in that period, so the cost is split equally`
+      : 'no kilometres count in that period, so the cost is split equally'
     : together > 0
-      ? `${input.km} km of your own and an equal part of ${together} km driven together, ${input.kmTotal} km in all`
+      ? `${input.km} of ${input.kmTotal - together} km driven; the ${together} km driven together are split in the same ratio`
       : `${input.km} of ${input.kmTotal} km driven`;
   // Without anything carried the text is exactly what it always was.
   const earlier =

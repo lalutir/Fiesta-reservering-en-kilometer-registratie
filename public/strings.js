@@ -59,6 +59,25 @@ export const S = {
     withdrawn: 'Suggestion withdrawn.',
     approved: 'Approved. It is now in the agenda.',
     declined: 'Declined.',
+    // The view switcher and the calendar views (Day, 3 days, Week, Month).
+    viewSwitchLabel: 'Agenda view',
+    views: { list: 'List', day: 'Day', '3days': '3 days', week: 'Week', month: 'Month' },
+    prev: 'Previous',
+    today: 'Today',
+    next: 'Next',
+    // What Previous and Next step by, for a screen reader ("Previous week").
+    stepLabel: {
+      prev: { day: 'Previous day', '3days': 'Previous 3 days', week: 'Previous week', month: 'Previous month' },
+      next: { day: 'Next day', '3days': 'Next 3 days', week: 'Next week', month: 'Next month' },
+    },
+    weekdays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    nothingThisDay: 'No reservations.',
+    dayHeading: (/** @type {string} */ label, /** @type {boolean} */ isToday) => (isToday ? `${label} (today)` : label),
+    range: (/** @type {string} */ from, /** @type {string} */ to) => `${from} – ${to}`,
+    // One day of the month grid, as a screen reader reads it: the full date, today, how many reservations and how many wait.
+    cellLabel: (/** @type {string} */ label, /** @type {boolean} */ isToday, /** @type {number} */ count, /** @type {number} */ pending) =>
+      `${label}${isToday ? ', today' : ''}, ${count === 0 ? 'no reservations' : count === 1 ? '1 reservation' : `${count} reservations`}${pending > 0 ? `, ${pending} waiting for an answer` : ''}`,
+    monthHint: 'Tap a day to open it. The number is how many reservations the day has; a dashed outline means a suggestion is waiting for an answer.',
   },
 
   status: {
@@ -131,7 +150,7 @@ export const S = {
     km: (/** @type {number} */ n) => `${n} km`,
     trips: (/** @type {number} */ n) => (n === 1 ? '1 drive' : `${n} drives`),
     kmNote: 'Kilometres count only for finished drives with both odometer readings.',
-    // Kilometres that are not the driver's own: someone else's, or "together" (split equally over everybody).
+    // Kilometres that are not the driver's own: someone else's, or "together" (split in the same ratio as everybody's own kilometres).
     kmNotMine: "I drove, but the kilometres aren't mine",
     kmWhose: 'Whose kilometres are these?',
     kmChooseTogether: 'Together',
@@ -141,7 +160,7 @@ export const S = {
     kmOwnerPerson: (/** @type {string} */ name) => `Kilometres for ${name}`,
     kmOwnerTogether: 'Kilometres together',
     kmTogetherTotal: 'Together',
-    kmTogetherNote: 'Kilometres driven together are split equally over everybody when fuel is paid.',
+    kmTogetherNote: "Kilometres driven together are split in the same ratio as each person's own kilometres when fuel is paid.",
     fuelLink: 'Fuel and costs',
     fuelLocked: 'A payment request was made for the fill-up this drive belongs to, so only an admin can change it.',
     overlap: (/** @type {string} */ who, /** @type {string} */ when) => `That overlaps a drive by ${who} (${when}).`,
@@ -202,8 +221,10 @@ export const S = {
     perLitre: (/** @type {string} */ price) => `EUR ${price} per litre`,
     periodFirst: 'Pays for all drives before this fill-up.',
     periodBetween: (/** @type {string} */ from, /** @type {string} */ to) => `Pays for drives that ended between ${from} and ${to}.`,
-    equalSplit: 'Nobody drove in this period, so the cost is split equally.',
-    togetherNote: (/** @type {number} */ km) => `Includes ${km} km driven together, split equally over everybody.`,
+    equalSplit: 'No kilometres count in this period, so the cost is split equally.',
+    equalSplitTogether: 'Only kilometres driven together count in this period, so the cost is split equally.',
+    togetherNote: (/** @type {number} */ km) => `Includes ${km} km driven together, split in the same ratio as the other kilometres.`,
+    adminNote: 'Admins do not pay for fuel: their own kilometres are not counted and they get no share.',
     shareLine: (/** @type {number} */ km, /** @type {string} */ amount) => `${km} km, EUR ${amount}`,
     status: {
       none: 'Not requested',

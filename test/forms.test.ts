@@ -1144,6 +1144,33 @@ test('fill-up card: carried amounts, together kilometres and settled shares are 
   });
 });
 
+test('fill-up card: an equal split says why (nothing counted, or only kilometres driven together), and the pool is described as following the ratio only when kilometres weigh', async () => {
+  const me = makeApp(ANNA);
+  const items = [
+    fuelRow({ id: 7, equalSplit: true, totalKm: 0, togetherKm: 0 }),
+    fuelRow({ id: 6, equalSplit: true, totalKm: 50, togetherKm: 50 }),
+    fuelRow({ id: 5, equalSplit: false, totalKm: 200, togetherKm: 80 }),
+    fuelRow({ id: 4, equalSplit: false, totalKm: 200, togetherKm: 0 }),
+  ];
+  await withClient({ now: NOW, routes: fuelRoutes(items) }, async ({ dom }) => {
+    const page = view(dom, await fuelForm(me));
+    const notes = (id: number): string[] => all(one(page, `article#fuel-${id}`), 'div.sub').map((d) => d.textContent);
+    const has = (id: number, text: string): boolean => notes(id).includes(text);
+    const together80 = S.fuel.togetherNote(80);
+
+    assert.deepEqual([has(7, S.fuel.equalSplit), has(7, S.fuel.equalSplitTogether), has(7, S.fuel.togetherNote(0))], [true, false, false], 'nothing counted');
+    assert.deepEqual([has(6, S.fuel.equalSplit), has(6, S.fuel.equalSplitTogether), has(6, S.fuel.togetherNote(50))], [false, true, false], 'only the pool: an equal split, and no ratio to follow');
+    assert.deepEqual([has(5, S.fuel.equalSplit), has(5, S.fuel.equalSplitTogether), has(5, together80)], [false, false, true], 'personal kilometres plus a pool: the pool follows their ratio');
+    assert.deepEqual([has(4, S.fuel.equalSplit), has(4, S.fuel.equalSplitTogether)], [false, false], 'plain kilometres: nothing to explain');
+    assert.equal(notes(4).some((t) => t.includes('together')), false);
+
+    for (const text of [S.fuel.equalSplit, S.fuel.equalSplitTogether, together80, S.usage.kmTogetherNote]) {
+      assert.doesNotMatch(text, /equal part|equally over everybody/, 'no text still says the pool is split equally over everybody');
+    }
+    assert.ok(all(page, 'p.hint').some((p) => p.textContent === S.fuel.adminNote), 'the list says that admins do not pay for fuel');
+  });
+});
+
 // ------------------------------------------------------- the Reminders card
 
 const KEY = 'AQIDBA'; // the bytes 1, 2, 3, 4 in base64url

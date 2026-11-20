@@ -466,8 +466,9 @@ export async function render(app, route) {
       h('div', { class: 'when', text: fmtWhen(f.at, app.tz) }),
       f.note ? h('div', { class: 'note', text: f.note }) : null,
       h('div', { class: 'sub', text: f.firstInData || f.period.from === null ? S.fuel.periodFirst : S.fuel.periodBetween(fmtWhen(f.period.from, app.tz), fmtWhen(f.period.to, app.tz)) }),
-      f.equalSplit ? h('div', { class: 'sub', text: S.fuel.equalSplit }) : null,
-      f.togetherKm ? h('div', { class: 'sub', text: S.fuel.togetherNote(f.togetherKm) }) : null,
+      // Equal split: nobody has personal kilometres in the period (nobody drove, or only together). Otherwise the pool follows the personal ratio.
+      f.equalSplit ? h('div', { class: 'sub', text: f.togetherKm ? S.fuel.equalSplitTogether : S.fuel.equalSplit }) : null,
+      f.togetherKm && !f.equalSplit ? h('div', { class: 'sub', text: S.fuel.togetherNote(f.togetherKm) }) : null,
       h(
         'ul',
         { class: 'shares' },
@@ -548,6 +549,7 @@ export async function render(app, route) {
     balances,
     form,
     h('h2', { text: S.fuel.list }),
+    h('p', { class: 'hint', text: S.fuel.adminNote }),
     data.items.length === 0 ? h('p', { class: 'empty', text: S.fuel.none }) : data.items.map(card),
   ]);
 }
