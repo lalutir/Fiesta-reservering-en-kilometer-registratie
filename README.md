@@ -353,6 +353,8 @@ backups, updates and a monthly cost estimate (about $4-6).
 - Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,
   older reservations without a drive show up as "km to register" until they are cancelled or
   registered.
-- The Docker/Caddy files and the cloud prices have not been run or verified by the authors, and
-  installing on real phones and the phone layout are manual checks (the checklist is in the guide).
+- CI builds the image, runs the `app` service and validates the compose file and `Caddyfile`, but
+  Caddy has not been run with a real domain and certificate, nothing has been deployed to a real
+  server, and the cloud prices are unverified. Installing on real phones and the phone layout are
+  manual checks (the checklist is in the guide).
 - `node:sqlite` is still marked experimental in Node 22; it is confined to `src/db.ts`.

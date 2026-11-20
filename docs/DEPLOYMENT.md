@@ -4,11 +4,13 @@ This guide puts the shared car app on one small cloud server (a "droplet" on
 DigitalOcean, or the equivalent on Hetzner) with automatic HTTPS, a persistent
 SQLite database and nightly backups. Plan on about an hour the first time.
 
-> **Not verified here.** The Docker, Docker Compose and Caddy files in this
-> repository were reviewed but never run by the people who wrote them, and every
-> price below is from memory. Treat the first deployment as a test, follow the
-> smoke checklist at the end, and check the provider's pricing page before you
-> pay for anything.
+> **Partly verified.** On every pull request, CI builds the image, starts the `app`
+> service from `docker-compose.yml` on a throw-away volume, signs in and calls the
+> API, and checks that `docker-compose.yml` and the `Caddyfile` are valid (see
+> "Continuous integration" in the README). Nobody has run the Caddy service with a
+> real domain and certificate, or deployed to a real server, and every price below
+> is from memory. Treat the first deployment as a test, follow the smoke checklist
+> at the end, and check the provider's pricing page before you pay for anything.
 
 What you get:
 
