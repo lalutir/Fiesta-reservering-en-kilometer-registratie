@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 import { defineConfig, globalIgnores } from 'eslint/config';
 
 export default defineConfig([
-  globalIgnores(['dist/', 'node_modules/', 'data/', 'coverage/', '.claude/']),
+  globalIgnores(['dist/', 'node_modules/', 'data/', 'coverage/', '.claude/', 'playwright-report/', 'test-results/']),
   js.configs.recommended,
   {
     files: ['**/*.ts'],

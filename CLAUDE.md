@@ -547,6 +547,126 @@ Defaults taken for ten open questions (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/traffic-tickets-matched-to-driver` (git-excluded). Base commit `fa27079c6cded4ea06b2b62f897e33f141b99c06`.
 <!-- implement:run:traffic-tickets-matched-to-driver:end -->
 
+<!-- implement:run:continuous-integration-github-actions:start -->
+### Continuous integration with GitHub Actions: Linux and Windows checks, Docker job, Playwright browser suite, Dependabot (continuous-integration-github-actions)
+
+Date 2026-11-20. Branch `implement/continuous-integration-github-actions`. Base branch `main`, base commit `a2000d8f48b35fa469ca1ef1c716f6f9f107228f`.
+
+### Request
+
+> Set up proper continuous integration for this GitHub repository. There is no .github/ folder today. `npm run check` only runs when someone remembers it, and the tests have only ever run on Windows. Production is Linux in Docker, and the run logs say the Dockerfile, compose file and Caddyfile were never actually built or run.
+>
+> Requirements:
+> - A workflow on pull_request and on push to main. Use the same Node version as the Dockerfile, with one source of truth (for example .nvmrc, with the Dockerfile reading or matching it). Run `npm ci`, then typecheck, lint, test, build and smoke as separate visible steps. Cache npm, cancel superseded runs, use read-only token permissions, and pin third-party actions to a full SHA with a version comment.
+> - Run on ubuntu-latest and on windows-latest. Anything that fails on Linux for the first time (path separators, line endings, timing) is a real finding. Fix the cause. Never skip or loosen a test.
+> - A Docker job. Build the image, start it with a throwaway data volume and env, wait for /api/health, and run login plus a few API checks against the container. Validate docker-compose.yml with `docker compose config` and the Caddyfile with `caddy validate` (via the Caddy image).
+> - `npm audit --omit=dev` as a step. The server has no runtime dependencies and must keep it that way. Add Dependabot config for npm, docker and github-actions (weekly, grouped).
+> - A committed browser smoke suite. Use Playwright as a devDependency only. Cover login, create a reservation, register km from a reservation card, open History, and load the admin page. Run it at 390 px and 320 px wide. Assert no horizontal scroll, no console errors and no failed requests. Use role- and label-based locators, because the whole frontend will be rebuilt later and the suite is its safety net. Cache the browsers in CI and upload a trace or screenshots on failure.
+> - Document in the README how to run the same checks locally. Do NOT change repo settings (branch protection, secrets) and do NOT add auto-deploy. Put the exact `gh api` command or settings steps for requiring these checks on main in the docs and in your final report, so I can run them myself.
+> - Verify the workflow for real. Lint the YAML (actionlint if available), push the branch and open a draft PR so the workflow runs, and fix until it is green. Report the run URL and the result of each job.
+
+### What was built
+
+`.github/workflows/ci.yml` runs four jobs on every pull request and every push to `main`: `Check (ubuntu-latest)` and `Check (windows-latest)` (npm ci, typecheck, lint, test, build, smoke and `npm audit --omit=dev`, each its own step), `Docker` (lint the workflow, validate compose and Caddyfile, build the image, run the real `app` service on a throw-away volume, sign in and call the API) and `Browser` (Playwright, Chromium, 390 and 320 px). `.nvmrc` (`22.23`) is the Node source and a test ties it to the Dockerfile. It also adds Dependabot, a dev-only Playwright suite, a container check script and a README section with the exact `gh api` command to require the four checks. Nothing is committed, pushed or opened as a PR, and the workflow has not run on GitHub, so Linux, Docker and the browser job are unproven. `src/`, `public/` and the schema are unchanged; git shows 11 modified tracked files (+222/-14) and 10 untracked files before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.7): one workflow, one text-based policy test (`test/ci.test.ts`), Playwright's own `webServer`, no compose override. It meets every acceptance criterion with the smallest surface.
+- Rejected: idiomatic (a node:test file that keeps files in agreement, smoke-style launchers): more launcher code for the same coverage. Robust (a server per browser project, CI compose override): bigger diff for little extra proof.
+- Rejected: loopback-port compose override (the problem statement named one): needs an extra file, the container bridge IP works on GitHub Linux runners; it stays a documented fallback.
+- Rejected: a fourth "Workflow lint" job (a fifth required-check name; actionlint is the first `Docker` step), a Node version matrix, coverage service, code scanning (out of scope).
+
+### How it works
+
+Start with `.github/workflows/ci.yml`, then `test/ci.test.ts` (it pins the rules), then README "Continuous integration".
+
+- Rules: triggers `pull_request` and push to `main`; `permissions: contents: read`; concurrency cancels superseded PR runs only; four actions pinned to full SHAs with a version comment (checkout v7.0.1, setup-node v7.1.0, cache v6.1.0, upload-artifact v7.0.2); `persist-credentials: false`; no secrets, no `${{ }}` in `run:`, no deploy workflow.
+- Node: setup-node reads `.nvmrc`; the Docker job builds with `--build-arg NODE_VERSION=$(cat .nvmrc)` and compares `node -v` in the image; the Dockerfile keeps `ARG NODE_VERSION=22.23` so `docker compose build` on the droplet is unchanged; a test fails on drift.
+- `Docker`: actionlint (digest-pinned image), `.env` from `.env.example` with a random masked password, `docker compose config --quiet`, `caddy validate` with the tag read from `docker-compose.yml` (Caddy never starts), build, `up --wait` for `app` only (project `shared-car-ci`, no published port, reached by container IP), `scripts/container-check.mjs` (health, anonymous 401, sign-in, `me`, reservation 201, overlap 409), non-root, read-only root and writable `/data` checks, `compose stop` must exit 0, logs on failure, `down -v` in an `always()` step.
+- `Browser`: `npm run e2e` builds, starts the built server on a temp data dir via Playwright `webServer`, runs two projects (390x844, 320x568): sign in, reserve, Register km on the card, History, `/admin/`. A guard fixture fails on console or page errors, failed requests, any response of 400 or more and sideways scroll, with one allowed `GET /api/auth/me` 401 before sign-in. Locators are `getByRole`, `getByLabel`, `getByText` only. Browsers are cached by Playwright version; report, traces and screenshots upload on failure.
+- Dependencies: `@playwright/test` is a devDependency only; `test/ci.test.ts` fails if `package.json` gains a `dependencies` key or the lock file a non-dev package.
+- Required checks: README "Requiring the checks before a merge" holds `gh api -X PUT repos/lalutir/Fiesta-reservering-en-kilometer-registratie/branches/main/protection --input -` with contexts `Check (ubuntu-latest)`, `Check (windows-latest)`, `Docker`, `Browser` (bash and PowerShell). The owner runs it; it was not run here.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | added | The workflow: `Check` matrix, `Docker`, `Browser` (212 lines) |
+| `.github/dependabot.yml` | added | Weekly grouped updates: npm (dev), docker (Node ignored), docker-compose (Caddy), github-actions |
+| `.nvmrc` | added | `22.23`, the Node source for CI |
+| `scripts/container-check.mjs` | added | Dependency-free health, sign-in and API checks for the Docker job (82 lines) |
+| `e2e/` (4 files) | added | `playwright.config.ts`, `fixtures.ts` (guard), `app.spec.ts` (journey), `guard.spec.ts` (tests of the guard) |
+| `test/ci.test.ts`, `test/container-check.test.ts` | added | Policy tests on the CI files (586 lines); the container check against the real app and a faulty stand-in |
+| `package.json`, `package-lock.json` | modified | `@playwright/test` ^1.65.1 in devDependencies, `e2e` script; lock +3 dev packages |
+| `README.md` | modified | "Continuous integration": local commands, Node pin, Docker, required-checks command (+144/-1) |
+| `Dockerfile`, `docs/DEPLOYMENT.md` | modified | Comment and section 13 wording only (`.nvmrc`, drift test) |
+| `.gitattributes`, `.gitignore`, `.dockerignore`, `eslint.config.mjs`, `tsconfig.json` | modified | `.nvmrc` kept LF; `playwright-report/` and `test-results/` ignored; `e2e` in tsconfig |
+| `test/deploy.test.ts` | modified | Stale "not in CI" comment; two `SKIP_DIRS` entries |
+| `CLAUDE.md` | modified | This entry |
+
+### How to run and test
+
+Windows 11, Node 22.23.1, last test stage on the final tree. This documentation step ran no test command.
+
+- `npm run check` exit 0: typecheck and lint clean, `npm test` 628 of 628 (577 on `main`, 595 after build), build clean, `npm run smoke` 13 of 13. Three more `npm test` runs and `TZ=UTC npm test`: 628 of 628, 0 skipped, 0 todo.
+- `npm run e2e` 46 of 46 (2 journeys at 390 and 320 px, 44 guard checks), also with `TZ=UTC`. `npm audit --omit=dev`: 0 vulnerabilities.
+- The test stage's first `npm run check` exited non-zero: 5 new fault tests got a Windows crash code (3221226505, `UV_HANDLE_CLOSING`) from `process.exit(1)` in `scripts/container-check.mjs`; fixed with `process.exitCode = 1`.
+- Mutation checks, all killed, files restored and SHA-256 compared: 80 of 80 (14 container check, 51 CI/docs/config, 15 browser guard). README "Continuous integration" lists the local command for every CI step.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| DevOps and delivery | senior-devops | No | Two edits: the `.env` step appends `COOKIE_SECURE` with `printf '\n...'`; the Dependabot docker entry ignores `node`. Re-checked SHAs, digest and lock file |
+| Security | security-review | No | No finding at confidence 8 or higher; no change (read-through, filtering inline) |
+| Simplicity | simplify | No | Seven behaviour-neutral edits (e2e, `test/ci.test.ts`, `ci.yml`, Dependabot comments, `container-check.mjs`, docs); single inline pass |
+
+No UI, backend or data specialist ran (no ledger entry).
+
+### Verification
+
+Verified (ran and saw pass): the commands above; the four action SHAs against their tags with `gh api`; the actionlint image digest on Docker Hub; actionlint 1.7.12 with shellcheck 0.11.0 on `ci.yml` (build stage, no findings); lock file 104 packages, none non-dev, none OS-specific; relative imports and links match file-name case; `gh api .../branches/main/protection` still 404; no repository setting or secret changed.
+
+NOT verified:
+- Anything on GitHub: no push, no draft PR, no run URL, no per-job result. "Fix until green" and "report the run URL and each job" are not done; they belong to the later ship steps.
+- Linux: the test suite, case-sensitive paths, timers on 2-core runners. Nothing has failed on Linux because nothing has run there.
+- `Docker` job (Docker is not installed locally): image build, `compose up --wait`, container-IP reachability from the runner, `caddy validate`, hardening checks (`stat -c %u /proc/1`), SIGTERM exit 0, production scrypt cost in 256 MB.
+- `Browser` job on a runner (apt libraries, browser cache, artifact upload, Linux fonts at 320 px); the Windows runner; Dependabot parsing the config.
+- actionlint on the final `ci.yml`: devops and simplify edited it after the build stage's run, and the later stages could not run the binary (permission layer refused). No YAML parser is installed.
+
+Test confidence: high for what the local commands cover (ledger); it does not cover the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 18 findings listed (the concurrency comment twice), 0 confirmed, verdict pass in all three, no review fix.
+
+Remaining minor notes (not fixed): `ci.yml` and the README say pushes to `main` are never cancelled, but GitHub also cancels a pending run in the same group; `persist-credentials: false` and the `COMPOSE_PROJECT_NAME` value are not pinned by a test; the README Docker block overwrites an existing `.env`, is bash only and builds `shared-car-app`, an image name a real install also uses; `test/ci.test.ts` has two layers that repeat topics and some assertions pin formatting despite its header; the env-clearing list and `HOUSEHOLD_TZ` exist in both `scripts/smoke.mjs` and `e2e/`; actionlint runs inside the job named `Docker`; `stat -c %u /proc/1` can show root for a non-dumpable process and the read-only `exec` check passes if `exec` fails for any reason; the artifact upload uses `failure()`, so a cancelled run uploads nothing; the e2e slot and `networkidle` waits can flake near the autumn clock change; a README layout line suggests `.nvmrc` is in `.github/`; scope is 10 new files against about 8 planned, plus extra Docker hardening and SIGTERM steps.
+
+### Assumptions and open questions
+
+Defaults taken (none scope-changing; no one was asked):
+- The browser suite runs on ubuntu-latest with Chromium only; the check matrix runs on both OSes. `npm run e2e` stays separate from `npm run check` (it needs browsers).
+- Dependabot also watches `docker-compose.yml` (the Caddy pin) and ignores `node`, so no PR can bump the Dockerfile ARG alone and fail the drift test.
+- The logged-out `GET /api/auth/me` 401 is the single allowed error; the app is unchanged.
+- Explicit job names are the required-check names; the owner applies the `gh api` command. The repo is public, so hosted runners cost nothing; no secrets are used.
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, the test stage ran once. Caveat: the test agent reported a pass although 2 commands exited non-zero (the first `npm run check`, before its fix, and the deliberate `gh api` 404 check on branch protection).
+- Ledger and git disagree on the branch: the ledger names `implement/continuous-integration-github-actions`, but the work sits in the worktree `.claude/worktrees/continuous-integration-github-actions` on a detached HEAD at the base commit; the branch exists in the main checkout at the same commit with no commits. All changes are uncommitted; the pipeline must commit from the worktree and push `HEAD:implement/continuous-integration-github-actions`.
+- Tests agree: 577 to 628 is 35 declarations in `test/ci.test.ts` (18 build, 17 test stage) plus 16 in `test/container-check.test.ts`; `e2e/guard.spec.ts` has 22 (14 declared, 8 from a loop). Only `test/deploy.test.ts` among existing tests changed (comment, `SKIP_DIRS`); no skip, todo or only was added. New tests passed on their first run; mutation checks, not a red run on the untouched tree, show they can fail.
+- Deviations: the problem statement asked for a CI compose override with a loopback port, the build uses the container IP; actionlint is the first `Docker` step; the container check runs at production scrypt cost; hardening, SIGTERM and image `node -v` steps go beyond the criteria.
+- Only the simplify stage says it ran the browser suite with an installed Chromium through `E2E_CHROMIUM_PATH`; the other records do not name the browser. The Windows crash cause is circumstantial (not reproduced outside one full-suite run).
+- No `01-` to `05-` audit files (`01-analysis.md` was refused by the harness; its content is in the ledger), no `07-simplify.md`, no `09-` file. `npm audit` over dev dependencies shows 7 moderate (a `minimatch` range), pre-existing and untouched. Docker, Linux and the GitHub runners were not exercised (see Verification).
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3.
+- Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/continuous-integration-github-actions` (git-excluded). Base commit `a2000d8f48b35fa469ca1ef1c716f6f9f107228f`.
+<!-- implement:run:continuous-integration-github-actions:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

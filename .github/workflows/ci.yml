@@ -1,0 +1,212 @@
+# Continuous integration. The README ("Continuous integration") lists each check with the
+# command that runs it on your own machine. Job names are what branch protection refers to
+# ("Check (ubuntu-latest)", "Check (windows-latest)", "Docker", "Browser"): rename one only
+# together with that setting.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The workflow only reads the repository. It has no secrets and deploys nothing.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run that is still going for it. Pushes to main are
+# never cancelled, so every merge commit keeps its own result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # Production is Linux and development is Windows: a failure on one must not hide the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Typecheck (server and browser code)
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test the built server
+        run: npm run smoke
+
+      # The server has no runtime dependencies and must keep it that way (test/ci.test.ts guards that).
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+  docker:
+    name: Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Never the names a real deployment uses: nothing here can touch a droplet's containers or volumes.
+      COMPOSE_PROJECT_NAME: shared-car-ci
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Pinned by digest; Dependabot does not update this one, bump it with the version comment.
+      - name: Lint workflows (actionlint)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color # actionlint 1.7.12
+
+      - name: Create a throw-away .env from .env.example
+        run: |
+          cp .env.example .env
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=$password|" .env
+          sed -i 's|^PUSH_ENABLED=.*|PUSH_ENABLED=false|' .env
+          # Plain http to a container: the session cookie cannot be Secure here. The leading newline
+          # keeps the setting off the last line of .env.example, which is a comment.
+          printf '\nCOOKIE_SECURE=false\n' >> .env
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
+      # Validation only: Caddy is never started, so no port is opened and no certificate is requested.
+      - name: Validate the Caddyfile (with the Caddy image from docker-compose.yml)
+        run: |
+          image="$(sed -n 's/^ *image: *\(caddy:[^ ]*\).*/\1/p' docker-compose.yml)"
+          test -n "$image"
+          domain="$(sed -n 's/^DOMAIN=//p' .env)"
+          echo "Validating the Caddyfile with $image"
+          docker run --rm -e "DOMAIN=$domain" -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      # The Node version comes from .nvmrc, the same file setup-node reads above.
+      - name: Build the app image
+        run: docker compose build --build-arg "NODE_VERSION=$(cat .nvmrc)" app
+
+      - name: The image runs the Node version from .nvmrc
+        run: |
+          expected="v$(cat .nvmrc)."
+          actual="$(docker compose run --rm --no-deps -T --entrypoint node app -v | tail -n 1)"
+          echo "image has $actual, .nvmrc asks for $expected*"
+          case "$actual" in "$expected"*) ;; *) echo "::error::the image runs $actual, not the version in .nvmrc"; exit 1 ;; esac
+
+      # Only the app service: on a new, empty volume (it is removed again at the end).
+      - name: Start the app and wait until it is healthy
+        run: docker compose up -d --no-build --wait --wait-timeout 120 app
+
+      - name: Health, sign-in and API checks against the container
+        run: |
+          id="$(docker compose ps -q app)"
+          ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$id")"
+          echo "The app container is at $ip"
+          ADMIN_USERNAME="$(sed -n 's/^ADMIN_USERNAME=//p' .env)" \
+          ADMIN_PASSWORD="$(sed -n 's/^ADMIN_PASSWORD=//p' .env)" \
+          node scripts/container-check.mjs "http://$ip:3000"
+
+      - name: Container hardening (non-root, read-only root, writable data volume)
+        run: |
+          uid="$(docker compose exec -T app stat -c %u /proc/1)"
+          echo "the app process runs as uid $uid"
+          test "$uid" != 0
+          docker compose exec -T app sh -c 'touch /data/.writable && rm /data/.writable'
+          # /home/node belongs to the app user and lives on the root filesystem, so only read_only can
+          # stop a write there (a root-owned path such as /app is refused by file permissions alone).
+          rootfs_ro="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$(docker compose ps -q app)")"
+          echo "read-only root filesystem: $rootfs_ro"
+          test "$rootfs_ro" = true
+          if docker compose exec -T app sh -c 'touch /home/node/not-writable' 2>/dev/null; then
+            echo "::error::the root filesystem of the app container is writable"
+            exit 1
+          fi
+
+      - name: The container stops cleanly on SIGTERM
+        run: |
+          docker compose stop -t 10 app
+          code="$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -a -q app)")"
+          echo "exit code after docker compose stop: $code"
+          test "$code" = 0
+
+      - name: Show the container logs
+        if: failure()
+        run: docker compose logs --no-color --tail 200 app
+
+      - name: Remove the containers and the throw-away volume
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  browser:
+    name: Browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      # Downloads Chromium only when the cache above did not bring it; the system libraries (apt) are
+      # not part of the cache and are installed every run.
+      - name: Install Chromium and its system libraries
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser suite at 390 px and 320 px
+        run: npm run e2e
+
+      - name: Upload the report, traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

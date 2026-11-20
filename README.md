@@ -143,6 +143,7 @@ Data lives in `data/` (git-ignored).
 | `npm run build` | Compile `src/` and `shared/` to `dist/` |
 | `npm run smoke` | Build, start the built server on a free port and check it over HTTP |
 | `npm run check` | typecheck, lint, test, build and smoke in one go |
+| `npm run e2e` | Browser suite (Playwright) at 390 and 320 px; run `npx playwright install chromium` once first |
 | `npm run cli -- <command>` | Operator commands: `create-admin`, `reset-password`, `backup`, `restore`, `purge` |
 | `npm run icons` | Regenerate the PWA icons in `public/icons/` |
 
@@ -164,10 +165,152 @@ shared/     time.js: time zone, DST and calendar-month maths, used by the server
 public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views)
             and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
-scripts/    icon generator and the built-output smoke test
+scripts/    icon generator, the built-output smoke test and the container check CI runs
+e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
+.github/    the CI workflow and Dependabot config (`.nvmrc` is the Node version CI uses)
 docs/       DEPLOYMENT.md
 Dockerfile, docker-compose.yml, Caddyfile   production setup
 ```
+
+## Continuous integration
+
+Every pull request and every push to `main` runs `.github/workflows/ci.yml` on GitHub Actions.
+It has four jobs; the names below are what GitHub shows and what branch protection refers to.
+
+| Job | What it does | The same thing on your machine |
+| --- | --- | --- |
+| `Check (ubuntu-latest)` and `Check (windows-latest)` | On Linux (what production runs on) **and** Windows: `npm ci`, typecheck, lint, test, build, smoke and `npm audit --omit=dev`, each as its own step | `npm ci`, then `npm run check`, then `npm audit --omit=dev` |
+| `Docker` | Lints the workflow (actionlint), validates `docker-compose.yml` and the `Caddyfile`, builds the image, starts the real `app` service on a throw-away volume, waits until it is healthy, then signs in and calls the API against the container (`scripts/container-check.mjs`), checks it runs as a non-root user with a read-only root and stops cleanly, and removes everything | see "Docker" below |
+| `Browser` | `npm run e2e`: Chromium at 390 px and 320 px wide, with the browsers cached between runs. A failed run uploads the report, traces and screenshots as an artifact | see "Browser suite" below |
+
+What CI will not do: deploy anything, use a secret or change a repository setting. The token is
+read-only (`permissions: contents: read`), every action is pinned to a full commit SHA with its
+version in a comment, and a new push to a pull request cancels the run that is still going for
+the old one. Dependabot (`.github/dependabot.yml`) opens one grouped pull request per week for
+npm, Docker, the Compose file and the actions. `test/ci.test.ts` fails when one of these rules
+is broken by a later edit.
+
+### One Node version
+
+`.nvmrc` holds the Node version (a minor, such as `22.23`). CI installs exactly that, and the
+`Docker` job builds the image with it and checks `node -v` inside the image. The `Dockerfile`
+keeps the same number as its `ARG NODE_VERSION` default, so `docker compose build` on the droplet
+needs no extra argument; `test/ci.test.ts` fails when the two differ. To move to a newer Node
+minor, change both and follow `docs/DEPLOYMENT.md` section 13. With `nvm` or `fnm`, `nvm use`
+in the project folder picks the same version.
+
+### The gate (Linux and Windows)
+
+```
+npm ci
+npm run check                # typecheck, lint, test, build, smoke
+npm audit --omit=dev         # the server must stay free of runtime dependencies
+```
+
+The suite also runs on Linux in CI, so path, line-ending and timing mistakes that Windows hides
+show up there. Production dependencies must stay empty: `package.json` has no `dependencies`
+key and every package in the lock file is a development tool (`test/ci.test.ts` checks that).
+
+### Browser suite
+
+```
+npx playwright install chromium     # once; downloads the browser that matches Playwright's version
+npm run e2e                         # builds, starts the built server on a throw-away data folder, runs the suite
+npx playwright show-report          # after a failure: the report with traces and screenshots
+```
+
+`e2e/` holds the suite. It signs in, creates a reservation, registers the kilometres from the
+reservation card, opens History and loads `/admin/`, once at 390 px and once at 320 px wide. In
+every step the page must not scroll sideways, and the whole run must have no console errors,
+uncaught errors, failed requests or responses with status 400 and up. The one exception is the
+`401` of `GET /api/auth/me` before sign-in (that is how the app learns it must show the sign-in
+screen); it is allowed once per page. Elements are found with `getByRole`, `getByLabel` and
+`getByText` only, never with CSS or XPath, so the suite keeps working when the frontend is rebuilt
+as long as people still read the same words; the words are in one `UI` constant in
+`e2e/app.spec.ts`. `e2e/guard.spec.ts` tests that safety net itself: it makes a page misbehave
+in one way at a time (a console error, an uncaught error, a failed request, a 4xx or 5xx, a
+second `auth/me` probe, sideways scrolling) and expects each one to be reported, so the journey
+cannot stay green because the guard went quiet. `scripts/container-check.mjs`, the check the
+`Docker` job runs against the container, is tested the same way by `test/container-check.test.ts`
+(inside `npm test`): it must pass against the real app and fail, naming the check, when the
+server breaks one promise.
+
+The suite uses its own port (4173) and data folder. If the browser Playwright wants cannot be
+installed, `E2E_CHROMIUM_PATH` can point at a Chromium or Chrome you already have (a local escape
+hatch, never set in CI).
+
+### Docker
+
+Needs Docker. The commands use their own compose project name, so `down -v` cannot touch the
+volume of a real installation on the same machine.
+
+```bash
+export COMPOSE_PROJECT_NAME=shared-car-ci
+cp .env.example .env     # then in .env: ADMIN_PASSWORD=<a long random password>, COOKIE_SECURE=false, PUSH_ENABLED=false
+docker compose config --quiet
+docker run --rm -e DOMAIN=example.com -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11-alpine \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile     # use the image tag in docker-compose.yml
+docker compose build --build-arg "NODE_VERSION=$(cat .nvmrc)" app
+docker compose up -d --no-build --wait app                             # only the app, never Caddy
+docker run --rm --network shared-car-ci_default -v "$PWD/scripts:/checks:ro" \
+  -e ADMIN_USERNAME=admin -e ADMIN_PASSWORD="<the password from .env>" \
+  "node:$(cat .nvmrc)-alpine" node /checks/container-check.mjs http://app:3000
+docker compose down -v --remove-orphans                                # removes the throw-away volume
+```
+
+On a Linux machine the container can also be reached at its own address (CI does that):
+`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q app)"`.
+The workflow itself can be checked with
+`docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color`. CI pins that image by
+digest; Dependabot does not update it, so bump it by hand.
+
+### Requiring the checks before a merge
+
+Nothing in this repository changes repository settings: the checks only *run*. To make GitHub
+refuse a merge into `main` until all four are green, the owner runs this once (it needs admin
+rights on the repository, and the four names only appear in GitHub's list after the workflow
+has run once):
+
+```bash
+gh api -X PUT repos/lalutir/Fiesta-reservering-en-kilometer-registratie/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": false,
+    "contexts": ["Check (ubuntu-latest)", "Check (windows-latest)", "Docker", "Browser"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+JSON
+```
+
+The same in PowerShell:
+
+```powershell
+@'
+{
+  "required_status_checks": {
+    "strict": false,
+    "contexts": ["Check (ubuntu-latest)", "Check (windows-latest)", "Docker", "Browser"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+'@ | gh api -X PUT repos/lalutir/Fiesta-reservering-en-kilometer-registratie/branches/main/protection --input -
+```
+
+`enforce_admins: false` lets the owner still merge in an emergency; `strict: false` does not
+force a branch to be up to date before it can merge. Check the result with
+`gh api repos/lalutir/Fiesta-reservering-en-kilometer-registratie/branches/main/protection/required_status_checks --jq .contexts`
+(before the command above the protection endpoint answers `404 Branch not protected`). To undo:
+`gh api -X DELETE repos/lalutir/Fiesta-reservering-en-kilometer-registratie/branches/main/protection`.
+
+Without the command: *Settings > Rules > Rulesets > New ruleset > New branch ruleset*, target the
+default branch, switch on **Require status checks to pass**, add `Check (ubuntu-latest)`,
+`Check (windows-latest)`, `Docker` and `Browser`, and save (or *Settings > Branches > Add branch
+protection rule* for `main` with **Require status checks to pass before merging**).
 
 ## Deploying
 
