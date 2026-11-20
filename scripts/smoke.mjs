@@ -260,6 +260,38 @@ try {
     const after = await (await fetch(`${base}/api/fuel`, { headers: { Cookie: benCookie } })).json();
     expect(after.balances.length === 0, `balances after paying ${JSON.stringify(after.balances)}`);
   });
+  // Relies on the two drives the previous check logged: 10 to 9 hours ago (the admin's own kilometres)
+  // and 8 to 7 hours ago (the admin drove, the kilometres are Ben's).
+  await check('a traffic ticket is matched to whoever drove at that moment, also when the kilometres are someone else\'s, and the list is newest first', async () => {
+    const json = { 'Content-Type': 'application/json', Cookie: cookie };
+    const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+    expect((await fetch(`${base}/api/tickets`)).status === 401, 'anonymous gets 401');
+    const adminId = (await (await fetch(`${base}/api/auth/me`, { headers: { Cookie: cookie } })).json()).user.id;
+    const add = async (hours, extra = {}) => {
+      const res = await fetch(`${base}/api/tickets`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(hours), ...extra }) });
+      expect(res.status === 201, `ticket ${hours} hours ago gave ${res.status}`);
+      return (await res.json()).ticket;
+    };
+
+    const own = await add(9.5, { amountCents: 7500, reason: 'Speeding' });
+    expect(own.driver?.id === adminId && own.basis === 'drive', `inside the admin's own drive: ${JSON.stringify([own.driver, own.basis])}`);
+    expect(own.amountCents === 7500 && own.reason === 'Speeding', 'price and reason are kept');
+    const forBen = await add(7.5);
+    expect(forBen.driver?.id === adminId && forBen.basis === 'drive', `the admin drove Ben's kilometres: ${JSON.stringify([forBen.driver, forBen.basis])}`);
+    expect(forBen.amountCents === null && forBen.reason === '', 'only the time is required');
+    const nobody = await add(5);
+    expect(nobody.driver === null && nobody.basis === 'none', `no drive or reservation: ${JSON.stringify([nobody.driver, nobody.basis])}`);
+
+    const bad = await fetch(`${base}/api/tickets`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(-2) }) });
+    expect(bad.status === 422 && (await bad.json()).error.fields.at === 'in_future', `a ticket in the future gave ${bad.status}`);
+
+    const list = (await (await fetch(`${base}/api/tickets`, { headers: { Cookie: cookie } })).json()).items;
+    expect(list.map((t) => t.id).join() === [nobody.id, forBen.id, own.id].join(), `newest first: ${list.map((t) => t.id)}`);
+
+    expect((await fetch(`${base}/api/tickets/${nobody.id}`, { method: 'DELETE', headers: json })).status === 204, 'delete');
+    const left = (await (await fetch(`${base}/api/tickets`, { headers: { Cookie: cookie } })).json()).items;
+    expect(left.length === 2, `${left.length} tickets left after the delete`);
+  });
 } catch (err) {
   failures.push('startup');
   console.log(`  FAIL startup: ${err instanceof Error ? err.message : err}`);

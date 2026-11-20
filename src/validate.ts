@@ -173,6 +173,20 @@ export function assertInsideWindow(startIso: string, endIso: string, now: Date, 
   failIfAny(fields, 'outside_window');
 }
 
+/** How far past `now` a time may lie and still count as "just now" (clock drift between phone and server). */
+export const FUTURE_SLACK_MS = 5 * 60_000;
+
+/**
+ * The time of something that already happened (a fill-up, a ticket): not in the future beyond clock
+ * slack, and inside the window around `now` (both ends inclusive). The two failures are told apart:
+ * { at: 'in_future' } and { at: 'outside_window' } with the top-level code outside_window.
+ */
+export function assertPastInsideWindow(at: string, now: Date, tz: string, months: number): void {
+  if (Date.parse(at) > now.getTime() + FUTURE_SLACK_MS) throw new ValidationError({ at: 'in_future' });
+  const bounds = windowBounds(now, tz, months);
+  if (at < bounds.from || at > bounds.to) throw new ValidationError({ at: 'outside_window' }, 'outside_window');
+}
+
 /** Clamp an optional [from, to] query range to the window. */
 export function clampRange(
   fromRaw: string | null,

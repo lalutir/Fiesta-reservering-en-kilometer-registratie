@@ -162,6 +162,7 @@ export const S = {
     kmTogetherTotal: 'Together',
     kmTogetherNote: "Kilometres driven together are split in the same ratio as each person's own kilometres when fuel is paid.",
     fuelLink: 'Fuel and costs',
+    ticketsLink: 'Traffic tickets',
     fuelLocked: 'A payment request was made for the fill-up this drive belongs to, so only an admin can change it.',
     overlap: (/** @type {string} */ who, /** @type {string} */ when) => `That overlaps a drive by ${who} (${when}).`,
     pending: {
@@ -273,6 +274,43 @@ export const S = {
     panelClose: 'Close',
     providerManual: 'The app wrote this message: send it to them yourself.',
     providerTikkie: 'A Tikkie link was added to the message.',
+  },
+
+  // Traffic tickets: entered by a member, matched to whoever was driving at the time of the offence.
+  tickets: {
+    title: 'Traffic tickets',
+    back: 'Back to drives',
+    intro: 'Enter a ticket with the date and time of the offence. The app shows who was driving at that moment.',
+    followsLog: 'The driver comes from the drive log, or from the reservation when no drive was logged. It updates when a drive or a reservation is corrected.',
+    addTitle: 'Add a ticket',
+    editTitle: 'Edit ticket',
+    when: 'Time of the offence',
+    // The form opens on the current time, so this says what to put there instead.
+    whenHint: 'Set this to the date and time on the ticket, not the date of the letter.',
+    amount: 'Price (EUR, optional)',
+    amountHint: 'Leave empty if you do not know it yet.',
+    reason: 'Reason (optional)',
+    reasonHint: 'For example "speeding on the A4".',
+    save: 'Save ticket',
+    saved: 'Ticket saved.',
+    deleted: 'Ticket deleted.',
+    confirmDelete: 'Delete this ticket? It is removed for everyone and cannot be restored.',
+    list: 'All tickets',
+    none: 'No tickets yet. Add the first one with the form above.',
+    // The visible words stay "Edit" and "Delete"; the time tells the buttons of one ticket from another's for a screen reader.
+    editLabel: (/** @type {string} */ when) => `Edit ticket of ${when}`,
+    deleteLabel: (/** @type {string} */ when) => `Delete ticket of ${when}`,
+    you: 'You',
+    driver: (/** @type {string} */ name) => `Driver: ${name}`,
+    noDriver: 'Driver: unknown',
+    price: (/** @type {string} */ amount) => `EUR ${amount}`,
+    enteredBy: (/** @type {string} */ name) => `Entered by ${name}`,
+    basis: {
+      drive: 'From the drive log',
+      draft: 'From a drive that was started and not finished',
+      reservation: 'From the reservation (no drive was logged)',
+      none: 'No drive or reservation at that time. Log a missing drive, or check the time.',
+    },
   },
 
   account: {
@@ -393,8 +431,9 @@ export const S = {
       window: 'Visible window',
       cutoff: 'Anything that ended before this moment is deleted',
       lastPurge: 'Last purge',
-      lastPurgeCounts: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ s, /** @type {number} */ f = 0, /** @type {number} */ q = 0) =>
-        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${s} expired sessions`,
+      // Counts that older purge results do not have (fill-ups, requests, tickets) default to 0.
+      lastPurgeCounts: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ s, /** @type {number} */ f = 0, /** @type {number} */ q = 0, /** @type {number} */ t = 0) =>
+        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets, ${s} expired sessions`,
       never: 'Never',
       lastMaintenance: 'Last daily run (local date)',
       lastBackup: 'Last backup',
@@ -404,12 +443,12 @@ export const S = {
       size: 'Size (KB)',
       noBackups: 'No backups yet.',
       counts: 'Stored now',
-      countsText: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ q = 0) =>
-        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests`,
+      countsText: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ q = 0, /** @type {number} */ t = 0) =>
+        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets`,
       oldest: 'Oldest item ends',
       runNow: 'Run purge now',
       confirmRun: 'Permanently delete everything that ended before the cutoff? This cannot be undone.',
-      done: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0) => `Purged ${r} reservations, ${u} drives and ${f} fill-ups.`,
+      done: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ t = 0) => `Purged ${r} reservations, ${u} drives, ${f} fill-ups and ${t} tickets.`,
       backupNote: 'Backups taken before a purge can still contain older data until they rotate out.',
     },
   },

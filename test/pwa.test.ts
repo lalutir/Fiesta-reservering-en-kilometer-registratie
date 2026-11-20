@@ -177,7 +177,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v3'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -194,6 +194,13 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
   return { handlers, store, deleted, fire, shown, opened };
 }
 
+test('service worker: the cache name is bumped with the app files, so phones drop the old copy of the shell', () => {
+  // A new view file changes what the shell is: without a new name an installed app keeps serving the old one.
+  const source = read(publicDir, 'sw.js');
+  assert.match(source, /const CACHE = 'car-static-v4';/);
+  assert.match(source, /'\/views\/tickets\.js',/, 'the tickets view is precached');
+});
+
 test('service worker: precaches on install, drops old caches on activate', async () => {
   const sw = loadServiceWorker(async () => ({ ok: true }));
   let installed: Promise<unknown> | undefined;
@@ -201,6 +208,7 @@ test('service worker: precaches on install, drops old caches on activate', async
   await installed;
   assert.ok(sw.store.has('https://car.example/app.js'));
   assert.ok(sw.store.has('https://car.example/shared/time.js'));
+  assert.ok(sw.store.has('https://car.example/views/tickets.js'));
   let activated: Promise<unknown> | undefined;
   (sw.handlers['activate'] as (e: Json) => void)({ waitUntil: (p: Promise<unknown>) => (activated = p) });
   await activated;

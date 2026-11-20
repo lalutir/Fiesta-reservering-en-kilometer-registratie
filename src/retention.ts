@@ -11,6 +11,8 @@ export interface PurgeResult {
   /** Fill-ups older than the window, and (with them) their payment requests. */
   fuel: number;
   fuelRequests: number;
+  /** Traffic tickets whose offence time is older than the window. */
+  tickets: number;
   sessions: number;
 }
 
@@ -32,8 +34,13 @@ export function purge(db: Db, now: Date, tz: string, log: Logger, months = 6): P
     const fuelRequests =
       one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM fuel_requests WHERE fuel_id IN (SELECT id FROM fuel WHERE at_utc < ?)', cutoff)?.n ?? 0;
     const fuel = run(db, 'DELETE FROM fuel WHERE at_utc < ?', cutoff).changes;
+    // A ticket goes by the time of the offence. A completed drive or a reservation that names the
+    // driver ends no earlier than that time, so it outlives the ticket. The one exception is an open
+    // draft, whose end is its start: one forgotten for six months is purged on its own and can stop
+    // answering for a ticket in the first day after the cutoff (the ticket then shows no driver).
+    const tickets = run(db, 'DELETE FROM tickets WHERE at_utc < ?', cutoff).changes;
     const sessions = run(db, 'DELETE FROM sessions WHERE expires_at < ?', nowIso).changes;
-    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, sessions };
+    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, tickets, sessions };
     setMeta(db, 'last_purge_at', nowIso);
     setMeta(db, 'last_purge', JSON.stringify(r));
     return r;
@@ -103,12 +110,14 @@ export function retentionStatus(ctx: Ctx): Record<string, unknown> {
       usage: countRows(db, 'usage'),
       fuel: countRows(db, 'fuel'),
       fuelRequests: countRows(db, 'fuel_requests'),
+      tickets: countRows(db, 'tickets'),
       sessions: countRows(db, 'sessions'),
     },
     oldest: {
       reservationEnd: one<{ v: string | null }>(db, 'SELECT MIN(end_utc) AS v FROM reservations')?.v ?? null,
       usageEnd: one<{ v: string | null }>(db, 'SELECT MIN(end_utc) AS v FROM usage')?.v ?? null,
       fuelAt: one<{ v: string | null }>(db, 'SELECT MIN(at_utc) AS v FROM fuel')?.v ?? null,
+      ticketAt: one<{ v: string | null }>(db, 'SELECT MIN(at_utc) AS v FROM tickets')?.v ?? null,
     },
   };
 }

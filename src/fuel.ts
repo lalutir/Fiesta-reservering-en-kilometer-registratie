@@ -29,10 +29,9 @@ import { carryKey, carryOver } from './fuel-carry.ts';
 import type { FuelNotifier } from './fuel-notify.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
 import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, type PaymentInput, type PaymentProvider } from './payments.ts';
-import { Fields, ValidationError, windowBounds } from './validate.ts';
+import { Fields, ValidationError, assertPastInsideWindow, windowBounds } from './validate.ts';
 import { formatLocal } from '../shared/time.js';
 
-const FUTURE_SLACK_MS = 5 * 60_000;
 export const MAX_MILLILITRES = 200_000;
 export const MAX_TOTAL_CENTS = 1_000_000;
 
@@ -443,9 +442,7 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
 
   /** The time of a fill-up: not in the future (beyond clock slack) and inside the six-month window. */
   function checkAt(at: string, now: Date): void {
-    if (Date.parse(at) > now.getTime() + FUTURE_SLACK_MS) throw new ValidationError({ at: 'in_future' });
-    const bounds = windowBounds(now, config.tz, config.windowMonths);
-    if (at < bounds.from || at > bounds.to) throw new ValidationError({ at: 'outside_window' }, 'outside_window');
+    assertPastInsideWindow(at, now, config.tz, config.windowMonths);
   }
 
   function checkFueler(userId: number): void {

@@ -646,6 +646,10 @@ select:disabled {
 .view-head h2 {
   min-width: 0;
 }
+/* The group of links beside the title sits on the title's line, not 10px below it. */
+.view-head .actions {
+  margin-top: 0;
+}
 
 /* The "kilometres to register" box at the top of the Drives tab. */
 .banner {

@@ -353,10 +353,13 @@ export async function render(app, route) {
     ]);
 
   return h('div', { class: 'usage-view' }, [
-    // Fuel and costs is a second place to go from here, so it sits next to the title where it is seen without scrolling past the form.
+    // Fuel and costs and Traffic tickets are further places to go from here, so they sit next to the title where they are seen without scrolling past the form.
     h('div', { class: 'view-head' }, [
       h('h2', { text: mode === 'draft' ? S.usage.finishTitle : existing ? S.usage.editTitle : S.usage.logTitle }),
-      h('a', { class: 'btn small', href: '#/fuel' }, S.usage.fuelLink),
+      h('div', { class: 'actions' }, [
+        h('a', { class: 'btn small', href: '#/fuel' }, S.usage.fuelLink),
+        h('a', { class: 'btn small', href: '#/tickets' }, S.usage.ticketsLink),
+      ]),
     ]),
     pendingBanner(app, pending),
     form,

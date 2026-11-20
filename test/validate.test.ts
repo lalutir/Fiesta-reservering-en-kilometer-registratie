@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpError } from '../src/http.ts';
-import { Fields, ValidationError, failIfAny, queryUserId } from '../src/validate.ts';
+import { FUTURE_SLACK_MS, Fields, ValidationError, assertPastInsideWindow, failIfAny, queryUserId, windowBounds } from '../src/validate.ts';
 import { countRows } from '../src/db.ts';
 import { createHousehold, at } from './helpers.ts';
 
@@ -105,6 +105,39 @@ test('the first error per field wins, and done() throws one 422 listing every ba
   assert.doesNotThrow(() => new Fields({ ok: 1 }).done());
   assert.doesNotThrow(() => failIfAny({}));
   assert.throws(() => failIfAny({ end: 'outside_window' }, 'outside_window'), (err: unknown) => err instanceof ValidationError && err.code === 'outside_window');
+});
+
+test('assertPastInsideWindow: five minutes of clock slack into the future, both window ends inclusive, and the two failures are told apart', () => {
+  const now = new Date('2026-06-15T10:00:00.000Z');
+  const tz = 'Europe/Amsterdam';
+  const { from, to } = windowBounds(now, tz, 6);
+  const plus = (iso: string, ms: number): string => new Date(Date.parse(iso) + ms).toISOString();
+  const check = (value: string): void => assertPastInsideWindow(value, now, tz, 6);
+  const failure = (value: string): ValidationError => {
+    try {
+      check(value);
+    } catch (err) {
+      assert.ok(err instanceof ValidationError, 'a ValidationError, nothing else');
+      return err;
+    }
+    assert.fail(`${value} was accepted`);
+  };
+
+  assert.equal(FUTURE_SLACK_MS, 5 * 60_000);
+  check(now.toISOString());
+  check(plus(now.toISOString(), FUTURE_SLACK_MS)); // exactly five minutes ahead is still "now"
+  const late = failure(plus(now.toISOString(), FUTURE_SLACK_MS + 1));
+  assert.deepEqual(late.fields, { at: 'in_future' });
+  assert.equal(late.code, 'validation_failed', 'in_future keeps the ordinary validation code');
+  assert.equal(late.status, 422);
+
+  check(from); // the past edge itself is inside
+  const early = failure(plus(from, -1));
+  assert.deepEqual(early.fields, { at: 'outside_window' });
+  assert.equal(early.code, 'outside_window', 'outside_window is also the top-level code');
+  // The future edge of the window lies far beyond the slack, so the slack rule answers first there.
+  assert.ok(to > plus(now.toISOString(), FUTURE_SLACK_MS));
+  assert.deepEqual(failure(to).fields, { at: 'in_future' });
 });
 
 test('the userId query filter is a positive integer or absent', () => {

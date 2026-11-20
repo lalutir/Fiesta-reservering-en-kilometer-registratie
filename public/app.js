@@ -9,6 +9,7 @@ import * as history from './views/history.js';
 import * as inbox from './views/inbox.js';
 import * as login from './views/login.js';
 import * as reserve from './views/reserve.js';
+import * as tickets from './views/tickets.js';
 import * as usage from './views/usage.js';
 
 /**
@@ -24,7 +25,7 @@ import * as usage from './views/usage.js';
  */
 
 /** @type {Record<string, View>} */
-const VIEWS = { agenda, reserve, inbox, usage, fuel, history, account };
+const VIEWS = { agenda, reserve, inbox, usage, fuel, tickets, history, account };
 const TABS = [
   ['agenda', S.nav.agenda],
   ['reserve', S.nav.reserve],
@@ -33,8 +34,10 @@ const TABS = [
   ['history', S.nav.history],
   ['account', S.nav.account],
 ];
-// Routes that live under a tab: Fuel and costs is reached from Drives, so that tab stays highlighted.
-const TAB_OF_ROUTE = { fuel: 'usage' };
+// Routes that live under a tab: Fuel and costs and Traffic tickets are reached from Drives, so that tab stays highlighted.
+const TAB_OF_ROUTE = { fuel: 'usage', tickets: 'usage' };
+// The page title of those routes (they have no tab label of their own).
+const SUBVIEW_TITLE = { fuel: S.fuel.title, tickets: S.tickets.title };
 const REFRESH_MS = 60_000;
 
 const root = /** @type {HTMLElement} */ (document.getElementById('app'));
@@ -124,7 +127,7 @@ async function renderCurrent(opts = {}) {
     if (a.getAttribute('data-tab') === tabName) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
-  const tabLabel = route.name === 'fuel' ? S.fuel.title : TABS.find(([name]) => name === route.name)?.[1];
+  const tabLabel = /** @type {Record<string, string>} */ (SUBVIEW_TITLE)[route.name] ?? TABS.find(([name]) => name === route.name)?.[1];
   document.title = tabLabel ? `${tabLabel} - ${S.appName}` : S.appName;
   try {
     const el = await view.render(app, route);
