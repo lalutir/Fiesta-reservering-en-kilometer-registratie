@@ -147,6 +147,31 @@ test('restoreBackup brings back the backed-up data and keeps a copy of what it r
   assert.equal(listBackups(backupDir(e.dir)).length, 1, 'pre-restore copies are not mistaken for rotating backups');
 });
 
+test('a backup carries the traffic tickets, and a restore brings back exactly those', (tctx) => {
+  const e = setup(tctx);
+  addUser(e.db, 'anna');
+  const anna = one<{ id: number }>(e.db, 'SELECT id FROM users')!.id;
+  const addTicket = (at: string, cents: number | null, reason: string): void => {
+    run(e.db, 'INSERT INTO tickets (at_utc, amount_cents, reason, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', at, cents, reason, anna, 'now', 'now');
+  };
+  const tickets = (db: Db): unknown[] =>
+    many<{ at_utc: string; amount_cents: number | null; reason: string; created_by: number }>(db, 'SELECT at_utc, amount_cents, reason, created_by FROM tickets ORDER BY id').map((r) => ({ ...r }));
+  addTicket('2026-06-10T08:30:00.000Z', 7_500, 'Speeding');
+  addTicket('2026-06-11T09:00:00.000Z', null, '');
+  const kept = tickets(e.db);
+  const backup = createBackup(e.ctx);
+
+  run(e.db, 'DELETE FROM tickets');
+  addTicket('2026-06-12T10:00:00.000Z', 100, 'entered after the backup');
+  e.db.close();
+
+  restoreBackup(e.config, backup.path, e.clock.now());
+  const restored = openDb(dbPath(e.dir));
+  assert.deepEqual(tickets(restored), kept, 'the tickets of the backup are back, the later one is gone');
+  assert.equal(schemaVersion(restored), SCHEMA_VERSION);
+  restored.close();
+});
+
 test('restoreBackup refuses missing, corrupt and too-new backups and leaves the live database alone', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');
@@ -296,6 +321,29 @@ test('a backup taken at schema v1 restores, and the app then upgrades it to the 
     { status: 'completed', odometer_start: null, km_for: 'self', km_user_id: null },
   ]);
   assert.ok(fs.existsSync(path.join(backupDir(e.dir), 'pre-migrate-v1.db')), 'the upgrade left its own copy');
+  upgraded.close();
+});
+
+test('a backup taken at schema v3 restores, and the app then upgrades it to the current version with the data intact', (tctx) => {
+  const e = setup(tctx);
+  e.db.close();
+  // What the release before tickets wrote: a v3 file with a reservation, a drive for someone else and a fill-up.
+  const v3File = path.join(e.dir, 'old-v3.db');
+  const old = openDb(v3File, MIGRATIONS.slice(0, 3));
+  addReservation(old, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z');
+  run(old, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, km_for, note, created_by, created_at, updated_at) VALUES (1, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z', 100, 160, 'together', 'groceries', 1, 'now', 'now')");
+  run(old, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, created_by, created_at, updated_at) VALUES (1, '2026-06-14T11:00:00.000Z', 40000, 6000, 1, 'now', 'now')");
+  assert.equal(schemaVersion(old), 3);
+  old.close();
+
+  restoreBackup(e.config, v3File, e.clock.now());
+  const upgraded = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
+  assert.equal(many(upgraded, 'SELECT id FROM reservations').length, 1);
+  assert.deepEqual(many(upgraded, 'SELECT km_for, note FROM usage'), [{ km_for: 'together', note: 'groceries' }]);
+  assert.deepEqual(many(upgraded, 'SELECT total_cents FROM fuel'), [{ total_cents: 6000 }]);
+  assert.deepEqual(many(upgraded, 'SELECT id FROM tickets'), [], 'the tickets table is there and empty');
+  assert.ok(fs.existsSync(path.join(backupDir(e.dir), 'pre-migrate-v3.db')), 'the upgrade left its own copy');
   upgraded.close();
 });
 

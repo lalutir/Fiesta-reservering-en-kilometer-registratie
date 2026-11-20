@@ -111,6 +111,20 @@
 /** @typedef {{ fromUserId: number, fromName: string, toUserId: number, toName: string, cents: number }} Balance */
 
 /**
+ * A traffic ticket. `driver` and `basis` are worked out by the server on every read.
+ * @typedef {object} Ticket
+ * @property {number} id
+ * @property {string} at the moment of the offence (UTC ISO)
+ * @property {number | null} amountCents
+ * @property {string} reason '' when there is none
+ * @property {number} createdBy
+ * @property {string} createdByName
+ * @property {{ id: number, name: string } | null} driver who was driving at `at`; null when nobody is on record
+ * @property {'drive' | 'draft' | 'reservation' | 'none'} basis
+ * @property {{ edit: boolean, delete: boolean }} can
+ */
+
+/**
  * What every view gets: the signed-in session, the user list and a few actions.
  * @typedef {object} App
  * @property {Session} session

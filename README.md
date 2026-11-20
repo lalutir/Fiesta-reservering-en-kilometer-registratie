@@ -51,6 +51,12 @@ plus an admin page for the person who manages it.
   text message, WhatsApp, copy), optionally with a payment link you paste. A Tikkie adapter
   exists but is **optional, off by default and unverified**: Tikkie's API is offered to business
   customers, so a private household most likely cannot use it (see the deployment guide).
+- **Traffic tickets.** On the Drives tab, *Traffic tickets* lets you enter a ticket with the date
+  and time of the offence (required) and, if you know them, the price in euro and the reason. The
+  app shows **who was driving at that moment**: the drive log first, then a drive that was started
+  and not finished, then the confirmed reservation, otherwise "unknown". Everybody can see every
+  ticket; the person who entered it or an admin can correct or delete it. The app does not collect
+  the money or send anything about a ticket.
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
   day and at start-up.
@@ -83,6 +89,13 @@ plus an admin page for the person who manages it.
   when it was made (ids are creation order, no clock involved). Paying it settles the earlier shares
   of the same two people up to that id; marking it unpaid opens them again. `src/fuel-carry.ts` is
   the pure function behind the card, the request text, the push and the balances, so they agree.
+- **Who drove a ticket is derived, never stored.** A ticket holds only its time, price, reason and who
+  entered it. `whoDrove()` in `src/tickets.ts` works out the driver on every read, in this order: a
+  completed drive that covers the moment (the person who drove, whatever the kilometres' owner and
+  with or without odometer readings), an open draft that began up to 24 hours earlier and was not
+  replaced by a later completed drive, a confirmed reservation, else nobody. The drive log beats the
+  reservation because it records who actually drove; pending, declined and expired suggestions never
+  count. Correcting a drive or a reservation therefore corrects the ticket with it.
 - **Web Push without a library.** VAPID signing and message encryption use `node:crypto` and
   `fetch` (checked against the RFC 8291 test vector), so there is still no runtime dependency.
   Subscription addresses are only accepted for the four push services the browsers use.
@@ -142,10 +155,11 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
   fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
   fuel-carry.ts  carried-over amounts and settlement (pure)        fuel-notify.ts  the push for a new fill-up
+  tickets.ts  traffic tickets and who was driving at the time
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v3, migrations)
+  db.ts       the only file that touches node:sqlite (schema v4, migrations)
 shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
 public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views)
             and public/admin/ (admin page)
@@ -184,6 +198,13 @@ backups, updates and a monthly cost estimate (about $4-6).
   share stays settled if a drive is added to its period later; the request that settled it is
   flagged "amount changed" and that flag is the only signal. A person with nothing owed on a new
   fill-up is not asked: their older amounts wait for their next share.
+- **Traffic tickets.** The driver shown for a ticket is a best match, not a ruling: if a drive or a
+  reservation is corrected later the driver changes with it, and there is no way to override it by
+  hand (correct the drive log instead). An open draft is used for up to 24 hours, so a forgotten
+  draft can name its driver over someone else's reservation for that long. Everybody sees every
+  ticket with its price and reason. A ticket is deleted with the 6-month rule, by the time of the
+  offence, so an unpaid ticket older than that is gone from the app (keep the letter). The list has
+  no cap and works out each driver separately, which is fine for a household and its six months.
 - The fill-up push is sent once, after saving, and not retried; a person without a device signed up
   for reminders hears nothing and finds the amount on the History screen.
 - Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,

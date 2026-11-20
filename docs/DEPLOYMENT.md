@@ -363,6 +363,10 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       fuel share moves to the other person. With reminders on for a second phone, registering a
       fill-up sends that person a notification, and **I have paid this request** on the
       History screen marks their share paid.
+- [ ] After an update from the version before traffic tickets: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v3.db`. On the Drives tab, **Traffic tickets** opens; add a ticket at a
+      time you know somebody drove: it names that person, and "From the drive log" or
+      "From the reservation" says why (section 18).
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -407,10 +411,11 @@ DigitalOcean droplet, and has data centres in Germany and Finland. Everything in
 this guide works the same there: create an Ubuntu server, and follow sections 3
 to 15 (the swap file is then usually unnecessary).
 
-## 18. Kilometres, reminders, fuel costs and payment requests
+## 18. Kilometres, reminders, fuel costs, payment requests and traffic tickets
 
 This section is about the part of the app that records every drive with its
-odometer readings, reminds people to do that, and splits the fuel. Like the rest
+odometer readings, reminds people to do that, splits the fuel, and keeps the
+traffic tickets (the last subsection). Like the rest
 of this guide it was **never run on a real server, phone or push service by the
 people who wrote it**: the automated tests cover the logic and the message
 format, not delivery to a real phone. Section 15 has a short checklist for it.
@@ -644,8 +649,57 @@ than 15 minutes in the past.
   link on `tikkie.me` is ever shown. The key and token are never logged or sent to
   the browser. Leave all three empty unless you really have that access.
 
+### Traffic tickets
+
+**Updating from the version before traffic tickets (schema v3).** The first start
+of this version upgrades the database once more, to schema v4: one new table for
+the tickets. Nothing is changed or removed. The same rules apply as for the
+earlier upgrades, with another copy, `/data/backups/pre-migrate-v3.db`:
+
+- Take a backup first (section 12). Right before the upgrade the app writes a full
+  copy of the database as it was to `/data/backups/pre-migrate-v3.db`. It is written
+  once, not rotated and not deleted by the daily clean-up. It holds password
+  hashes like every backup, so treat it as a secret and delete it
+  (`docker compose exec app rm /data/backups/pre-migrate-v3.db`) once you are
+  happy with the new version. If it cannot be written (disk full) the app refuses
+  to start and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from
+  section 11, and start the previous version. Tickets entered after the upgrade are
+  lost by a restore, and an older app refuses to open a v4 database. If you go back
+  and later try the update again, delete `pre-migrate-v3.db` first: the app never
+  overwrites an existing copy.
+- If you come from an older version than v3, the app upgrades straight to v4 in one
+  start and writes only the copy of the version it found.
+- The phones pick up the new screen by themselves: the app files are cached under a new
+  name, so the old copy is dropped the next time the app is opened with a connection.
+
+**How it works.**
+
+- Any member adds a ticket on the Drives tab, under **Traffic tickets**. The time of
+  the offence is required (the time on the ticket, not the date of the letter, and
+  not in the future or more than 6 months back); the price in euro (up to 10,000.00)
+  and the reason (up to 500 characters) are optional.
+- The app shows **who was driving at that moment**. It is worked out every time the
+  list is opened, not stored: first a finished drive that covers the moment (the
+  person who drove, also when the kilometres were given to someone else or to
+  Together, and also for old drives without odometer readings), then a drive that
+  was started and not finished (counted from its start for up to 24 hours, unless a
+  later finished drive has started since), then the confirmed reservation, and
+  otherwise "unknown". Suggestions that are still waiting, declined or expired never
+  count. When two records meet at the same moment, the one that started later wins.
+- Because nothing is stored, correcting a drive or a reservation corrects the
+  driver shown on the ticket. There is no way to set the driver by hand: fix the
+  drive log instead. A deactivated person is still named.
+- Everybody signed in sees every ticket, with its price and reason. The person who
+  entered a ticket, or an admin, can correct or delete it.
+- Tickets follow the 6 month rule by the time of the offence: the daily clean-up
+  deletes a ticket whose time is older than the window, and the admin Retention tab
+  counts them and shows the oldest one. Keep the paper or the letter for anything
+  you still have to pay. The app sends no notification and moves no money for a
+  ticket.
+
 ### Switching things off
 
 - Reminders and the push for a new fill-up: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
-- Nothing else needs a rollback; fuel costs and drafts are simply not used.
+- Nothing else needs a rollback; fuel costs, drafts and traffic tickets are simply not used.

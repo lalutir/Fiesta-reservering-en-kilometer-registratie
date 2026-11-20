@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { many, one, run } from '../src/db.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { runCli, type CliIo } from '../src/cli.ts';
+import { many, one, openDb, run } from '../src/db.ts';
 import { purge } from '../src/retention.ts';
-import { ODO, at, createHousehold, createTestApp, insertDraft, insertFuel, insertReservation, insertUsage, type TestApp } from './helpers.ts';
+import { ODO, at, createHousehold, createTestApp, insertDraft, insertFuel, insertReservation, insertTicket, insertUsage, makeClock, type TestApp } from './helpers.ts';
 
 const TZ = 'Europe/Amsterdam';
 const NOW = '2026-06-15T10:00:00.000Z';
@@ -119,18 +123,18 @@ test('the deleted-row counts are logged as one JSON line and kept for the admin 
     t.logs.length = 0;
     const res = await admin.post('/api/admin/retention/run');
     assert.equal(res.status, 200);
-    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
+    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
     const lines = t.logs.filter((l) => l['event'] === 'retention.purge');
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
+    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
 
     const status = (await admin.get('/api/admin/retention')).body;
     assert.equal(status.cutoff, CUTOFF);
     assert.equal(status.windowMonths, 6);
     assert.deepEqual(status.window, { from: CUTOFF, to: '2026-12-15T11:00:00.000Z' });
     assert.equal(status.lastPurgeAt, NOW);
-    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, sessions: 0 });
-    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, sessions: status.counts.sessions });
+    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
+    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, sessions: status.counts.sessions });
     assert.equal(status.oldest.reservationEnd, null);
     assert.equal(status.timeZone, 'Europe/Amsterdam');
   } finally {
@@ -229,6 +233,83 @@ test('the admin retention page reports fill-ups and requests, and the CLI-style 
   } finally {
     await t.close();
   }
+});
+
+test('old tickets are purged by the time of the offence, strictly before the cutoff (boundary +/- 1 ms); current and future ones stay', async () => {
+  const { t, anna } = await createHousehold();
+  try {
+    const before = insertTicket(t, { userId: anna.id, at: shift(CUTOFF, -1), amountCents: 5_000, reason: 'speeding' });
+    const atCutoff = insertTicket(t, { userId: anna.id, at: CUTOFF });
+    const recent = insertTicket(t, { userId: anna.id, at: at(t.clock, -48) });
+    const future = insertTicket(t, { userId: anna.id, at: at(t.clock, 24) });
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.tickets, 1);
+    assert.deepEqual(
+      many<{ id: number }>(t.db, 'SELECT id FROM tickets ORDER BY id').map((r) => r.id),
+      [atCutoff, recent, future],
+    );
+    assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM tickets').some((r) => r.id === before));
+    // A ticket does not take anything else with it, and the other counts stay at zero.
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, sessions: 0 });
+    t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 1);
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 0, 'idempotent');
+  } finally {
+    await t.close();
+  }
+});
+
+test('the admin retention page counts tickets and shows the oldest, and a purge result stored before tickets existed is returned as stored', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    assert.equal((await admin.get('/api/admin/retention')).body.oldest.ticketAt, null);
+    insertTicket(t, { userId: anna.id, at: at(t.clock, -10) });
+    insertTicket(t, { userId: anna.id, at: at(t.clock, -20) });
+    const status = (await admin.get('/api/admin/retention')).body;
+    assert.equal(status.counts.tickets, 2);
+    assert.equal(status.oldest.ticketAt, at(t.clock, -20));
+    // The previous release stored no `tickets` key: the page reads it with ?? 0, the server hands it back untouched.
+    run(t.db, "INSERT INTO meta (key, value) VALUES ('last_purge', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify({ cutoff: CUTOFF, reservations: 1, usage: 2, fuel: 3, fuelRequests: 4, sessions: 5 }));
+    const old = (await admin.get('/api/admin/retention')).body;
+    assert.equal(old.lastPurge.tickets, undefined);
+    assert.equal(old.lastPurge.fuelRequests, 4);
+    // A manual run stores the new shape, with tickets.
+    const run1 = await admin.post('/api/admin/retention/run');
+    assert.equal(run1.body.result.tickets, 0);
+    assert.equal(run1.body.status.lastPurge.tickets, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('the purge command says how many tickets it removed', async (tctx) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'car-ret-cli-'));
+  tctx.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const env = { DATA_DIR: dir, SCRYPT_N: '1024', SCRYPT_P: '1' };
+  // The command prints its sentence on `out` (the JSON log line goes to `err`); the clock is fixed so the cutoff is too.
+  const purgeLine = async (): Promise<string> => {
+    const out: string[] = [];
+    const io: CliIo = { readStdin: async () => '', out: (l) => out.push(l), err: () => undefined };
+    assert.equal(await runCli(['purge'], env, io, makeClock(NOW)), 0);
+    return out.join('\n');
+  };
+
+  assert.equal(
+    await purgeLine(),
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets and 0 expired sessions older than ${CUTOFF}.`,
+  );
+
+  const db = openDb(path.join(dir, 'car.db'));
+  const user = run(db, "INSERT INTO users (username, display_name, password_hash, role, created_at, updated_at) VALUES ('anna', 'Anna', 'x', 'member', 'now', 'now')").lastInsertRowid;
+  for (const when of [shift(CUTOFF, -HOUR), shift(CUTOFF, -2 * HOUR), CUTOFF]) {
+    run(db, 'INSERT INTO tickets (at_utc, created_by, created_at, updated_at) VALUES (?, ?, ?, ?)', when, user, 'now', 'now');
+  }
+  db.close();
+  assert.equal(
+    await purgeLine(),
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets and 0 expired sessions older than ${CUTOFF}.`,
+    'two tickets removed, the one exactly at the cutoff kept',
+  );
 });
 
 test('an abandoned old draft is purged like any other old row, a recent one is kept', async () => {

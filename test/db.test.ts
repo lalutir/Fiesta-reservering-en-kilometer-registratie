@@ -390,9 +390,9 @@ test('a v2 file with rows upgrades to v3 without losing anything: every drive st
   const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v2.db');
   assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
 
-  const v3 = openDb(file);
+  // Pinned to the first three migrations: this test is about the v2 to v3 step, whatever comes after it.
+  const v3 = openDb(file, MIGRATIONS.slice(0, 3));
   assert.equal(schemaVersion(v3), 3);
-  assert.equal(schemaVersion(v3), SCHEMA_VERSION);
   assert.deepEqual(
     many(v3, 'SELECT id, user_id, odometer_start, odometer_end, note, status, km_for, km_user_id FROM usage ORDER BY id'),
     [
@@ -425,7 +425,7 @@ test('a v2 file with rows upgrades to v3 without losing anything: every drive st
 
   // Opening again changes nothing and does not touch the copy.
   const mtime = fs.statSync(copy).mtimeMs;
-  openDb(file).close();
+  openDb(file, MIGRATIONS.slice(0, 3)).close();
   assert.equal(fs.statSync(copy).mtimeMs, mtime);
 });
 
@@ -436,7 +436,7 @@ test('a v1 file goes straight to v3 in one open, with the one copy of what it wa
   const drive = addUsage(v1, anna);
   v1.close();
 
-  const v3 = openDb(file);
+  const v3 = openDb(file, MIGRATIONS.slice(0, 3));
   assert.equal(schemaVersion(v3), 3);
   assert.deepEqual(many(v3, 'SELECT id, status, km_for, km_user_id FROM usage'), [{ id: drive, status: 'completed', km_for: 'self', km_user_id: null }]);
   v3.close();
@@ -467,7 +467,7 @@ test('the real v3 upgrade is all or nothing: a failure on its last statement lea
   // The way out is to clear the obstacle: the same upgrade then runs from the top.
   after.exec('ALTER TABLE fuel_requests DROP COLUMN covers_fuel_id');
   after.close();
-  const v3 = openDb(file);
+  const v3 = openDb(file, MIGRATIONS.slice(0, 3));
   assert.equal(schemaVersion(v3), 3);
   assert.deepEqual(many(v3, 'SELECT id, km_for FROM usage'), [{ id: drive, km_for: 'self' }]);
   v3.close();
@@ -576,5 +576,128 @@ test('fuel rows only accept sane money, volume and times, and requests are one p
   assert.throws(() => request(anna, 'manual', 0), /CHECK constraint failed/);
   run(db, 'DELETE FROM fuel WHERE id = ?', fuel);
   assert.equal(many(db, 'SELECT id FROM fuel_requests').length, 0, 'requests go with their fill-up');
+  db.close();
+});
+
+// ------------------------------------------------ schema v4 (traffic tickets)
+
+const tablesOf = (db: Db): string[] =>
+  many<{ name: string }>(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").map((r) => r.name);
+
+test('a v3 file with rows upgrades to v4 without losing anything, and leaves one pre-migrate-v3 copy', (tctx) => {
+  const file = tempFile(tctx);
+  const v3 = openDb(file, MIGRATIONS.slice(0, 3));
+  assert.equal(schemaVersion(v3), 3);
+  const anna = addUser(v3, 'anna');
+  const ben = addUser(v3, 'ben');
+  const res = addReservation(v3, anna);
+  const drive = run(
+    v3,
+    "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, km_for, km_user_id, note, created_by, created_at, updated_at) VALUES (?, ?, ?, 100, 160, 'person', ?, 'for ben', ?, ?, ?)",
+    anna,
+    GOOD,
+    LATER,
+    ben,
+    anna,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+  const fuel = run(v3, 'INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, created_by, created_at, updated_at) VALUES (?, ?, 40000, 6000, ?, ?, ?)', anna, LATER, anna, GOOD, GOOD).lastInsertRowid;
+  run(v3, "INSERT INTO fuel_requests (fuel_id, debtor_id, amount_cents, provider, message, covers_fuel_id, created_at, updated_at) VALUES (?, ?, 1500, 'manual', 'pay up', ?, ?, ?)", fuel, ben, fuel, GOOD, GOOD);
+  v3.close();
+
+  const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v3.db');
+  assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
+
+  const v4 = openDb(file);
+  assert.equal(schemaVersion(v4), 4);
+  assert.equal(schemaVersion(v4), SCHEMA_VERSION);
+  assert.deepEqual(many(v4, 'SELECT id FROM tickets'), [], 'the new table starts empty');
+  assert.deepEqual(
+    many(v4, 'SELECT id, user_id, km_for, km_user_id, note FROM usage'),
+    [{ id: drive, user_id: anna, km_for: 'person', km_user_id: ben, note: 'for ben' }],
+    'drives are untouched',
+  );
+  assert.equal(many(v4, 'SELECT id FROM users').length, 2);
+  assert.equal(many(v4, 'SELECT id FROM reservations WHERE id = ?', res).length, 1);
+  assert.deepEqual(many(v4, 'SELECT fuel_id, debtor_id, amount_cents, covers_fuel_id FROM fuel_requests'), [{ fuel_id: fuel, debtor_id: ben, amount_cents: 1500, covers_fuel_id: fuel }]);
+  assert.deepEqual(columnsOf(v4, 'tickets'), ['id', 'at_utc', 'amount_cents', 'reason', 'created_by', 'created_at', 'updated_at'], 'no driver column: who drove is derived');
+  v4.close();
+
+  // The copy is a readable v3 database without the new table, holding the data as it was.
+  assert.ok(fs.existsSync(copy), 'backups/pre-migrate-v3.db was written');
+  const old = openDb(copy, MIGRATIONS.slice(0, 3));
+  assert.equal(schemaVersion(old), 3);
+  assert.ok(!tablesOf(old).includes('tickets'));
+  assert.equal(many(old, 'SELECT id FROM usage').length, 1);
+  assert.equal(many(old, 'SELECT id FROM fuel_requests').length, 1);
+  old.close();
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(copy)).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v3.db'],
+    'no temporary file is left behind',
+  );
+
+  // Opening again changes nothing and does not touch the copy.
+  const mtime = fs.statSync(copy).mtimeMs;
+  openDb(file).close();
+  assert.equal(fs.statSync(copy).mtimeMs, mtime);
+});
+
+test('a v1 file goes straight to the current version in one open, with the one copy of what it was', (tctx) => {
+  const file = tempFile(tctx);
+  const v1 = openDb(file, MIGRATIONS.slice(0, 1));
+  const anna = addUser(v1);
+  const drive = addUsage(v1, anna);
+  v1.close();
+
+  const db = openDb(file);
+  assert.equal(schemaVersion(db), SCHEMA_VERSION);
+  assert.ok(tablesOf(db).includes('tickets'));
+  assert.deepEqual(many(db, 'SELECT id, status, km_for FROM usage'), [{ id: drive, status: 'completed', km_for: 'self' }]);
+  db.close();
+  assert.deepEqual(
+    fs.readdirSync(path.join(path.dirname(file), 'backups')).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v1.db'],
+    'one copy, of the version the file was at, before the first step',
+  );
+});
+
+test('the real v4 upgrade is all or nothing: a table already in the way leaves the v3 file as it was, and a retry works', (tctx) => {
+  const file = tempFile(tctx);
+  const v3 = openDb(file, MIGRATIONS.slice(0, 3));
+  const anna = addUser(v3);
+  const drive = addUsage(v3, anna);
+  v3.exec('CREATE TABLE tickets (stranger INTEGER)');
+  v3.close();
+
+  assert.throws(() => openDb(file), /table tickets already exists/);
+
+  const after = openDb(file, MIGRATIONS.slice(0, 3));
+  assert.equal(schemaVersion(after), 3, 'the version was not bumped');
+  assert.deepEqual(columnsOf(after, 'tickets'), ['stranger'], 'the stranger table is untouched');
+  assert.deepEqual(many(after, 'SELECT id, user_id FROM usage'), [{ id: drive, user_id: anna }], 'the data is untouched');
+  // The way out is to clear the obstacle: the same upgrade then runs from the top.
+  after.exec('DROP TABLE tickets');
+  after.close();
+  const v4 = openDb(file);
+  assert.equal(schemaVersion(v4), 4);
+  assert.deepEqual(columnsOf(v4, 'tickets'), ['id', 'at_utc', 'amount_cents', 'reason', 'created_by', 'created_at', 'updated_at']);
+  v4.close();
+});
+
+test('ticket rows only accept the UTC time shape, an amount from 1 cent to 10,000.00, and a real creator', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  const insert = (at: string, cents: number | null, by = anna): number =>
+    run(db, 'INSERT INTO tickets (at_utc, amount_cents, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', at, cents, by, GOOD, GOOD).lastInsertRowid;
+  for (const cents of [null, 1, 1_000_000]) assert.ok(insert(GOOD, cents) > 0, `amount ${cents} is accepted`);
+  for (const bad of ['2026-06-15 10:00:00.000Z', '2026-06-15T10:00:00Z', '2026-06-15T10:00:00.000+02:00', '2026-06-15T10:00', '2026-6-15T10:00:00.000Z', '']) {
+    assert.throws(() => insert(bad, null), /CHECK constraint failed/, `time ${JSON.stringify(bad)}`);
+  }
+  for (const cents of [0, -1, 1_000_001]) assert.throws(() => insert(GOOD, cents), /CHECK constraint failed/, `amount ${cents}`);
+  assert.throws(() => insert(GOOD, null, 999), /FOREIGN KEY constraint failed/, 'the creator must exist');
+  const row = one<{ reason: string }>(db, 'SELECT reason FROM tickets LIMIT 1');
+  assert.equal(row?.reason, '', 'the reason defaults to empty');
   db.close();
 });

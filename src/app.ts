@@ -24,6 +24,7 @@ import { createReminders, type Reminders } from './reminders.ts';
 import { registerReservationRoutes } from './reservations.ts';
 import { registerRetentionRoutes } from './retention.ts';
 import { serveStatic } from './static.ts';
+import { registerTicketRoutes } from './tickets.ts';
 import { registerUsageRoutes } from './usage.ts';
 import { registerUserRoutes } from './users.ts';
 
@@ -70,6 +71,7 @@ export function createApp(deps: AppDeps): App {
   const push = createPush(ctx);
   const fuelNotifier = createFuelNotifier(ctx, push);
   registerFuelRoutes(router, ctx, fuelNotifier);
+  registerTicketRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);

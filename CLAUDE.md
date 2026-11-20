@@ -439,6 +439,114 @@ Defaults taken (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/calendar-views-fuel-admin-exempt-ratio` (git-excluded). Base commit `9a7f98ae276d8ec372af40e8ca1465cdeb29d41a`.
 <!-- implement:run:calendar-views-fuel-admin-exempt-ratio:end -->
 
+<!-- implement:run:traffic-tickets-matched-to-driver:start -->
+### Traffic tickets matched to the driver who was driving (traffic-tickets-matched-to-driver)
+
+Date 2026-11-20. Branch `implement/traffic-tickets-matched-to-driver`. Base branch `main`, base commit `fa27079c6cded4ea06b2b62f897e33f141b99c06`.
+
+### Request
+
+> I want to be able to enter traffic tickets into the app with at least the date and time so it can be matched to whomever drove. Would be good to also add the possibility to add the price and the reason for the ticket.
+
+### What was built
+
+A ticket register for the shared car. A member records a ticket with a required date and time of the offence and an optional price (EUR, whole cents, 1 to 1,000,000) and reason (up to 500 characters). The server works out who was driving on every read: drive log first, then an open draft, then the confirmed reservation, else nobody. It adds an additive migration v4, four API routes, a `#/tickets` view under the Drives tab, and purge, retention, service worker and docs coverage. Nothing is committed: HEAD equals `main`; git shows 22 modified tracked files (+577/-41) and 4 untracked (`src/tickets.ts`, `public/views/tickets.js`, `test/tickets.test.ts`, `test/tickets-view.test.ts`) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.7). A small `src/tickets.ts` copies the `fuel.ts` pattern with no driver column, so correcting a drive or a reservation corrects the ticket.
+- Rejected: idiomatic (fuel-shaped module with `driverAt()`): more surface, no benefit at 2-10 users.
+- Rejected: robust (pure matcher, windowed batch loader, brute-force equivalence test): more files to remove an N+1 that is a few hundred indexed lookups.
+- Rejected: storing the matched driver (goes stale; the repo prefers derived data) and a seventh or admin tab (320 px; Fuel set the sub-route precedent).
+- Rejected: dropping the open-draft tier (the acceptance criteria state it; kept with the 24 h cap and documented as a known limit).
+
+### How it works
+
+Start with `src/tickets.ts` (rules in the top comment, `whoDrove()`), then migration 4 in `src/db.ts`, then `public/views/tickets.js`.
+
+- Match, first hit wins: a completed drive covering the moment (driver is `usage.user_id`, never `km_for`; no readings needed; the later start wins at a shared boundary); an open draft that started up to 24 h earlier with no later completed drive started since; a confirmed reservation; none. Pending, declined and expired suggestions never count. A deactivated driver is still named.
+- Routes: `GET` and `POST /api/tickets`, `PATCH` and `DELETE /api/tickets/:id`. Any signed-in member sees all tickets; the creator or an admin edits and deletes (403 before the body is read; the `can` flags use the same check). `at` goes through `assertPastInsideWindow` (new in `src/validate.ts`, shared with `fuel.ts`): 5 minutes of future slack, 6-month window, on PATCH only when `at` changes; `at: null` on PATCH is a 422. Log lines carry id, actor and basis only.
+- Data: `tickets` has a UTC-shape CHECK, an amount CHECK (1 to 1,000,000) and a foreign key to `users`; `backups/pre-migrate-v3.db` is written before the upgrade. Purge deletes `at_utc < cutoff`; counts, oldest, `PurgeResult`, the CLI line and the admin Retention tab include tickets.
+- Client: the Drives header links to `#/tickets`, `TAB_OF_ROUTE` keeps Drives highlighted, the service worker cache is `car-static-v4` and precaches `/views/tickets.js`.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/tickets.ts` | added | Routes, DTO, `whoDrove()` (216 lines) |
+| `src/db.ts` | modified | Migration 4 (`tickets`, index `tickets_at`), `TicketRow`, `countRows` takes `tickets` |
+| `src/validate.ts`, `src/fuel.ts` | modified | `assertPastInsideWindow`, `FUTURE_SLACK_MS`; `fuel.ts` calls it instead of its own copy |
+| `src/retention.ts`, `src/cli.ts`, `src/app.ts` | modified | Ticket purge, counts, oldest; purge sentence; route registration |
+| `public/views/tickets.js` | added | Form, list, edit, delete (176 lines) |
+| `public/views/usage.js`, `app.js`, `style.css`, `sw.js` | modified | Link on Drives; route, tab mapping, title; header spacing; cache v4 and precache entry |
+| `public/api.js`, `strings.js`, `admin/admin.js` | modified | `Ticket` typedef; texts and error sentences; Retention tab counts tickets |
+| `scripts/smoke.mjs` | modified | Check 13: ticket matching, 422, list order, delete |
+| `test/tickets.test.ts`, `test/tickets-view.test.ts` | added | 40 and 24 tests |
+| `test/db`, `maintenance`, `validate`, `retention`, `pwa` `.test.ts`, `test/helpers.ts` | modified | v4 upgrade and CHECKs, v3 backup restore, window helper, purge, cache name, `insertTicket` |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Features, layout, known limits; section 18 subsection; this entry |
+
+`package.json`, the lockfile, `Dockerfile`, compose and `Caddyfile` are unchanged.
+
+### How to run and test
+
+Node 22.23.1. Last test stage, final tree, all exit 0 (this documentation step ran no test command):
+
+- `npm run typecheck` (server and client) and `npm run lint`: clean. `npm test`: 577 of 577 (502 on `main`, 565 after build, 566 after specialists). `npm run build`: clean. `npm run smoke`: 13 of 13 over real HTTP.
+- Before its fixes the test stage saw `npm test` exit 1 (`PATCH {at: null}` returned 200, expected 422) and `npm run typecheck` exit 2 (two TS2698 in `test/tickets.test.ts`); fixed with one line in `src/tickets.ts` and a test typing change.
+- Mutation checks, all killed, files restored with SHA-256 compare: 21 server and service worker plus 18 client in build, 17 in the test stage.
+- Headless Chromium (driver scripts in the git-excluded audit directory, no dependency added): build 94 of 94 at 390, 320 (light and dark) and 700 px; UI pass 23 of 23; test stage 23 of 23 at 390, 320 and 320 dark.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design:frontend-design | No | Six small fixes: Edit and Delete names include the ticket time, time hint, "no driver" line says how to fix it, empty state, list heading, log text; 1 test (566) |
+| Backend | engineering-skills:senior-backend | No | Sound; corrected a comment in `src/retention.ts` (an open draft is purged by its start); about 0.36 ms per worst-case `whoDrove` on 3,039 drives and 1,520 reservations |
+| Data | engineering-advanced-skills:database-designer | No | No change; new reads use existing indexes; a 20,000-drive v3 file upgraded in 45 ms, integrity check ok |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; read-through, filtering inline |
+| Simplicity | simplify | No | Two behaviour-neutral edits (`TicketDto.driver` uses `Driver`, `when` renamed `whenText`); one edit tried and reverted; single inline pass |
+
+No DevOps specialist ran (no ledger entry; no Docker or Caddy change).
+
+### Verification
+
+Verified (ran and saw pass): the five commands above; each acceptance criterion maps to at least one automated test (the test stage added admin-creates-a-ticket and v4 backup restore); a v3 file with rows upgrades to v4 with `pre-migrate-v3.db` written once; a v3 backup restores and upgrades; the matcher agrees with a plain model on 300 seeded households; the browser checks above.
+
+NOT verified: real phones, an installed PWA picking up `car-static-v4`, the service worker in a real browser, screen readers; Docker, `docker compose up`, Caddy HTTPS, a droplet deploy; the live v3 database (only synthetic v3 files and a v3 backup restore); a full disk during the pre-migration copy; a real two-process migration race; `node:sqlite` on other Node versions.
+
+Test confidence: high for what the commands cover (ledger); it does not cover the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 14 findings, 0 confirmed, nothing blocking, no review fix recorded.
+
+Remaining minor notes (not fixed): `docs/DEPLOYMENT.md` still calls v3 the current schema in the schema v2 bullet; the 5-minute future slack is defined in both `src/usage.ts` and `src/validate.ts`; ticket edit always sends `at`, so the repeated DST hour or seconds can change the time and the named driver; `GET /api/tickets` is unbounded at 3 queries per ticket with no write quota; a forgotten open draft outranks the confirmed reservation holder for up to 24 hours. Nits: list not clamped to the window, `checkAt` in `fuel.ts` is a one-line wrapper, a pipeline stage name in a test divider, DELETE computes the driver only for a log field, a fourth copy of the focus snippet, DTO `createdAt` and `updatedAt` unread, `SUBVIEW_TITLE` trusts `route.name`, the app-shell test is a source regex and smoke check 13 depends on the previous check's drives.
+
+### Assumptions and open questions
+
+Defaults taken for ten open questions (none scope-changing; no one was asked):
+- A ticket is a traffic fine and its time is the offence, not the letter date; EUR in cents, capped at 10,000.00 like a fill-up; free-text reason; no photo, case number or location.
+- Any active member adds; the creator or an admin edits and deletes; everyone sees everything; no admin tab, no manual driver override, no payment flow, no notification.
+- The draft tier is kept with a 24 h cap. A ticket goes by the 6-month rule on its offence time, so an unpaid ticket older than that is deleted (documented).
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, the test stage ran once. Caveat: the test agent reported a pass although two commands exited non-zero (the first `npm test` and `npm run typecheck`, both before its fixes); the final five commands exited 0. The test count of that first run was not captured.
+- Ledger and git disagree on tests: git shows 75 new test declarations (40 and 24 in the new files, 11 in modified ones), matching 502 to 577. The ledger names 63 (build), 1 (UI pass) and 2 (test stage); the other 9, in `test/tickets.test.ts`, are named by no list. Git is trusted.
+- The test stage could not tell why the `at: null` shortcut was in the source (an interrupted mutation check or a real edit); no backup file was found.
+- Many new tests passed on their first run; the mutation checks, not a red run on the untouched tree, show they can fail.
+- Existing tests changed: five `test/db.test.ts` pins to v3 and one deleted `SCHEMA_VERSION` assertion, four `deepEqual`s in `test/retention.test.ts`, the `caches.keys` fixture in `test/pwa.test.ts`. `src/fuel.ts` was touched (shared window helper); its tests are unchanged and pass.
+- Security was a read-through (the skill's diff section arrived empty, files read directly); simplify ran inline, not as a 4-agent fan-out; the backend skill's scripts were not run, and the backend and data passes did not run the full suite (their edits were a comment or none).
+- Real phones, Docker, Caddy and the live database were not exercised (see Verification).
+
+### Reproduce
+
+- Invocation: `/implement I want to be able to enter traffic tickets into the app with at least the date and time so it can be matched to whomever drove. Would be good to also add the possibility to add the price and the reason for the ticket.` Flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3.
+- Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/traffic-tickets-matched-to-driver` (git-excluded). Base commit `fa27079c6cded4ea06b2b62f897e33f141b99c06`.
+<!-- implement:run:traffic-tickets-matched-to-driver:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

@@ -358,6 +358,28 @@ export function insertFuel(t: TestApp, seed: FuelSeed): number {
   ).lastInsertRowid;
 }
 
+export interface TicketSeed {
+  userId: number;
+  at: string;
+  amountCents?: number | null;
+  reason?: string;
+}
+
+/** Insert a ticket directly, bypassing the API rules (for fixtures such as an out-of-window time). */
+export function insertTicket(t: TestApp, seed: TicketSeed): number {
+  const now = t.clock.now().toISOString();
+  return run(
+    t.db,
+    'INSERT INTO tickets (at_utc, amount_cents, reason, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    seed.at,
+    seed.amountCents ?? null,
+    seed.reason ?? '',
+    seed.userId,
+    now,
+    now,
+  ).lastInsertRowid;
+}
+
 export interface Household {
   t: TestApp;
   admin: Client;

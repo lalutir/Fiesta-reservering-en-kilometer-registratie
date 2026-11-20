@@ -87,6 +87,17 @@ export interface FuelRequestRow {
   covers_fuel_id: number | null;
 }
 
+/** A traffic ticket for the car. Who was driving is not stored: it is derived from the drive log and reservations (tickets.ts). */
+export interface TicketRow {
+  id: number;
+  at_utc: string;
+  amount_cents: number | null;
+  reason: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PushSubscriptionRow {
   id: number;
   user_id: number;
@@ -267,6 +278,23 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE fuel_requests ADD COLUMN covers_fuel_id INTEGER
     CHECK (covers_fuel_id IS NULL OR covers_fuel_id >= 1);
   `,
+
+  // 4: traffic tickets. at_utc is the moment of the offence. There is deliberately
+  // no driver column: who was driving is derived on every read from the drive log
+  // and the reservations (tickets.ts), so correcting a drive corrects the ticket.
+  // created_by is who entered it. amount_cents is optional, integer cents.
+  `
+  CREATE TABLE tickets (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    at_utc       TEXT NOT NULL CHECK (at_utc GLOB ${UTC_MS}),
+    amount_cents INTEGER CHECK (amount_cents IS NULL OR amount_cents BETWEEN 1 AND 1000000),
+    reason       TEXT NOT NULL DEFAULT '',
+    created_by   INTEGER NOT NULL REFERENCES users(id),
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+  );
+  CREATE INDEX tickets_at ON tickets(at_utc, id);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -435,7 +463,7 @@ export function checkDbFile(file: string): { ok: boolean; detail: string; versio
 
 export function countRows(
   db: Db,
-  table: 'users' | 'reservations' | 'usage' | 'sessions' | 'fuel' | 'fuel_requests' | 'push_subscriptions',
+  table: 'users' | 'reservations' | 'usage' | 'sessions' | 'fuel' | 'fuel_requests' | 'tickets' | 'push_subscriptions',
 ): number {
   return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
 }
