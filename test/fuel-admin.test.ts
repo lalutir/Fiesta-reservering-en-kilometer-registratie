@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { run } from '../src/db.ts';
-import { ODO, at, createHousehold, insertFuel, insertUsage, makeSubscriber, stubFetch, type Json } from './helpers.ts';
+import { ODO, FUEL_ODO, at, createHousehold, insertFuel, insertUsage, makeSubscriber, stubFetch, type Json } from './helpers.ts';
 
 const ENV = { PUSH_CONTACT: 'https://car.example.test' };
 
@@ -22,7 +22,7 @@ async function world(opts: Parameters<typeof createHousehold>[0] = {}) {
   return h;
 }
 
-const fill = { millilitres: 40_000, totalCents: 6000 };
+const fill = { millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO };
 const nameOf = (s: Json): Json[] => [s.userName, s.km, s.cents];
 const sum = (shares: Json[]): number => shares.reduce((n: number, s: Json) => n + s.cents, 0);
 const pairs = (balances: Json[]): Json[][] => balances.map((b) => [b.fromName, b.toName, b.cents]);
@@ -224,7 +224,7 @@ test('promoting someone through the admin API re-splits at once, and the audit l
 
     // A fill-up nobody pays for says so in its log line.
     run(t.db, "UPDATE users SET role = 'admin'");
-    const none = (await anna.post('/api/fuel', { at: at(t.clock, -5), millilitres: 30_000, totalCents: 4500 })).body.fuel;
+    const none = (await anna.post('/api/fuel', { at: at(t.clock, -5), millilitres: 30_000, totalCents: 4500, odometer: FUEL_ODO })).body.fuel;
     const line2 = t.logs.find((l) => l['event'] === 'fuel.created' && l['id'] === none.id);
     assert.deepEqual([line2?.['shares'], line2?.['equalSplit']], [0, true]);
   } finally {
@@ -242,7 +242,7 @@ test('what an admin who fuels is owed carries over like any other debt, and one 
     // Both drive again, 100 km each, and the admin fuels again (the admin's own 100 km before the first fill-up do not matter).
     insertUsage(t, { userId: anna.id, start: at(t.clock, -8), end: at(t.clock, -7), odometerStart: 1250, odometerEnd: 1350 });
     insertUsage(t, { userId: ben.id, start: at(t.clock, -6), end: at(t.clock, -5), odometerStart: 1350, odometerEnd: 1450 });
-    const second = (await admin.post('/api/fuel', { at: at(t.clock, -2), millilitres: 30_000, totalCents: 4000 })).body.fuel;
+    const second = (await admin.post('/api/fuel', { at: at(t.clock, -2), millilitres: 30_000, totalCents: 4000, odometer: FUEL_ODO })).body.fuel;
     assert.deepEqual(second.shares.map(nameOf), [['Anna', 100, 2000], ['Ben', 100, 2000]]);
     const [annas, bens] = [shareOf(second, anna.id), shareOf(second, ben.id)] as Json[];
     assert.deepEqual([annas.carriedCents, annas.dueCents], [4000, 6000], 'Anna still owes the admin the first fill-up');

@@ -3,7 +3,8 @@
 // Money is whole cents and volume whole millilitres everywhere: nothing here
 // uses floating point to decide an amount.
 import { del, get, patch, post } from '../api.js';
-import { dateTimeField, driverSelect, field, fmtWhen, focusFirstInvalid, h, setBusy, showFieldErrors } from '../dom.js';
+import { dateTimeField, driverSelect, field, fmtWhen, focusFirstInvalid, h, numberInput, readNumber, setBusy, showFieldErrors } from '../dom.js';
+import { odometerContext, odometerNote } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
 
 // Contains forms, so it is not re-rendered in the background.
@@ -199,10 +200,16 @@ export function changedLine(share) {
 export async function render(app, route) {
   const me = app.session.user;
   const isAdmin = me.role === 'admin';
-  /** @type {{ items: import('../api.js').Fuel[], balances: import('../api.js').Balance[] }} */
-  const data = await get('/api/fuel');
+  /** @type {[{ items: import('../api.js').Fuel[], balances: import('../api.js').Balance[] }, import('../api.js').OdometerChain | null]} */
+  const [data, chain] = await Promise.all([
+    get('/api/fuel'),
+    // The kilometre check is a help on this screen: without it the form still works, without the last known reading.
+    get('/api/odometer').catch(() => null),
+  ]);
   const editId = Number(route.query.get('edit') ?? 0) || null;
-  const existing = editId ? (data.items.find((f) => f.id === editId && f.can.edit) ?? null) : null;
+  // The fueler or an admin can open a locked fill-up (a payment depends on it) to correct the odometer reading, and only that.
+  const existing = editId ? (data.items.find((f) => f.id === editId && (f.can.edit || f.canOdometer === true)) ?? null) : null;
+  const odometerOnly = existing !== null && !existing.can.edit;
 
   // ------------------------------------------------------------------ form
   const nowMinute = new Date(Math.floor(Date.now() / 60_000) * 60_000).toISOString();
@@ -214,13 +221,23 @@ export async function render(app, route) {
   const litres = input(existing ? fmtLitres(existing.millilitres) : '');
   const total = input(existing ? fmtCents(existing.totalCents) : '');
   const price = input('');
+  const odometer = numberInput(existing?.odometer ?? null);
   const note = h('input', { type: 'text', maxlength: '500', value: existing?.note ?? '', autocomplete: 'off' });
   const fWho = field(S.fuel.who, who);
   const fLitres = field(S.fuel.litres, litres, S.fuel.enterTwo);
   const fTotal = field(S.fuel.total, total);
   const fPrice = field(S.fuel.pricePerLitre, price);
+  const fOdometer = field(S.fuel.odometer, odometer, S.fuel.odometerHint);
   const fNote = field(S.reserve.note, note, S.noteHint);
   const worked = h('p', { class: 'hint', 'aria-live': 'polite' });
+  // The reading before this fill-up (or, during a trip, the trip's own readings), and a warning that never blocks a save.
+  const kmNote = odometerNote({ tz: app.tz, meId: me.id });
+  fOdometer.row.appendChild(kmNote.el);
+  const showKmNote = () =>
+    kmNote.show(odometerContext(chain?.readings ?? [], when.getIso() ?? existing?.at ?? nowMinute, { fuel: existing?.id ?? null }, true), readNumber(odometer.value));
+  when.onInput(showKmNote);
+  odometer.addEventListener('input', showKmNote);
+  showKmNote();
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const submit = h('button', { class: 'btn primary block', type: 'submit' }, S.fuel.save);
 
@@ -238,22 +255,37 @@ export async function render(app, route) {
       novalidate: true,
       onsubmit: async (/** @type {Event} */ e) => {
         e.preventDefault();
-        for (const f of [fWho, fLitres, fTotal, fPrice, fNote, when]) f.setError(null);
+        for (const f of [fWho, fLitres, fTotal, fPrice, fOdometer, fNote, when]) f.setError(null);
         formError.hidden = true;
-        const at = when.getIso();
-        if (!at) {
-          when.setError('invalid_datetime');
+        const reading = readNumber(odometer.value);
+        // The reading is required for a new fill-up and for the odometer-only correction; a fill-up that already has one cannot lose it.
+        // A fill-up from before the kilometre check existed may stay without (and then sends no reading).
+        const readingMissing = reading === null && (!existing || odometerOnly || (existing.odometer ?? null) !== null);
+        if (readingMissing) fOdometer.setError('required');
+        // The odometer-only correction sends exactly the reading: nothing else of a locked fill-up is touched.
+        /** @type {Record<string, unknown>} */
+        let body = { odometer: reading };
+        if (!odometerOnly) {
+          const at = when.getIso();
+          if (!at) {
+            when.setError('invalid_datetime');
+            focusFirstInvalid(form);
+            return;
+          }
+          const derived = deriveFuel({ litres: litres.value, total: total.value, price: price.value });
+          if (!derived.ok) {
+            showFieldErrors({ litres: fLitres, total: fTotal, price: fPrice }, { fields: derived.errors });
+            focusFirstInvalid(form);
+            return;
+          }
+          body = { at, millilitres: derived.millilitres, totalCents: derived.totalCents, note: note.value };
+          if (reading !== null) body['odometer'] = reading;
+          if (isAdmin && Number(who.value) !== (existing?.userId ?? me.id)) body['userId'] = Number(who.value);
+        }
+        if (readingMissing) {
           focusFirstInvalid(form);
           return;
         }
-        const derived = deriveFuel({ litres: litres.value, total: total.value, price: price.value });
-        if (!derived.ok) {
-          showFieldErrors({ litres: fLitres, total: fTotal, price: fPrice }, { fields: derived.errors });
-          focusFirstInvalid(form);
-          return;
-        }
-        const body = /** @type {Record<string, unknown>} */ ({ at, millilitres: derived.millilitres, totalCents: derived.totalCents, note: note.value });
-        if (isAdmin && Number(who.value) !== (existing?.userId ?? me.id)) body['userId'] = Number(who.value);
         submit.disabled = true;
         try {
           if (existing) await patch(`/api/fuel/${existing.id}`, body);
@@ -262,7 +294,7 @@ export async function render(app, route) {
           app.navigate('#/fuel');
         } catch (err) {
           const apiErr = /** @type {import('../api.js').ApiError} */ (err);
-          showFieldErrors({ at: when, userId: fWho, millilitres: fLitres, totalCents: fTotal, note: fNote }, apiErr);
+          showFieldErrors({ at: when, userId: fWho, millilitres: fLitres, totalCents: fTotal, odometer: fOdometer, note: fNote }, apiErr);
           formError.textContent = errorText(apiErr);
           formError.hidden = false;
           focusFirstInvalid(form);
@@ -272,18 +304,29 @@ export async function render(app, route) {
     },
     [
       h('h3', { text: existing ? S.fuel.editTitle : S.fuel.addTitle }),
+      odometerOnly ? h('p', { class: 'hint', text: S.fuel.odometerOnlyHint }) : null,
+      // The only control that can change in the odometer-only correction comes first, above the locked ones.
+      odometerOnly ? fOdometer.row : null,
       isAdmin ? fWho.row : null,
       when.row,
       fLitres.row,
       fTotal.row,
       fPrice.row,
       worked,
+      odometerOnly ? null : fOdometer.row,
       fNote.row,
       h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }),
       formError,
       h('div', { class: 'actions' }, [submit, existing ? h('a', { class: 'btn', href: '#/fuel' }, S.cancel) : null]),
     ],
   );
+
+  if (odometerOnly) {
+    // Every other control is locked, so what is shown cannot be mistaken for something that will be saved.
+    for (const row of [fWho.row, when.row, fLitres.row, fTotal.row, fPrice.row, fNote.row]) {
+      for (const control of row.querySelectorAll('input, select')) /** @type {HTMLInputElement} */ (control).disabled = true;
+    }
+  }
 
   // ------------------------------------------------------------- balances
   const balances = h('section', { class: 'card' }, [
@@ -465,6 +508,9 @@ export async function render(app, route) {
       ]),
       h('div', { class: 'when', text: fmtWhen(f.at, app.tz) }),
       f.note ? h('div', { class: 'note', text: f.note }) : null,
+      typeof f.odometer === 'number' ? h('div', { class: 'sub', text: S.fuel.odometerLine(f.odometer) }) : null,
+      // Kilometres the odometer chain shows were driven but not registered, in this period. Display only: the split is unchanged.
+      (f.unaccountedKm ?? 0) > 0 ? h('div', { class: 'sub km-flag', text: S.fuel.unaccounted(f.unaccountedKm ?? 0) }) : null,
       h('div', { class: 'sub', text: f.firstInData || f.period.from === null ? S.fuel.periodFirst : S.fuel.periodBetween(fmtWhen(f.period.from, app.tz), fmtWhen(f.period.to, app.tz)) }),
       // Equal split: nobody has personal kilometres in the period (nobody drove, or only together). Otherwise the pool follows the personal ratio.
       f.equalSplit ? h('div', { class: 'sub', text: f.togetherKm ? S.fuel.equalSplitTogether : S.fuel.equalSplit }) : null,
@@ -521,6 +567,8 @@ export async function render(app, route) {
       ),
       panelHost,
       lockedHint ? h('p', { class: 'hint', text: f.hasPaidRequests ? S.fuel.paidLocked : S.fuel.settledLocked }) : null,
+      // A payment depends on this fill-up, so only the reading can be corrected (it moves no money).
+      !f.can.edit && f.canOdometer ? h('div', { class: 'actions' }, [h('a', { class: 'btn', href: `#/fuel?edit=${f.id}` }, S.fuel.correctOdometer)]) : null,
       f.can.edit || f.can.delete
         ? h('div', { class: 'actions' }, [
             f.can.edit ? h('a', { class: 'btn', href: `#/fuel?edit=${f.id}` }, S.edit) : null,

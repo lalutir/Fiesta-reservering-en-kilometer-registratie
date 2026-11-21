@@ -1,5 +1,6 @@
 import { get } from '../api.js';
 import { fmtDriveRange, fmtRange, fmtWhen, groupByDay, h, kmOwnerLine, setBusy } from '../dom.js';
+import { kmMarkers } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
 import { carriedRows, fmtCents, selfPaidButton, shareStatus } from './fuel.js';
 
@@ -61,11 +62,12 @@ export function buildTimeline(usage, reservations, nowIso) {
  * @returns {Promise<HTMLElement>}
  */
 export async function render(app) {
-  /** @type {[{ usage: HistoryUsage[], reservations: import('../api.js').Reservation[] }, { items: import('../api.js').Fuel[] } | null]} */
-  const [data, fuel] = await Promise.all([
+  /** @type {[{ usage: HistoryUsage[], reservations: import('../api.js').Reservation[] }, { items: import('../api.js').Fuel[] } | null, import('../api.js').OdometerChain | null]} */
+  const [data, fuel, odometer] = await Promise.all([
     get('/api/history'),
-    // The fuel part is a convenience on this screen: if it cannot be loaded the history still shows.
+    // The fuel part and the kilometre markers are conveniences on this screen: if they cannot be loaded the history still shows.
     get('/api/fuel').catch(() => null),
+    get('/api/odometer').catch(() => null),
   ]);
   const timeline = buildTimeline(data.usage, data.reservations, new Date().toISOString());
   const me = app.session.user.id;
@@ -153,6 +155,7 @@ export async function render(app) {
         u.sameDriver === null ? null : ` · ${u.sameDriver ? S.history.sameDriver : S.history.otherDriver}`,
       ]),
       kmOwnerLine(u, me),
+      kmMarkers(u, odometer?.items ?? []),
       u.note ? h('div', { class: 'note', text: u.note }) : null,
     ]);
   };

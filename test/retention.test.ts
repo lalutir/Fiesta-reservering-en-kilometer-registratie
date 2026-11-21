@@ -123,18 +123,18 @@ test('the deleted-row counts are logged as one JSON line and kept for the admin 
     t.logs.length = 0;
     const res = await admin.post('/api/admin/retention/run');
     assert.equal(res.status, 200);
-    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
+    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
     const lines = t.logs.filter((l) => l['event'] === 'retention.purge');
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
+    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
 
     const status = (await admin.get('/api/admin/retention')).body;
     assert.equal(status.cutoff, CUTOFF);
     assert.equal(status.windowMonths, 6);
     assert.deepEqual(status.window, { from: CUTOFF, to: '2026-12-15T11:00:00.000Z' });
     assert.equal(status.lastPurgeAt, NOW);
-    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, sessions: 0 });
-    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, sessions: status.counts.sessions });
+    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
+    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: status.counts.sessions });
     assert.equal(status.oldest.reservationEnd, null);
     assert.equal(status.timeZone, 'Europe/Amsterdam');
   } finally {
@@ -250,7 +250,7 @@ test('old tickets are purged by the time of the offence, strictly before the cut
     );
     assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM tickets').some((r) => r.id === before));
     // A ticket does not take anything else with it, and the other counts stay at zero.
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, odometerExplained: 0, sessions: 0 });
     t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 1);
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 0, 'idempotent');
@@ -296,7 +296,7 @@ test('the purge command says how many tickets it removed', async (tctx) => {
 
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets and 0 expired sessions older than ${CUTOFF}.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations and 0 expired sessions older than ${CUTOFF}.`,
   );
 
   const db = openDb(path.join(dir, 'car.db'));
@@ -307,9 +307,128 @@ test('the purge command says how many tickets it removed', async (tctx) => {
   db.close();
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets and 0 expired sessions older than ${CUTOFF}.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets, 0 odometer explanations and 0 expired sessions older than ${CUTOFF}.`,
     'two tickets removed, the one exactly at the cutoff kept',
   );
+});
+
+// ----------------------------------------------- odometer explanations and the chain
+
+function insertExplained(t: TestApp, key: string, prevAt: string, by: number): number {
+  return run(t.db, 'INSERT INTO odometer_explained (item_key, prev_at, note, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', key, prevAt, 'why', by, 'now', 'now').lastInsertRowid;
+}
+
+test('odometer explanations are purged when their earlier reading is strictly before the cutoff (boundary +/- 1 ms), and counted', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    const before = insertExplained(t, 'before', shift(CUTOFF, -1), anna.id);
+    const atCutoff = insertExplained(t, 'at', CUTOFF, anna.id);
+    const recent = insertExplained(t, 'recent', at(t.clock, -48), anna.id);
+    assert.equal((await admin.get('/api/admin/retention')).body.counts.odometerExplained, 3);
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.odometerExplained, 1);
+    assert.deepEqual(
+      many<{ id: number }>(t.db, 'SELECT id FROM odometer_explained ORDER BY id').map((r) => r.id),
+      [atCutoff, recent],
+    );
+    assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM odometer_explained').some((r) => r.id === before));
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 1, sessions: 0 });
+    assert.equal((await admin.get('/api/admin/retention')).body.counts.odometerExplained, 2);
+    t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).odometerExplained, 1);
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).odometerExplained, 0, 'idempotent');
+  } finally {
+    await t.close();
+  }
+});
+
+test('a purge result stored before odometer explanations existed is returned as stored, and a manual run stores the new key', async () => {
+  const { t, admin } = await createHousehold();
+  try {
+    run(t.db, "INSERT INTO meta (key, value) VALUES ('last_purge', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify({ cutoff: CUTOFF, reservations: 1, usage: 2, fuel: 3, fuelRequests: 4, tickets: 6, sessions: 5 }));
+    const old = (await admin.get('/api/admin/retention')).body;
+    assert.equal(old.lastPurge.odometerExplained, undefined, 'the page reads it with ?? 0');
+    assert.equal(old.lastPurge.tickets, 6);
+    const manual = await admin.post('/api/admin/retention/run');
+    assert.equal(manual.body.result.odometerExplained, 0);
+    assert.equal(manual.body.status.lastPurge.odometerExplained, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('the odometer chain does not change when the purge runs: a drive that straddles the cutoff keeps its end as the oldest reading, with no predecessor', async () => {
+  const { t, anna, ben, carla } = await createHousehold();
+  try {
+    // Before the window: nothing here may be anybody's predecessor. Drive 1 ends at 100, drive 2 starts at 150 (a 50 km gap, but too old to flag).
+    insertUsage(t, { userId: carla.id, start: shift(CUTOFF, -3 * HOUR), end: shift(CUTOFF, -2 * HOUR), odometerStart: 50, odometerEnd: 100 });
+    const straddle = insertUsage(t, { userId: anna.id, start: shift(CUTOFF, -HOUR), end: shift(CUTOFF, HOUR), odometerStart: 150, odometerEnd: 300 });
+    insertUsage(t, { userId: ben.id, start: shift(CUTOFF, 2 * HOUR), end: shift(CUTOFF, 3 * HOUR), odometerStart: 350, odometerEnd: 400 });
+    const view = async () => (await anna.get('/api/odometer')).body;
+    const derive = async () => {
+      const body = await view();
+      return { readings: body.readings, items: body.items.map((i: { key: string; kind: string; km: number }) => [i.key, i.kind, i.km]) };
+    };
+    const beforePurge = await derive();
+    assert.deepEqual(beforePurge.readings.map((r: { source: string; id: number; km: number }) => [r.source, r.id, r.km]), [['drive-end', straddle, 300], ['drive-start', straddle + 1, 350], ['drive-end', straddle + 1, 400]]);
+    assert.deepEqual(beforePurge.items.map((i: unknown[]) => [i[1], i[2]]), [['gap', 50]], 'only the gap inside the window; the old drive is nobody\'s predecessor');
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.usage, 1, 'the old drive is gone, the straddling one stays');
+    assert.deepEqual(await derive(), beforePurge, 'derive, purge, derive again: the same');
+  } finally {
+    await t.close();
+  }
+});
+
+test('a reading exactly at the cutoff takes part in the chain, one a millisecond before does not, and the purge changes nothing about it', async () => {
+  const { t, anna } = await createHousehold();
+  try {
+    insertFuel(t, { userId: anna.id, at: shift(CUTOFF, -1), odometer: 500 });
+    insertFuel(t, { userId: anna.id, at: CUTOFF, odometer: 520 });
+    insertFuel(t, { userId: anna.id, at: shift(CUTOFF, HOUR), odometer: 560 });
+    const view = async (): Promise<unknown> => {
+      const body = (await anna.get('/api/odometer')).body;
+      return { readings: body.readings.map((r: { km: number }) => r.km), items: body.items.map((i: { kind: string; km: number }) => [i.kind, i.km]) };
+    };
+    const expected = { readings: [520, 560], items: [['gap', 40]] };
+    assert.deepEqual(await view(), expected, 'the 500 reading is outside the window, so there is no 20 km gap before 520');
+    purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(many(t.db, 'SELECT id FROM fuel').length, 2, 'the purge removed the one before the cutoff only');
+    assert.deepEqual(await view(), expected);
+  } finally {
+    await t.close();
+  }
+});
+
+test('an explanation made through the API leaves with its pair: kept while the earlier reading is at the cutoff, gone the millisecond after, and the finding is gone before the purge even runs', async () => {
+  const { t, admin, carla, ben } = await createHousehold();
+  try {
+    // Carla's drive ends exactly at the cutoff with 200 on the clock; Ben starts an hour later at 260: a 60 km gap.
+    insertUsage(t, { userId: carla.id, start: shift(CUTOFF, -HOUR), end: CUTOFF, odometerStart: 100, odometerEnd: 200 });
+    insertUsage(t, { userId: ben.id, start: shift(CUTOFF, HOUR), end: shift(CUTOFF, 2 * HOUR), odometerStart: 260, odometerEnd: 300 });
+    const gap = (await admin.get('/api/odometer')).body.items[0];
+    assert.deepEqual([gap.kind, gap.km, gap.prev.at], ['gap', 60, CUTOFF]);
+    assert.equal((await admin.post('/api/odometer/explain', { key: gap.key, note: 'before the check existed' })).status, 201);
+
+    // At the cutoff itself the explanation is still there, still applies, and is not purged.
+    const first = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.deepEqual([first.usage, first.odometerExplained], [0, 0]);
+    assert.equal((await carla.get('/api/odometer')).body.items[0].explained.note, 'before the check existed');
+
+    // A millisecond later the earlier reading is outside the window: the finding is gone at once (the chain
+    // does not wait for the purge), the stale row is still stored, and the purge then deletes exactly it.
+    t.clock.advance(1);
+    const mid = (await carla.get('/api/odometer')).body;
+    assert.deepEqual(mid.items, [], 'no predecessor for the oldest reading left in the window');
+    assert.deepEqual(mid.readings.map((r: { km: number }) => r.km), [260, 300]);
+    assert.equal(many(t.db, 'SELECT id FROM odometer_explained').length, 1, 'the row is still stored until the purge');
+    const second = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.deepEqual([second.usage, second.odometerExplained], [1, 1]);
+    assert.equal(many(t.db, 'SELECT id FROM odometer_explained').length, 0);
+    assert.deepEqual((await carla.get('/api/odometer')).body, mid, 'derive, purge, derive again: the same');
+  } finally {
+    await t.close();
+  }
 });
 
 test('an abandoned old draft is purged like any other old row, a recent one is kept', async () => {

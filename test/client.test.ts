@@ -4,7 +4,7 @@
 // The modules run in Node as they are (they only touch the DOM when rendering).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { FuelShare, Reservation } from '../public/api.js';
+import type { FuelShare, OdometerReading, Reservation } from '../public/api.js';
 import { driveBody, fmtDriveRange } from '../public/dom.js';
 import { S } from '../public/strings.js';
 import { keyBytes, reminderSupport } from '../public/views/account.js';
@@ -126,14 +126,24 @@ test('suggestReservation: the link wins, then my running one, then my latest end
   assert.equal(pick(null, offeredReservations([registered, others, longAgo])), null, 'registered, somebody else\'s and older than 14 days are not suggested');
 });
 
-test('defaultsFor: a running or upcoming reservation starts the drive now, an ended one fills in its own times', () => {
+test('defaultsFor: a running or upcoming reservation starts the drive now, an ended one fills in its own times, the start reading is the latest known one before the start', () => {
   const now = '2026-06-15T10:30:45.123Z';
+  const reading = (km: number): OdometerReading => ({ source: 'drive-end', id: 1, km, at: iso(-600), userId: 2, userName: 'Ben', draft: false });
+  /** What the lookup was asked for, and what it answers. */
+  const asked: string[] = [];
+  const lookup = (km: number | null) => (at: string) => {
+    asked.push(at);
+    return km === null ? null : reading(km);
+  };
   const upcoming = res({ start: iso(600), end: iso(700), note: 'Weekend away' });
-  assert.deepEqual(defaultsFor(upcoming, now, 41_200), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: 41_200, note: 'Weekend away' });
-  assert.deepEqual(defaultsFor(res(), now, null), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: null, note: '' }, 'running');
-  assert.deepEqual(defaultsFor(null, now, 7), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: 7, note: '' }, 'no reservation');
+  assert.deepEqual(defaultsFor(upcoming, now, lookup(41_200)), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: 41_200, note: 'Weekend away' });
+  assert.deepEqual(asked, ['2026-06-15T10:30:00.000Z'], 'a drive that starts now asks for the reading at the start minute');
+  assert.deepEqual(defaultsFor(res(), now, lookup(null)), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: null, note: '' }, 'running, nothing known');
+  assert.deepEqual(defaultsFor(null, now, lookup(7)), { start: '2026-06-15T10:30:00.000Z', end: null, odometerStart: 7, note: '' }, 'no reservation');
   const past = res({ note: 'Groceries' });
-  assert.deepEqual(defaultsFor(past, '2026-06-15T13:00:00.000Z', 99), { start: START, end: END, odometerStart: null, note: 'Groceries' }, 'ended: its times, readings left to the person');
+  asked.length = 0;
+  assert.deepEqual(defaultsFor(past, '2026-06-15T13:00:00.000Z', lookup(99)), { start: START, end: END, odometerStart: 99, note: 'Groceries' }, 'ended: its times, the reading before them, the end left to the person');
+  assert.deepEqual(asked, [START], 'an ended reservation asks for the reading before its own start, not before now');
 });
 
 test('submitLabel follows what the form holds', () => {

@@ -684,6 +684,125 @@ Defaults taken (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/continuous-integration-github-actions` (git-excluded). Base commit `a2000d8f48b35fa469ca1ef1c716f6f9f107228f`.
 <!-- implement:run:continuous-integration-github-actions:end -->
 
+<!-- implement:run:odometer-continuity-gap-check:start -->
+### Odometer continuity check across drives and fill-ups (odometer-continuity-gap-check)
+
+Date 2026-11-21. Branch `implement/odometer-continuity-gap-check`. Base branch `main`, base commit `c7be287ebad32b80dc885f260b64276df9ca218a`.
+
+### Request
+
+> Make kilometre registration trustworthy by checking the odometer across drives. Today only one drive is validated (end >= start). Nothing compares a drive's start reading with the previous end reading, the start field is always empty (the prefill in public/views/usage.js sets odometerStart to null), and fill-ups carry no reading. So unregistered or mistyped kilometres silently skew the fuel split.
+>
+> 1. Prefill. The new-drive form pre-fills the start reading, also when opened from a reservation card's Register km or from a draft. The value is the latest known reading: the end of the latest completed drive, or the odometer of a later fill-up, whichever is newer. Show where it comes from ("Last known: 45,210 km, Anna, Tue 14:05"). It stays editable. If the typed value is lower or higher than the latest known reading, show an inline warning. Never block saving, because a genuine unregistered trip must still be registrable.
+> 2. Gap detection, derived live (like the traffic-ticket driver, not stored). Order all odometer readings by time (drive start and end, drafts' start readings, fill-up readings). Between consecutive readings, flag a gap when the next reading is higher than the previous (N km unaccounted for between person X and person Y). Flag a mismatch when the next reading is lower (the readings contradict each other, probably a typo). Only look inside the 6-month window; the oldest retained reading has no predecessor and is not flagged.
+> 3. Visible to ALL users, not only the admin. Add a "Kilometre check" list or banner on the Drives tab, markers in the Drives list and History, and the same overview on the admin page. On fuel cards for a period containing a gap, show "N km unaccounted for in this period; the split only counts registered km". Do NOT change how the fuel split is calculated.
+> 4. Resolving. From a gap, "Add the missing drive" opens the form prefilled with the gap's readings and the time window between its two neighbours. A gap or mismatch can be marked "explained" with a required note (for example an outsider drove, or a typo was corrected elsewhere) by anyone involved or an admin. That silences it and shows the note. Store dismissals in an additive migration (with the usual pre-migrate backup), keyed by the two neighbouring readings, so a dismissal stops applying if either reading changes.
+> 5. Fill-up odometer. The fill-up form asks for the current odometer reading (km). Make it required for new fill-ups and nullable for existing ones. The fueler or an admin can edit it, and it takes part in the chain above.
+>
+> Keep the existing rules: no new runtime dependencies, drafts never count as kilometres, retention purge, the admin drive editor, km owned by another person or by "together". Add tests (API, derivation edge cases such as equal timestamps, purge boundary, drafts, corrections, dismissals), a smoke check, README and DEPLOYMENT updates, and a headless Chromium pass at 390 and 320 px. The browser smoke suite from the CI change must stay green. Tell me in the report how you handled existing data that already contains gaps at first deploy.
+
+### What was built
+
+The server derives an odometer chain on every read from completed-drive start and end readings, draft start readings and a new fill-up odometer. It flags a gap where the next reading is higher and a mismatch where it is lower, inside the 6-month window. Every signed-in user sees the findings in a Kilometre check on the Drives tab, markers in the Drives list and History, a note on fuel cards and the same overview on the admin Drives tab. The new-drive form prefills the start reading with its source and warns without blocking. A finding is resolved by "Add the missing drive" or by an "explained" note (additive migration v5); fill-ups gain an odometer, required on create and NULL for existing rows. The fuel split calculation is unchanged. Nothing is committed: HEAD equals `main`; git shows 34 modified tracked files (+1086/-163) and 6 untracked (`src/odometer.ts`, `public/kmcheck.js`, four `test/odometer*.test.ts`) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.7). One server module (`src/odometer.ts`: pure `deriveChain`, loader, three routes) and one client module (`public/kmcheck.js`), with v5 storing only `fuel.odometer` and an `odometer_explained` table keyed by one opaque `item_key` plus `prev_at`. Smallest new surface, no new error code, and an e2e extension that creates no data.
+- Rejected: idiomatic (server-only derivation modelled on `whoDrove`/`computeShares` with extra DTO and attribution surface): more surface for no benefit at 2 to 10 users.
+- Rejected: robust (interval-aware `shared/odometer.js` served to the browser): adds `static.ts`, `PRECACHE`, container-check and Dockerfile touch points and rewrites more tests for the same behaviour.
+- Rejected: storing gaps (they go stale when a drive or fill-up is corrected), a new bottom tab (320 px), `can.odometer` on the fuel DTO (five tests `deepEqual` the whole `can`; a top-level `canOdometer` is used), and tolerance, push, auto-correction and back-filling (non-goals).
+
+### How it works
+
+Start with the top comment of `src/odometer.ts`, then migration 5 in `src/db.ts`, then `public/kmcheck.js`.
+
+- Readings: a completed drive gives its start and end reading, an open draft its start reading, a fill-up its odometer. The person is the driver (`usage.user_id`, never the km owner) or the fueler. Rows without a reading (legacy drives, legacy fill-ups) are ignored.
+- Chain: ordered by instant, then rank (drive end, zero-length drive start, fill-up, drive or draft start), then id. Higher gives a gap, lower a mismatch, equal nothing; `GAP_TOLERANCE_KM = 0`. A drive's own trip is never a gap; a fill-up strictly inside a completed drive is a mismatch only outside that drive's readings. Readings before the purge's window start do not take part, so deriving before and after a purge gives the same list.
+- Routes: `GET /api/odometer` (any signed-in user; findings with explained state and note, plus the latest known reading), `POST /api/odometer/explain` (key and a note of 1 to 500 characters; the driver or fueler of either neighbour or an admin; 403, 404 for a pair that is not currently flagged), `DELETE /api/odometer/explained/:id` (same people). An explanation stops applying when either reading changes, the driver changes or another reading is inserted between them.
+- Fill-ups: `POST /api/fuel` requires `odometer` (422 `required`, 0 to 10,000,000); `PATCH` may set or change it but not clear it, only for the fueler or an admin, and an odometer-only `PATCH` is allowed on a fill-up locked by a paid request (logged as `odometerOnly`). The DTO adds `odometer`, `canOdometer` and `unaccountedKm`, which only fills the card note; `computeShares` is untouched.
+- Client: `kmcheck.js` holds the prefill, the inline warning, the Drives section and the markers; a test ties its `GAP_TOLERANCE_KM` to the server constant. "Add the missing drive" opens the normal drive form with the gap's readings and times and saves through `POST /api/usage` with the overlap rules unchanged. Service worker cache is `car-static-v5` with `/kmcheck.js` in `PRECACHE`.
+- Retention: purge deletes `odometer_explained` rows with `prev_at` before the cutoff; `PurgeResult`, retention counts, the CLI line and the admin Retention tab list them.
+- First deploy with existing data: the first start on v4 writes `backups/pre-migrate-v4.db` once, then adds the column and table. Nothing is rewritten, back-filled or auto-dismissed. Old fill-ups keep NULL and sit outside the chain; legacy drives with no readings are ignored. Gaps and mismatches among existing drive readings appear to everyone as open items and clear by adding the drive, correcting a reading or an explanation. No share, request or balance changes (a test proves it). A rehearsal on a synthetic realistic v4 file shows 3 open items (gap 50, mismatch 10, gap 80); no copy of real household data was available.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/odometer.ts` | added | `deriveChain`, loader, three routes, explain rules (388 lines) |
+| `public/kmcheck.js` | added | Prefill, warning, Kilometre check section, markers (341 lines) |
+| `src/db.ts` | modified | Migration 5 (`fuel.odometer`, `odometer_explained`), row types, `countRows` takes the table |
+| `src/fuel.ts`, `src/validate.ts`, `src/usage.ts` | modified | Fill-up odometer rules, DTO fields, `odometerOnly` log; `MAX_ODOMETER` exported from `validate.ts` and imported by `usage.ts` |
+| `src/retention.ts`, `src/cli.ts`, `src/app.ts` | modified | Purge and counts for explanations, CLI line, route registration |
+| `public/views/usage.js`, `history.js`, `fuel.js`, `admin/admin.js` | modified | Prefill and gap form, Kilometre check, markers, fill-up odometer field and card note, admin overview and Retention counts |
+| `public/api.js`, `strings.js`, `style.css`, `sw.js` | modified | Typedefs; texts and `fmtKm`; styles; cache `car-static-v5` and precache entry |
+| `scripts/smoke.mjs`, `e2e/app.spec.ts` | modified | Smoke check 14; Drives check, fill-up reading required, admin Drives |
+| `test/odometer.test.ts`, `odometer-api.test.ts`, `odometer-view.test.ts`, `odometer-integration.test.ts` | added | Derivation, routes and first-deploy rehearsal, fake-DOM screens, cross-module checks |
+| `test/db`, `maintenance`, `retention`, `pwa`, `client`, `forms`, `fuel`, `fuel-carry`, `fuel-admin`, `attribution`, `notes`, `payments`, `tickets-view` `.test.ts`, `fake-dom.ts`, `helpers.ts` | modified | v5 upgrade, rollback and v4 backup restore; odometer on fill-up calls; purge boundaries; helpers |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Rules and routes, v5 upgrade and first-deploy section; this entry |
+| `package.json`, lockfile, `Dockerfile`, compose, `Caddyfile` | unchanged | No dependency or container change |
+
+### How to run and test
+
+Node 22.23 (`.nvmrc`), Windows. Last test stage, final tree, all exit 0 (this documentation step ran no test command):
+
+- `npm run typecheck` (server and client) and `npm run lint`: clean. `npm test`: 716 of 716 (628 on `main`, 708 after build and specialists, 8 added by the test stage). `npm run build`: clean. `npm run smoke`: 14 of 14 over real HTTP. `npm run e2e`: 46 passed at 390 and 320 px.
+- Build stage: `npm run check` exit 0. Mutation checks: 26 killed (build), 17 killed (test stage); files restored and SHA-256 compared. Headless Chromium: 138 checks, 0 failed (390 light, 320 light, 320 dark), no console or network errors, no sideways scroll, contrast at least 5.83.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design | No | 5 fixes: form placed before the Kilometre check, neutral style for explained markers, disclosure markers, odometer-only edit puts the editable field first, "at the pump" hint |
+| Backend | engineering-skills:senior-backend | No | NUL-only note gave 500, now 422 `invalid_value`; `fuel.updated` logs `odometerOnly`; chain for 3,000 drives takes 6.6 ms |
+| Data | engineering-advanced-skills:database-designer | No | No change; throw-away probe: v4 file with 20,001 drives upgraded in 48.7 ms, integrity check ok, existing indexes used, purge boundary checked |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; read-only, filtering inline |
+| Simplicity | simplify | No | 6 behaviour-neutral cleanups in `fuel.ts`, `odometer.ts`, `kmcheck.js`, `views/fuel.js`; single inline pass |
+| DevOps | none | n/a | Did not run (no ledger entry; no Docker or Caddy change) |
+
+### Verification
+
+Verified (ran and saw pass): the commands above; every acceptance criterion maps to at least one test; first-deploy rehearsal on a synthetic v4 file with rows (shares, requests and balances identical); v4 backup restore; failing v5 rolls back; the chain does not change when the purge runs (200 seeded households).
+
+NOT verified:
+- Real phones, an installed PWA picking up `car-static-v5`, the service worker in a real browser, screen readers.
+- Docker, `docker compose up`, Caddy HTTPS, a droplet deploy, the live v4 database, a full disk during the pre-migration copy, a real two-process migration race; Docker's bundled SQLite build.
+- GitHub Actions on this branch (nothing is pushed): the Linux, Docker and CI browser jobs have not run; the e2e suite passed locally only.
+- Zero tolerance over weeks of real use: the drive to the pump will show as small gaps.
+- The 138-check Chromium pass was repeated after the UI fixes but not after the backend and simplify edits; e2e and smoke ran on the final tree.
+- First-deploy handling rests on a synthetic file, not real household data.
+
+Test confidence: high for what the commands cover (test stage); it does not cover the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 16 findings, 0 confirmed, nothing blocking, no review fix recorded.
+
+Remaining minor notes (not fixed): the explanation key includes the reading source, so finishing a draft drops its explanation; "Add the missing drive" prefill can overlap legacy drives and give 409; `kmCheckSection` is a 130-line, 6-deep function; the fill-up submit handler is tangled; a nested ternary decides the in-trip fill-up case; `Reading.draft` is redundant; an orphaned explanation cannot be removed by anyone. Nits: unused exports, duplicated lookup in explain and unexplain, a boolean flag parameter, inconsistent km formatting, "involved" authorisation is soft (any member can become a neighbour of a gap), `odometerContext` is O(drives x readings) per keystroke, the "never changes km still to register" test cannot fail today, the `stubApi` default empty chain hides a screen that stops asking for it, and an old cached phone cannot save a fill-up until it reloads.
+
+### Assumptions and open questions
+
+Defaults taken (none scope-changing; no one was asked):
+- One car means one global chain; the person of a drive reading is the driver, of a fill-up reading the fueler; zero tolerance, one constant to change later.
+- A fill-up inside a completed drive belongs to that drive; draft starts take part; a gap belongs to the fuel period containing its later reading; explained gaps are left out of the card number.
+- Prefill uses the latest reading at or before the new drive's start; an existing draft keeps its own; the admin editor is not prefilled; the form warns only against the predecessor.
+- "Anyone involved" is the driver or fueler of either neighbour plus admins, who can also remove an explanation; notes are visible to all signed-in users. Odometer-only edits of a locked fill-up are allowed; an odometer cannot be cleared once set; no "explain all" action, no push for gaps, no badge change.
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, the test stage ran once, ledger caveats none. Tests not applicable: none.
+- The build record says steps 1 to 5 (server, migration, retention, strings, typedefs) were already in the tree from an earlier attempt and were verified and kept; the ledger records no restart and no earlier stage for it.
+- Ledger and git agree on the changed files. The only file git shows that the build list lacks is `test/odometer-integration.test.ts`, which the test stage added and names (5 tests, plus 1 each in `odometer.test.ts` and `retention.test.ts`, matching 708 to 716). Git also lists a second branch `worktree-odometer-continuity-gap-check`; the current branch is the `implement/` one.
+- Existing tests were changed: fill-up calls now send an odometer (the plan estimated about 140 call sites in 6 test files; git shows 15 modified test and helper files), plus `SCHEMA_VERSION` pins and the cache name. New tests were not run red on the untouched tree; mutation checks stand in, and the "still to register" guard test has no dedicated mutation.
+- Deviations from the plan: `stubApi` answers `GET /api/odometer` with an empty chain by default; `readingBefore` and `odometerContext` take an `exclude` object; server tests sit in new files; prefill for an ended reservation uses the reading before its start; `fmtKm` lives in `strings.js`.
+- Security was a read-only review with filtering inline (no `07-security.md`); simplify ran as one inline pass, not a 4-agent fan-out. Backend and simplify ran typecheck, lint and `npm test` only; the test stage ran the full set.
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/odometer-continuity-gap-check` (git-excluded). Base commit `c7be287ebad32b80dc885f260b64276df9ca218a`.
+<!-- implement:run:odometer-continuity-gap-check:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

@@ -126,7 +126,6 @@ export const S = {
     endHint: 'Still driving? Leave this and the end reading empty. The drive is saved as a draft and you finish it when you are back.',
     odometerStart: 'Odometer at start (km)',
     odometerEnd: 'Odometer at end (km)',
-    lastReading: (/** @type {number} */ n) => `Last known reading: ${n} km`,
     reservation: 'Reservation',
     noReservation: 'No reservation',
     resState: { registered: ' (km registered)', draft: ' (drive started)', missing: '' },
@@ -209,6 +208,14 @@ export const S = {
     when: 'Fuelled',
     litres: 'Litres',
     total: 'Total price (EUR)',
+    // The reading on the dashboard at the pump. Required for a new fill-up; older ones have none.
+    odometer: 'Current odometer (km)',
+    odometerHint: 'The reading on the dashboard at the pump. It is checked against the drives so unregistered kilometres show up.',
+    odometerLine: (/** @type {number} */ km) => `Odometer: ${fmtKm(km)} km`,
+    correctOdometer: 'Correct odometer',
+    odometerOnlyHint: 'A payment depends on this fill-up, so only the odometer reading can be corrected.',
+    // A gap in the odometer chain that ends in this fill-up's period: kilometres driven but not registered.
+    unaccounted: (/** @type {number} */ km) => `${fmtKm(km)} km unaccounted for in this period; the split only counts registered km`,
     pricePerLitre: 'Price per litre (EUR)',
     enterTwo: 'Fill in any two of litres, total price and price per litre. The third is worked out.',
     worked: (/** @type {string} */ litres, /** @type {string} */ total, /** @type {string} */ price) => `${litres} L for EUR ${total} (EUR ${price} per litre)`,
@@ -274,6 +281,55 @@ export const S = {
     panelClose: 'Close',
     providerManual: 'The app wrote this message: send it to them yourself.',
     providerTikkie: 'A Tikkie link was added to the message.',
+  },
+
+  // The odometer check: every reading in time order, gaps (kilometres nobody registered) and mismatches (two
+  // readings that contradict each other), visible to everybody. Nothing here blocks a save.
+  kmcheck: {
+    title: 'Kilometre check',
+    intro: 'The odometer readings of every drive and fill-up, in time order. A gap is kilometres nobody registered. A mismatch is two readings that contradict each other, probably a typo. Nothing here stops anyone from saving, and the fuel split is not changed by it.',
+    allAddUp: 'All odometer readings add up.',
+    gap: (/** @type {number} */ km, /** @type {string} */ from, /** @type {string} */ to) => `${fmtKm(km)} km unaccounted for between ${from} and ${to}`,
+    mismatch: (/** @type {number} */ km, /** @type {string} */ from, /** @type {string} */ to) =>
+      `The readings of ${from} and ${to} contradict each other: the later one is ${fmtKm(km)} km lower`,
+    // One end of a finding: what kind of reading, how many km, whose and when.
+    neighbour: (/** @type {string} */ what, /** @type {number} */ km, /** @type {string} */ who, /** @type {string} */ when) => `${what}: ${fmtKm(km)} km, ${who}, ${when}`,
+    source: { 'drive-start': 'Start of a drive', 'drive-end': 'End of a drive', 'draft-start': 'Start of a drive not finished yet', fuel: 'Fill-up' },
+    draftHint: 'This drive is not finished yet, so its end reading is still missing.',
+    addMissing: 'Add the missing drive',
+    finishDrive: 'Finish the drive',
+    editEarlier: 'Edit the earlier reading',
+    editLater: 'Edit the later reading',
+    explainSummary: 'Mark as explained',
+    explainLabel: 'Why is this explained? (required)',
+    explainHint: 'For example "an outsider drove" or "typo, corrected elsewhere". Everyone can read it.',
+    explainSave: 'Save explanation',
+    explainSaved: 'Marked as explained.',
+    explainedHeading: (/** @type {number} */ n) => `Explained (${n})`,
+    explainedBy: (/** @type {string} */ who) => `Explained by ${who}`,
+    removeExplanation: 'Remove explanation',
+    confirmRemove: 'Remove this explanation? The item shows as open again.',
+    removed: 'Explanation removed.',
+    showMore: (/** @type {number} */ n) => `Show ${n} more`,
+    // The link to add a missing drive pointed at a stretch that is not flagged any more (a reading changed since).
+    stale: 'That stretch is not flagged any more: a reading changed in the meantime. The form is empty.',
+    gapForm: 'The readings and times come from the stretch nobody registered. Change what is not right, then save.',
+    lastKnown: (/** @type {number} */ km, /** @type {string} */ who, /** @type {string} */ when) => `Last known: ${fmtKm(km)} km, ${who}, ${when}`,
+    warnLower: (/** @type {number} */ diff, /** @type {number} */ known) =>
+      `This is ${fmtKm(diff)} km lower than the last known reading (${fmtKm(known)} km). Check for a typo. You can still save it.`,
+    warnHigher: (/** @type {number} */ diff) => `This is ${fmtKm(diff)} km higher than the last known reading, so ${fmtKm(diff)} km would be unaccounted for. You can still save it.`,
+    warnOutsideDrive: (/** @type {number} */ start, /** @type {number} */ end) =>
+      `This fill-up falls inside a drive that went from ${fmtKm(start)} to ${fmtKm(end)} km, so the reading should lie in between. You can still save it.`,
+    // Under a drive in the lists: which findings touch it.
+    marker: {
+      gapBefore: (/** @type {number} */ km) => `${fmtKm(km)} km unaccounted for before this drive`,
+      gapAfter: (/** @type {number} */ km) => `${fmtKm(km)} km unaccounted for after this drive`,
+      mismatchBefore: (/** @type {number} */ km) => `Start reading is ${fmtKm(km)} km lower than the reading before`,
+      mismatchAfter: (/** @type {number} */ km) => `The next reading is ${fmtKm(km)} km lower than this drive's end reading`,
+      fuelBelow: (/** @type {number} */ km) => `A fill-up during this drive reads ${fmtKm(km)} km lower than its start`,
+      fuelAbove: (/** @type {number} */ km) => `A fill-up during this drive reads ${fmtKm(km)} km higher than its end`,
+      explained: (/** @type {string} */ note) => `Explained: ${note}`,
+    },
   },
 
   // Traffic tickets: entered by a member, matched to whoever was driving at the time of the offence.
@@ -431,9 +487,16 @@ export const S = {
       window: 'Visible window',
       cutoff: 'Anything that ended before this moment is deleted',
       lastPurge: 'Last purge',
-      // Counts that older purge results do not have (fill-ups, requests, tickets) default to 0.
-      lastPurgeCounts: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ s, /** @type {number} */ f = 0, /** @type {number} */ q = 0, /** @type {number} */ t = 0) =>
-        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets, ${s} expired sessions`,
+      // Counts that older purge results do not have (fill-ups, requests, tickets, odometer explanations) default to 0.
+      lastPurgeCounts: (
+        /** @type {number} */ r,
+        /** @type {number} */ u,
+        /** @type {number} */ s,
+        /** @type {number} */ f = 0,
+        /** @type {number} */ q = 0,
+        /** @type {number} */ t = 0,
+        /** @type {number} */ e = 0,
+      ) => `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets, ${e} odometer explanations, ${s} expired sessions`,
       never: 'Never',
       lastMaintenance: 'Last daily run (local date)',
       lastBackup: 'Last backup',
@@ -443,12 +506,19 @@ export const S = {
       size: 'Size (KB)',
       noBackups: 'No backups yet.',
       counts: 'Stored now',
-      countsText: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ q = 0, /** @type {number} */ t = 0) =>
-        `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets`,
+      countsText: (
+        /** @type {number} */ r,
+        /** @type {number} */ u,
+        /** @type {number} */ f = 0,
+        /** @type {number} */ q = 0,
+        /** @type {number} */ t = 0,
+        /** @type {number} */ e = 0,
+      ) => `${r} reservations, ${u} drives, ${f} fill-ups, ${q} payment requests, ${t} tickets, ${e} odometer explanations`,
       oldest: 'Oldest item ends',
       runNow: 'Run purge now',
       confirmRun: 'Permanently delete everything that ended before the cutoff? This cannot be undone.',
-      done: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ t = 0) => `Purged ${r} reservations, ${u} drives, ${f} fill-ups and ${t} tickets.`,
+      done: (/** @type {number} */ r, /** @type {number} */ u, /** @type {number} */ f = 0, /** @type {number} */ t = 0, /** @type {number} */ e = 0) =>
+        `Purged ${r} reservations, ${u} drives, ${f} fill-ups, ${t} tickets and ${e} odometer explanations.`,
       backupNote: 'Backups taken before a purge can still contain older data until they rotate out.',
     },
   },
@@ -512,6 +582,14 @@ export const S = {
     invalid_key: 'This browser gave an invalid key.',
   },
 };
+
+/**
+ * Kilometres with a thousands separator, the same everywhere ("45,210"): not locale dependent.
+ * @param {number} km
+ */
+export function fmtKm(km) {
+  return String(km).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
 
 /**
  * Friendly text for an API error.

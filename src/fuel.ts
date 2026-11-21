@@ -28,8 +28,9 @@ import { many, one, run, tx, type Db, type FuelRequestRow, type FuelRow, type Km
 import { carryKey, carryOver } from './fuel-carry.ts';
 import type { FuelNotifier } from './fuel-notify.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
+import { gapsOrEmpty, type OpenGap } from './odometer.ts';
 import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, type PaymentInput, type PaymentProvider } from './payments.ts';
-import { Fields, ValidationError, assertPastInsideWindow, windowBounds } from './validate.ts';
+import { Fields, MAX_ODOMETER, ValidationError, assertPastInsideWindow, windowBounds } from './validate.ts';
 import { formatLocal } from '../shared/time.js';
 
 export const MAX_MILLILITRES = 200_000;
@@ -179,12 +180,19 @@ export interface FuelDto {
   millilitres: number;
   totalCents: number;
   pricePerLitreMillis: number;
+  /** The odometer reading (km) at the pump; null for a fill-up made before the kilometre check existed. */
+  odometer: number | null;
   note: string;
   createdBy: number;
   createdAt: string;
   updatedAt: string;
   period: { from: string | null; to: string };
   totalKm: number;
+  /**
+   * Kilometres the odometer chain shows were driven but not registered, in gaps that end inside this period
+   * and that nobody explained. Display only: the split still counts registered kilometres and nothing else.
+   */
+  unaccountedKm: number;
   /** Of totalKm: driven together, a pool split in the same ratio as the personal kilometres. */
   togetherKm: number;
   /** Split equally because nobody has personal kilometres in the period. */
@@ -196,6 +204,11 @@ export interface FuelDto {
   /** A payment on a later fill-up settled a share of this one: it is locked like one with a paid request. */
   settledByLater: boolean;
   can: { edit: boolean; delete: boolean };
+  /**
+   * The fueler or an admin may correct the odometer reading, also on a fill-up that is locked for every other change:
+   * the reading moves no money. A separate flag so `can` stays what it was.
+   */
+  canOdometer: boolean;
 }
 
 export interface BalanceDto {
@@ -233,8 +246,11 @@ export function requestedPeriods(db: Db): (endUtc: string) => boolean {
   return (endUtc) => fuels.find((f) => f.at_utc >= endUtc)?.requested === 1;
 }
 
-/** Everything the fuel view shows, computed from the current data. */
-export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; balances: BalanceDto[] } {
+/**
+ * Everything the fuel view shows, computed from the current data. `gaps` are the open odometer gaps
+ * (odometer.ts); they only fill the unaccountedKm note on the cards and change nothing else here.
+ */
+export function fuelOverview(db: Db, actor: Principal, gaps: OpenGap[] = []): { items: FuelDto[]; balances: BalanceDto[] } {
   const fuels = many<FuelJoin>(db, 'SELECT f.*, u.display_name AS user_name FROM fuel f JOIN users u ON u.id = f.user_id ORDER BY f.at_utc, f.id');
   // Admins do not pay for fuel: every user with the admin role, active or not, is left out of the split.
   // Payers are the active people who are not admins; a deactivated member with personal kilometres in the
@@ -337,12 +353,15 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
       millilitres: fuel.millilitres,
       totalCents: fuel.total_cents,
       pricePerLitreMillis: pricePerLitreMillis(fuel.total_cents, fuel.millilitres),
+      odometer: fuel.odometer,
       note: fuel.note,
       createdBy: fuel.created_by,
       createdAt: fuel.created_at,
       updatedAt: fuel.updated_at,
       period: { from: calc.fromUtc, to: calc.toUtc },
       totalKm: calc.totalKm,
+      // A gap belongs to the period that contains its later reading: the same (previous fill-up, this one] rule as the split.
+      unaccountedKm: gaps.filter((g) => (calc.fromUtc === null || g.at > calc.fromUtc) && g.at <= calc.toUtc).reduce((n, g) => n + g.km, 0),
       togetherKm: calc.togetherKm,
       equalSplit: calc.equalSplit,
       firstInData: index === 0,
@@ -350,6 +369,7 @@ export function fuelOverview(db: Db, actor: Principal): { items: FuelDto[]; bala
       hasPaidRequests,
       settledByLater,
       can: { edit: manage && !hasPaidRequests && !settledByLater, delete: manage && !hasPaidRequests && !settledByLater },
+      canOdometer: manage,
     };
   });
 
@@ -420,7 +440,8 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
 
   /** The fill-up as the actor sees it (404 when it is gone). */
   const view = (actor: Principal, id: number): FuelDto => {
-    const dto = fuelOverview(db, actor).items.find((f) => f.id === id);
+    // gapsOrEmpty never throws: a failure of the odometer chain must not turn a saved fill-up into a 500.
+    const dto = fuelOverview(db, actor, gapsOrEmpty(ctx)).items.find((f) => f.id === id);
     if (!dto) throw new HttpError(404, 'not_found', 'Fill-up not found');
     return dto;
   };
@@ -432,8 +453,10 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
    * Edit and delete: the fueler or an admin, and never once a payment for it is marked as paid, or a
    * later payment settled a share of it (mark that one unpaid first).
    */
-  function guardChange(actor: Principal, fuel: Pick<FuelRow, 'id' | 'user_id'>): void {
+  function guardChange(actor: Principal, fuel: Pick<FuelRow, 'id' | 'user_id'>, odometerOnly = false): void {
     if (!mayManage(actor, fuel)) throw new HttpError(403, 'forbidden', 'Only the person who fuelled or an admin can change a fill-up');
+    // Correcting the odometer reading moves no money, so a payment that is marked as paid does not lock it.
+    if (odometerOnly) return;
     const dto = fuelOverview(db, actor).items.find((f) => f.id === fuel.id);
     if (dto && (dto.hasPaidRequests || dto.settledByLater)) {
       throw new HttpError(409, 'has_paid_requests', 'A payment for this fill-up, or a later one that settled it, is marked as paid. Mark it unpaid first.');
@@ -451,7 +474,7 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
 
   router.add('GET', '/api/fuel', 'user', (req) => {
     const actor = me(req);
-    return ok({ ...fuelOverview(db, actor), window: windowBounds(ctx.clock.now(), config.tz, config.windowMonths) });
+    return ok({ ...fuelOverview(db, actor, gapsOrEmpty(ctx)), window: windowBounds(ctx.clock.now(), config.tz, config.windowMonths) });
   });
 
   router.add('POST', '/api/fuel', 'user', async (req) => {
@@ -461,6 +484,8 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     const at = f.instant('at');
     const millilitres = f.int('millilitres', { min: 1, max: MAX_MILLILITRES });
     const totalCents = f.int('totalCents', { min: 1, max: MAX_TOTAL_CENTS });
+    // The reading at the pump is required for a new fill-up (absent = 'required'); only fill-ups from before it existed have none.
+    const odometer = f.int('odometer', { min: 0, max: MAX_ODOMETER });
     const note = f.string('note', { optional: true, max: 500 }) ?? '';
     f.done();
     if (userId !== actor.id && actor.role !== 'admin') {
@@ -473,12 +498,13 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
       checkFueler(userId);
       return run(
         db,
-        `INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, note, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, note, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         userId,
         at as string,
         millilitres as number,
         totalCents as number,
+        odometer as number,
         note,
         actor.id,
         nowIso,
@@ -499,12 +525,18 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     const id = idParam(req.params['id']);
     const body = await req.json();
     const existing = loadFuel(db, id);
-    guardChange(actor, existing);
+    // A body that only carries the odometer reading is a correction of that reading: no money moves, so
+    // the paid-request lock does not apply (the fueler-or-admin check still does).
+    const keys = Object.keys(body);
+    const odometerOnly = keys.length === 1 && keys[0] === 'odometer';
+    guardChange(actor, existing, odometerOnly);
     const f = new Fields(body);
     const userId = f.int('userId', { optional: true, min: 1 }) ?? existing.user_id;
     const at = f.instant('at', { optional: true });
     const millilitres = f.int('millilitres', { optional: true, min: 1, max: MAX_MILLILITRES }) ?? existing.millilitres;
     const totalCents = f.int('totalCents', { optional: true, min: 1, max: MAX_TOTAL_CENTS }) ?? existing.total_cents;
+    // Absent keeps what is stored (also a legacy null); null is not a number, so the reading can be set or changed but never cleared.
+    const odometer = f.int('odometer', { optional: true, min: 0, max: MAX_ODOMETER }) ?? existing.odometer;
     const note = f.string('note', { optional: true, max: 500 }) ?? existing.note;
     f.done();
     if (userId !== existing.user_id && actor.role !== 'admin') {
@@ -513,7 +545,7 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     const now = ctx.clock.now();
     if (at !== undefined) checkAt(at, now);
     tx(db, () => {
-      guardChange(actor, existing);
+      guardChange(actor, existing, odometerOnly);
       if (userId !== existing.user_id) {
         checkFueler(userId);
         // The money is owed to someone else now: requests addressed to the old fueler no longer make sense.
@@ -521,17 +553,19 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
       }
       run(
         db,
-        'UPDATE fuel SET user_id = ?, at_utc = ?, millilitres = ?, total_cents = ?, note = ?, updated_at = ? WHERE id = ?',
+        'UPDATE fuel SET user_id = ?, at_utc = ?, millilitres = ?, total_cents = ?, odometer = ?, note = ?, updated_at = ? WHERE id = ?',
         userId,
         at ?? existing.at_utc,
         millilitres,
         totalCents,
+        odometer,
         note,
         now.toISOString(),
         id,
       );
     });
-    ctx.log({ event: 'fuel.updated', id, by: actor.id });
+    // odometerOnly marks the one change that skips the paid-request lock, so it can be told apart in the log.
+    ctx.log({ event: 'fuel.updated', id, by: actor.id, odometerOnly });
     return ok({ fuel: view(actor, id) });
   });
 

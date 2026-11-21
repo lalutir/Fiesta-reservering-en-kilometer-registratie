@@ -1,6 +1,7 @@
 // One journey through the app, the way a household member uses it, at 390 px and 320 px:
 // sign in, reserve the car, register the kilometres from the reservation card, look at the
-// History, and load the admin page. Every step also asserts the page does not scroll sideways;
+// History, see the Kilometre check on the Drives tab, find that a fill-up needs its odometer
+// reading, and load the admin page (Users, Reservations and Drives). Every step also asserts the page does not scroll sideways;
 // the guard in ./fixtures.ts fails the test on console errors, uncaught errors, failed requests
 // and error responses.
 //
@@ -18,6 +19,7 @@ const UI = {
   tabAgenda: 'Agenda',
   tabReserve: 'Reserve',
   tabHistory: 'History',
+  tabDrives: /^Drives/,
   newReservation: 'New reservation',
   fromDate: 'From: Date',
   fromTime: 'From: Time',
@@ -33,10 +35,18 @@ const UI = {
   saveDrive: 'Save drive',
   kmRegistered: 'Km registered: 42 km',
   drivenByMe: 'Driven by me',
+  kmCheck: /Kilometre check/,
+  fuelLink: 'Fuel and costs',
+  fuelOdometer: 'Current odometer (km)',
+  litres: 'Litres',
+  totalPrice: 'Total price (EUR)',
+  saveFillUp: 'Save fill-up',
+  required: 'Required.',
   history: 'History',
   admin: 'Admin',
   adminUsers: 'Users',
   adminReservations: 'Reservations',
+  adminDrives: 'Drives',
 } as const;
 
 /**
@@ -121,6 +131,31 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await expectNoHorizontalScroll(page, 'history');
   });
 
+  await test.step('the Drives tab shows the kilometre check', async () => {
+    // The drive registered above is a reading, so there is something to check (and it never takes more room than the phone has).
+    await mainNav.getByRole('link', { name: UI.tabDrives }).click();
+    await expect(page.getByRole('heading', { name: UI.registerDrive })).toBeVisible();
+    await expect(page.getByRole('heading', { name: UI.kmCheck })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'drives with the kilometre check');
+  });
+
+  await test.step('a fill-up cannot be saved without the odometer reading', async () => {
+    await page.getByRole('link', { name: UI.fuelLink }).click();
+    await expect(page.getByLabel(UI.fuelOdometer)).toBeVisible();
+    await page.getByLabel(UI.litres, { exact: true }).fill('40');
+    await page.getByLabel(UI.totalPrice, { exact: true }).fill('60');
+    // Nothing may be sent: the app says what is missing itself. (Creating a fill-up here would leave data in the
+    // database both projects share, and the drives above already depend on it being tidy.)
+    let sent = 0;
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/fuel') sent++;
+    });
+    await page.getByRole('button', { name: UI.saveFillUp }).click();
+    await expect(page.getByText(UI.required, { exact: true })).toBeVisible();
+    expect(sent, 'no fill-up request without the reading').toBe(0);
+    await expectNoHorizontalScroll(page, 'fill-up form with the odometer');
+  });
+
   await test.step('load the admin page', async () => {
     // Leave no request in flight when the page is replaced: an aborted request is a failed request.
     await page.waitForLoadState('networkidle');
@@ -132,6 +167,10 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await page.getByRole('button', { name: UI.adminReservations, exact: true }).click();
     await expect(page.getByText(note)).toBeVisible();
     await expectNoHorizontalScroll(page, 'admin reservations');
+    // The same check as on the Drives tab of the app.
+    await page.getByRole('button', { name: UI.adminDrives, exact: true }).click();
+    await expect(page.getByRole('heading', { name: UI.kmCheck })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'admin drives');
     await page.waitForLoadState('networkidle');
   });
 });

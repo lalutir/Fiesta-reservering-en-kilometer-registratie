@@ -347,20 +347,47 @@ test('a backup taken at schema v3 restores, and the app then upgrades it to the 
   upgraded.close();
 });
 
-test('a backup of the current version (drafts, fuel) restores as it was', (tctx) => {
+test('a backup taken at schema v4 restores, and the app then upgrades it to v5 with the data intact and a legacy fill-up still without a reading', (tctx) => {
+  const e = setup(tctx);
+  e.db.close();
+  // What the release before the kilometre check wrote: a v4 file with a drive, a fill-up and a ticket.
+  const v4File = path.join(e.dir, 'old-v4.db');
+  const old = openDb(v4File, MIGRATIONS.slice(0, 4));
+  addReservation(old, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z');
+  run(old, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, created_by, created_at, updated_at) VALUES (1, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z', 100, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, created_by, created_at, updated_at) VALUES (1, '2026-06-14T11:00:00.000Z', 40000, 6000, 1, 'now', 'now')");
+  run(old, "INSERT INTO tickets (at_utc, created_by, created_at, updated_at) VALUES ('2026-06-14T09:00:00.000Z', 1, 'now', 'now')");
+  assert.equal(schemaVersion(old), 4);
+  old.close();
+
+  restoreBackup(e.config, v4File, e.clock.now());
+  const upgraded = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
+  assert.deepEqual(many(upgraded, 'SELECT odometer_start, odometer_end FROM usage'), [{ odometer_start: 100, odometer_end: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT total_cents, odometer FROM fuel'), [{ total_cents: 6000, odometer: null }]);
+  assert.equal(many(upgraded, 'SELECT id FROM tickets').length, 1);
+  assert.deepEqual(many(upgraded, 'SELECT id FROM odometer_explained'), [], 'nothing is explained automatically');
+  assert.ok(fs.existsSync(path.join(backupDir(e.dir), 'pre-migrate-v4.db')), 'the upgrade left its own copy');
+  upgraded.close();
+});
+
+test('a backup of the current version (drafts, fuel, odometer explanations) restores as it was', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');
   run(e.db, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, status, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', 500, 'draft', 1, 'now', 'now')");
-  run(e.db, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:30:00.000Z', 40000, 6000, 1, 'now', 'now')");
+  run(e.db, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:30:00.000Z', 40000, 6000, 512, 1, 'now', 'now')");
+  run(e.db, "INSERT INTO odometer_explained (item_key, prev_at, note, created_by, created_at, updated_at) VALUES ('k', '2026-06-15T09:00:00.000Z', 'an outsider drove', 1, 'now', 'now')");
   const backup = createBackup(e.ctx);
   run(e.db, 'DELETE FROM fuel');
   run(e.db, 'DELETE FROM usage');
+  run(e.db, 'DELETE FROM odometer_explained');
   e.db.close();
 
   restoreBackup(e.config, backup.path, e.clock.now());
   const restored = openDb(dbPath(e.dir));
   assert.equal(schemaVersion(restored), SCHEMA_VERSION);
   assert.deepEqual(many(restored, 'SELECT status, odometer_start, odometer_end FROM usage'), [{ status: 'draft', odometer_start: 500, odometer_end: null }]);
-  assert.deepEqual(many(restored, 'SELECT total_cents FROM fuel'), [{ total_cents: 6000 }]);
+  assert.deepEqual(many(restored, 'SELECT total_cents, odometer FROM fuel'), [{ total_cents: 6000, odometer: 512 }], 'the fill-up reading comes back');
+  assert.deepEqual(many(restored, 'SELECT item_key, note FROM odometer_explained'), [{ item_key: 'k', note: 'an outsider drove' }], 'the explanation comes back');
   restored.close();
 });

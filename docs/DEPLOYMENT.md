@@ -374,6 +374,9 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       lists `pre-migrate-v3.db`. On the Drives tab, **Traffic tickets** opens; add a ticket at a
       time you know somebody drove: it names that person, and "From the drive log" or
       "From the reservation" says why (section 18).
+- [ ] After an update from the version with traffic tickets: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v4.db`. The Drives tab shows a **Kilometre check** with any stretches that do not
+      add up (section 18); a new fill-up asks for **Current odometer (km)**. Existing data is not changed.
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -418,11 +421,12 @@ DigitalOcean droplet, and has data centres in Germany and Finland. Everything in
 this guide works the same there: create an Ubuntu server, and follow sections 3
 to 15 (the swap file is then usually unnecessary).
 
-## 18. Kilometres, reminders, fuel costs, payment requests and traffic tickets
+## 18. Kilometres, reminders, fuel costs, payment requests, traffic tickets and the kilometre check
 
 This section is about the part of the app that records every drive with its
-odometer readings, reminds people to do that, splits the fuel, and keeps the
-traffic tickets (the last subsection). Like the rest
+odometer readings, reminds people to do that, splits the fuel, keeps the
+traffic tickets and checks that the odometer readings add up (the last two
+subsections). Like the rest
 of this guide it was **never run on a real server, phone or push service by the
 people who wrote it**: the automated tests cover the logic and the message
 format, not delivery to a real phone. Section 15 has a short checklist for it.
@@ -675,8 +679,9 @@ earlier upgrades, with another copy, `/data/backups/pre-migrate-v3.db`:
   lost by a restore, and an older app refuses to open a v4 database. If you go back
   and later try the update again, delete `pre-migrate-v3.db` first: the app never
   overwrites an existing copy.
-- If you come from an older version than v3, the app upgrades straight to v4 in one
-  start and writes only the copy of the version it found.
+- If you come from an older version than v3, the app upgrades straight to the current
+  schema (v5, see "Kilometre check" below) in one start and writes only the copy of the
+  version it found.
 - The phones pick up the new screen by themselves: the app files are cached under a new
   name, so the old copy is dropped the next time the app is opened with a connection.
 
@@ -705,8 +710,84 @@ earlier upgrades, with another copy, `/data/backups/pre-migrate-v3.db`:
   you still have to pay. The app sends no notification and moves no money for a
   ticket.
 
+### Kilometre check
+
+**Updating from the version with traffic tickets (schema v4).** The first start of
+this version upgrades the database once more, to schema v5: one new column on the
+fill-ups (the odometer reading, empty for every existing fill-up) and one new table
+for the explanations. Nothing is changed or removed. The same rules apply as for the
+earlier upgrades, with another copy, `/data/backups/pre-migrate-v4.db`:
+
+- Take a backup first (section 12). Right before the upgrade the app writes a full
+  copy of the database as it was to `/data/backups/pre-migrate-v4.db`. It is written
+  once, not rotated and not deleted by the daily clean-up. It holds password
+  hashes like every backup, so treat it as a secret and delete it
+  (`docker compose exec app rm /data/backups/pre-migrate-v4.db`) once you are
+  happy with the new version. If it cannot be written (disk full) the app refuses
+  to start and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from
+  section 11, and start the previous version. Fill-ups with a reading, drives and
+  explanations entered after the upgrade are lost by a restore, and an older app
+  refuses to open a v5 database. If you go back and later try the update again,
+  delete `pre-migrate-v4.db` first: the app never overwrites an existing copy.
+- If you come from an older version than v4, the app upgrades straight to v5 in one
+  start and writes only the copy of the version it found.
+- The phones pick up the new screens by themselves: the app files are cached under
+  a new name (`car-static-v5`), so the old copy is dropped the next time the app is
+  opened with a connection. A phone that still runs the old copy cannot save a
+  fill-up until it has reloaded once, because the old form does not send the odometer
+  reading the server now requires.
+
+**First deploy with existing data.** Nothing is rewritten, back-filled or dismissed
+automatically. The upgrade leaves every drive and fill-up exactly as it was; the old
+fill-ups simply have no reading and are outside the chain. The stretches between the
+drive readings you already have that do not add up (a drive that starts higher or
+lower than the previous one ended) show up right away, to every user, as open items
+on the Drives tab and the admin page, with a line under the drives involved and on
+the fuel cards of their period. They are cleared one by one: add the missing drive,
+correct a reading, or explain the stretch with a note. If a lot of old history
+shows up and you just want it out of the way, one explanation each with a stock text
+such as "before the kilometre check existed" does it. The check is information only: no fuel share,
+payment request, balance or kilometre total changes because of it.
+
+**How it works.**
+
+- The app lines up every odometer reading it knows: the start and end of each
+  finished drive, the start of a drive that has not been finished, and the reading of
+  each new fill-up. A drive with only one reading (old data) contributes that one;
+  one with none is left out. The drive reading belongs to the person who drove (not
+  to whoever the kilometres were given to), the fill-up reading to the person who
+  fuelled.
+- Neighbouring readings are compared with no tolerance. If the later one is higher
+  there is a **gap** of that many kilometres nobody registered; if it is lower there is a
+  **mismatch** (the readings contradict each other, usually a typo). Equal readings are fine,
+  and so is the trip of one drive from its start to its end.
+- Readings are ordered by time. At the same moment the end of a drive comes before a
+  fill-up, which comes before the start of the next drive, so back-to-back drives
+  and a fill-up at a boundary give the same result every time. A fill-up during a
+  finished drive is not a link in the chain; it only warns when it reads outside
+  that drive's own start and end.
+- Only readings from the 6 month window take part, and the oldest has no
+  predecessor, so the daily clean-up never changes the list. A drive that you have
+  started but not finished counts with its start reading, but its kilometres are
+  never counted for totals or fuel.
+- A new drive starts from the last known reading and says whose it is and when. If
+  what you type is lower or higher, a warning appears under the field. It never
+  blocks the save. The fill-up form asks for the current odometer reading, which is
+  required for a new fill-up; the fueler or an admin can still correct it later even
+  when a payment depends on the fill-up (nothing else of such a fill-up can change).
+- **Explaining** a stretch needs a note (up to 500 characters) and is allowed for the
+  driver or fueler at either end and for admins. Everybody can read the note, and the same
+  people can remove it. It belongs to those two exact readings: correcting either, changing
+  the driver or adding a drive in between makes it stop applying. The admin Retention tab
+  counts the explanations, and the daily clean-up deletes the ones whose earlier reading
+  fell out of the window.
+- A fuel card whose period holds an unexplained gap says how many kilometres are
+  unaccounted for. The split still only counts registered kilometres.
+
 ### Switching things off
 
 - Reminders and the push for a new fill-up: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
-- Nothing else needs a rollback; fuel costs, drafts and traffic tickets are simply not used.
+- Nothing else needs a rollback; fuel costs, drafts, traffic tickets and the kilometre check are simply not used
+  (the check has no switch: it shows findings and changes nothing).

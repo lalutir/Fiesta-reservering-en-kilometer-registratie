@@ -18,6 +18,8 @@ export const PASSWORD = 'correct-horse-battery';
 export const DEFAULT_NOW = '2026-06-15T10:00:00.000Z';
 /** Valid odometer readings (50 km) for a completed drive; spread into request bodies. */
 export const ODO = { odometerStart: 10_000, odometerEnd: 10_050 } as const;
+/** A valid odometer reading (km) for a new fill-up, which must have one; spread into request bodies as `odometer: FUEL_ODO`. */
+export const FUEL_ODO = 20_000;
 
 export interface TestClock extends Clock {
   set(iso: string): void;
@@ -337,20 +339,23 @@ export interface FuelSeed {
   at: string;
   millilitres?: number;
   totalCents?: number;
+  /** The odometer reading; absent means none (a fill-up made before the kilometre check existed). */
+  odometer?: number | null;
   note?: string;
 }
 
-/** Insert a fill-up directly, bypassing the API rules (for fixtures). Defaults: 40.000 L for 60.00. */
+/** Insert a fill-up directly, bypassing the API rules (for fixtures). Defaults: 40.000 L for 60.00, no odometer reading. */
 export function insertFuel(t: TestApp, seed: FuelSeed): number {
   const now = t.clock.now().toISOString();
   return run(
     t.db,
-    `INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, note, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, note, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     seed.userId,
     seed.at,
     seed.millilitres ?? 40_000,
     seed.totalCents ?? 6_000,
+    seed.odometer ?? null,
     seed.note ?? '',
     seed.userId,
     now,

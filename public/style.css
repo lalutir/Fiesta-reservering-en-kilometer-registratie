@@ -888,6 +888,82 @@ table.data .actions {
   border: 2px solid var(--primary);
 }
 
+/*
+ * The kilometre check: findings in the odometer chain, the note under a reading field and the lines under a
+ * drive or fill-up. The warning colours carry a message in words too, so the state is never only a colour.
+ */
+.km-check h2,
+.km-check h3 {
+  margin-top: 0;
+}
+ul.km-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.km-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.km-item .km-headline {
+  display: block;
+  margin-bottom: 2px;
+}
+.km-item.mismatch {
+  border-left: 4px solid var(--warn-text);
+  padding-left: 10px;
+}
+.km-item .actions {
+  margin-top: 8px;
+}
+.km-ok {
+  margin: 8px 0 0;
+}
+.km-check details {
+  margin-top: 10px;
+}
+/* Same shape as details.earlier: the native marker stays, so it shows that the line opens and whether it is open. */
+.km-check summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--primary);
+  font-weight: 600;
+}
+.km-explain form {
+  margin-top: 6px;
+}
+.sub.km-flag {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+/* An explained finding is settled: it keeps its note but must not look like an open warning. */
+.sub.km-flag.explained {
+  background: var(--off-bg);
+  color: var(--off-text);
+}
+.km-note {
+  margin-top: 4px;
+}
+/* A polite live region: always in the page, so it is empty (and takes no room) until there is something to say. */
+.km-warn {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 0.9rem;
+}
+.km-warn:empty {
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+
 @media (min-width: 700px) {
   .view {
     padding-bottom: 96px;

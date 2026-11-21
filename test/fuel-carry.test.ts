@@ -9,7 +9,7 @@ import { createFuelNotifier, fuelMessage } from '../src/fuel-notify.ts';
 import { requestMessage } from '../src/payments.ts';
 import { purge } from '../src/retention.ts';
 import { windowBounds } from '../src/validate.ts';
-import { at, createHousehold, insertFuel, insertUsage, makeSubscriber, stubFetch, type Json } from './helpers.ts';
+import { FUEL_ODO, at, createHousehold, insertFuel, insertUsage, makeSubscriber, stubFetch, type Json } from './helpers.ts';
 
 // ------------------------------------------------------------ the pure rules
 
@@ -183,9 +183,9 @@ async function twoFillUps() {
   const h = await createHousehold();
   const { t, anna, ben } = h;
   insertUsage(t, { userId: ben.id, start: at(t.clock, -30), end: at(t.clock, -29), odometerStart: 0, odometerEnd: 100 });
-  const first = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+  const first = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
   insertUsage(t, { userId: ben.id, start: at(t.clock, -15), end: at(t.clock, -14), odometerStart: 100, odometerEnd: 150 });
-  const second = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 20_000, totalCents: 3000 })).body.fuel;
+  const second = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 20_000, totalCents: 3000, odometer: FUEL_ODO })).body.fuel;
   assert.deepEqual([first.shares.map((s: Json) => s.cents), second.shares.map((s: Json) => s.cents)], [[6000], [3000]]);
   return { ...h, first, second };
 }
@@ -276,9 +276,9 @@ test('what the fueler owes the debtor back is taken off the amount due, and sett
   try {
     // Anna drives 100 km, Ben fuels (40.00, all Anna's); Ben drives 50 km, Anna fuels (60.00, all Ben's).
     insertUsage(t, { userId: anna.id, start: at(t.clock, -40), end: at(t.clock, -39), odometerStart: 0, odometerEnd: 100 });
-    const owedBack = (await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000 })).body.fuel;
+    const owedBack = (await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000, odometer: FUEL_ODO })).body.fuel;
     insertUsage(t, { userId: ben.id, start: at(t.clock, -30), end: at(t.clock, -29), odometerStart: 100, odometerEnd: 150 });
-    const second = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+    const second = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
 
     const share = benOf(second);
     assert.deepEqual([share.cents, share.carriedCents, share.dueCents], [6000, -4000, 2000]);
@@ -301,9 +301,9 @@ test('when the fueler owes the debtor more than the share there is nothing to as
   const { t, anna, ben } = await createHousehold();
   try {
     insertUsage(t, { userId: anna.id, start: at(t.clock, -40), end: at(t.clock, -39), odometerStart: 0, odometerEnd: 100 });
-    await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000 });
+    await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000, odometer: FUEL_ODO });
     insertUsage(t, { userId: ben.id, start: at(t.clock, -30), end: at(t.clock, -29), odometerStart: 100, odometerEnd: 150 });
-    const small = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000 })).body.fuel;
+    const small = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000, odometer: FUEL_ODO })).body.fuel;
     const share = benOf(small);
     assert.deepEqual([share.cents, share.carriedCents, share.dueCents], [3000, -4000, 0]);
     assert.deepEqual({ ...share.can }, { request: false, markPaid: false, selfPaid: false });
@@ -349,10 +349,10 @@ test('a fill-up registered after the request was made, even one dated before it,
   const { t, anna, ben } = await createHousehold();
   try {
     insertUsage(t, { userId: ben.id, start: at(t.clock, -30), end: at(t.clock, -29), odometerStart: 0, odometerEnd: 100 });
-    const late = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+    const late = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
     assert.equal((await anna.post(`/api/fuel/${late.id}/requests`, { debtorId: ben.id })).status, 201);
     // A forgotten earlier fill-up is added afterwards: it takes the drive, and the later one now pays for nothing.
-    const back = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 2000 })).body.fuel;
+    const back = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 2000, odometer: FUEL_ODO })).body.fuel;
     assert.equal(benOf(back).dueCents, 2000);
 
     assert.equal((await ben.post(`/api/fuel/${late.id}/requests/${ben.id}/paid`, { paid: true })).status, 200);
@@ -447,7 +447,7 @@ async function pushHousehold(over: { env?: Record<string, string>; fetchHandler?
   insertUsage(t, { userId: carla.id, start: at(t.clock, -22), end: at(t.clock, -20), odometerStart: 1150, odometerEnd: 1200 });
   return { ...h, stub };
 }
-const fillUp = { millilitres: 40_000, totalCents: 6000 };
+const fillUp = { millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO };
 
 test('a new fill-up sends one push to each device of everybody who owes money, and to nobody else', async () => {
   const { t, admin, anna, ben, stub } = await pushHousehold();
@@ -483,7 +483,7 @@ test('the push carries what is carried over: the second fill-up\'s message names
     await ben.post('/api/push/subscribe', phone.subscription);
     await anna.post('/api/fuel', { at: at(t.clock, -10), ...fillUp });
     insertUsage(t, { userId: ben.id, start: at(t.clock, -8), end: at(t.clock, -7), odometerStart: 1200, odometerEnd: 1260 });
-    await anna.post('/api/fuel', { at: at(t.clock, -5), millilitres: 20_000, totalCents: 2000 });
+    await anna.post('/api/fuel', { at: at(t.clock, -5), millilitres: 20_000, totalCents: 2000, odometer: FUEL_ODO });
     await t.app.idle();
     const bodies = stub.calls.filter((c) => c.url === phone.endpoint).map((c) => phone.read(c).body);
     assert.equal(bodies.length, 2);
@@ -677,7 +677,7 @@ test('"I have paid" with no request on a share that carries earlier ones records
     // A forgotten fill-up, dated between the two, is registered before Ben pays: nobody asked him for it, but it existed when he paid.
     // It takes no drive (Ben's 50 km come after it), so its 20.00 is split equally over the three who pay (the admin does not):
     // 6.67, 6.67 and 6.66 by id, so Anna (the fueler) 6.67, Ben 6.67 and Carla 6.66.
-    const late = (await anna.post('/api/fuel', { at: at(t.clock, -17), millilitres: 15_000, totalCents: 2000 })).body.fuel;
+    const late = (await anna.post('/api/fuel', { at: at(t.clock, -17), millilitres: 15_000, totalCents: 2000, odometer: FUEL_ODO })).body.fuel;
     assert.ok(late.id > second.id);
     const before = benOf((await ben.get('/api/fuel')).body.items.find((f: Json) => f.id === second.id));
     assert.deepEqual([before.cents, before.carriedCents, before.dueCents], [3000, 6667, 9667], 'the 60.00 and the 6.67 are both carried');
@@ -714,9 +714,9 @@ test('asking again after an earlier fill-up was registered late refreshes the am
   try {
     // Ben drives 100 km, Anna fuels (40.00, all Ben's); Ben drives 50 km, Anna fuels again (30.00): 30.00 + the 40.00 carried.
     insertUsage(t, { userId: ben.id, start: at(t.clock, -40), end: at(t.clock, -39), odometerStart: 0, odometerEnd: 100 });
-    const first = (await anna.post('/api/fuel', { at: at(t.clock, -30), millilitres: 30_000, totalCents: 4000 })).body.fuel;
+    const first = (await anna.post('/api/fuel', { at: at(t.clock, -30), millilitres: 30_000, totalCents: 4000, odometer: FUEL_ODO })).body.fuel;
     insertUsage(t, { userId: ben.id, start: at(t.clock, -26), end: at(t.clock, -25), odometerStart: 100, odometerEnd: 150 });
-    const second = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000 })).body.fuel;
+    const second = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000, odometer: FUEL_ODO })).body.fuel;
     const asked = await anna.post(`/api/fuel/${second.id}/requests`, { debtorId: ben.id });
     assert.equal(asked.status, 201, asked.text);
     assert.equal(benOf(asked.body.fuel).request.amountCents, 7000);
@@ -725,7 +725,7 @@ test('asking again after an earlier fill-up was registered late refreshes the am
 
     // A forgotten fill-up (15.00), dated in between, is registered afterwards: it takes Ben's 50 km, and the later one is
     // split equally over the three who pay (the admin does not): 10.00 each.
-    const late = (await anna.post('/api/fuel', { at: at(t.clock, -22), millilitres: 11_000, totalCents: 1500 })).body.fuel;
+    const late = (await anna.post('/api/fuel', { at: at(t.clock, -22), millilitres: 11_000, totalCents: 1500, odometer: FUEL_ODO })).body.fuel;
     assert.ok(late.id > second.id);
     const moved = benOf((await anna.get('/api/fuel')).body.items.find((f: Json) => f.id === second.id));
     assert.deepEqual([moved.cents, moved.carriedCents, moved.dueCents], [1000, 5500, 6500], 'what it would ask now: 10.00 plus the 40.00 and the 15.00 it carries');
@@ -758,7 +758,7 @@ test('the six-month purge removes an earlier fill-up a request carried: the carr
     insertUsage(t, { userId: ben.id, start: before(-4), end: before(-3), odometerStart: 0, odometerEnd: 100 });
     insertFuel(t, { userId: anna.id, at: before(-1), millilitres: 30_000, totalCents: 4000 });
     insertUsage(t, { userId: ben.id, start: at(t.clock, -26), end: at(t.clock, -25), odometerStart: 100, odometerEnd: 150 });
-    const recent = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000 })).body.fuel;
+    const recent = (await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000, odometer: FUEL_ODO })).body.fuel;
     const share = benOf(recent);
     assert.deepEqual([share.cents, share.carriedCents, share.dueCents], [3000, 4000, 7000]);
     assert.equal((await anna.post(`/api/fuel/${recent.id}/requests`, { debtorId: ben.id })).status, 201);
@@ -793,13 +793,13 @@ test('the push says what is really due: nothing when the fueler owes the debtor 
     assert.equal((await ben.post('/api/push/subscribe', phone.subscription)).status, 201);
     // Anna drives 100 km and Ben fuels (40.00): Ben is the fueler, so there is nothing to tell him.
     insertUsage(t, { userId: anna.id, start: at(t.clock, -40), end: at(t.clock, -39), odometerStart: 0, odometerEnd: 100 });
-    assert.equal((await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000 })).status, 201);
+    assert.equal((await ben.post('/api/fuel', { at: at(t.clock, -35), millilitres: 30_000, totalCents: 4000, odometer: FUEL_ODO })).status, 201);
     await t.app.idle();
     assert.equal(stub.calls.length, 0);
 
     // Ben drives 50 km and Anna fuels (30.00): his 30.00 is less than the 40.00 Anna owes him, so he owes nothing and hears nothing.
     insertUsage(t, { userId: ben.id, start: at(t.clock, -30), end: at(t.clock, -29), odometerStart: 100, odometerEnd: 150 });
-    const small = await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000 });
+    const small = await anna.post('/api/fuel', { at: at(t.clock, -20), millilitres: 20_000, totalCents: 3000, odometer: FUEL_ODO });
     assert.equal(small.status, 201, small.text);
     assert.deepEqual([benOf(small.body.fuel).cents, benOf(small.body.fuel).carriedCents, benOf(small.body.fuel).dueCents], [3000, -4000, 0]);
     await t.app.idle();
@@ -807,7 +807,7 @@ test('the push says what is really due: nothing when the fueler owes the debtor 
 
     // Ben drives 50 km more and Anna fuels again (60.00): 60.00 now, plus his open 30.00, minus the 40.00 Anna owes him = 50.00.
     insertUsage(t, { userId: ben.id, start: at(t.clock, -15), end: at(t.clock, -14), odometerStart: 150, odometerEnd: 200 });
-    const big = await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000 });
+    const big = await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO });
     assert.equal(big.status, 201, big.text);
     assert.deepEqual([benOf(big.body.fuel).cents, benOf(big.body.fuel).carriedCents, benOf(big.body.fuel).dueCents], [6000, -1000, 5000]);
     await t.app.idle();
@@ -1026,7 +1026,7 @@ test('together: kilometres driven for others set who owes what, the push and the
     // Anna fuels for 80.00. The personal kilometres are Ben's 100 (driven by Anna) and Carla's 50; the 50 km pool follows
     // that ratio, so Ben pays 100 of 150 (53.33) and Carla 50 of 150 (26.67). Anna drove 150 km but none of them are
     // hers, and the admin does not pay for fuel: neither has a share.
-    const first = await anna.post('/api/fuel', { at: at(t.clock, -40), millilitres: 40_000, totalCents: 8000 });
+    const first = await anna.post('/api/fuel', { at: at(t.clock, -40), millilitres: 40_000, totalCents: 8000, odometer: FUEL_ODO });
     assert.equal(first.status, 201, first.text);
     await t.app.idle();
     const cents = (f: Json): Record<number, number> => Object.fromEntries((f.shares as Json[]).map((s) => [s.userId, s.cents]));
@@ -1047,7 +1047,7 @@ test('together: kilometres driven for others set who owes what, the push and the
     assert.equal((await ben.post(`/api/fuel/${firstId}/requests/${ben.id}/paid`, { paid: true })).status, 200);
     await drive(ben, -30, -28, 1200, 1220);
     await drive(carla, -26, -24, 1220, 1240);
-    const second = await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 20_000, totalCents: 4000 });
+    const second = await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 20_000, totalCents: 4000, odometer: FUEL_ODO });
     assert.equal(second.status, 201, second.text);
     await t.app.idle();
     const secondId = second.body.fuel.id;

@@ -64,6 +64,8 @@ export interface FuelRow {
   at_utc: string;
   millilitres: number;
   total_cents: number;
+  /** The odometer reading (km) at the pump; NULL for a fill-up made before the kilometre check existed. */
+  odometer: number | null;
   note: string;
   created_by: number;
   created_at: string;
@@ -93,6 +95,22 @@ export interface TicketRow {
   at_utc: string;
   amount_cents: number | null;
   reason: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * "This stretch is explained": a note on one flagged pair of neighbouring odometer readings. item_key
+ * names both readings (source, row id, km, time, driver), so the row stops applying the moment either
+ * reading changes or another one is inserted between them (odometer.ts). prev_at is the time of the
+ * earlier reading, kept only so the purge can delete explanations that can no longer apply.
+ */
+export interface OdometerExplainedRow {
+  id: number;
+  item_key: string;
+  prev_at: string;
+  note: string;
   created_by: number;
   created_at: string;
   updated_at: string;
@@ -295,6 +313,29 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX tickets_at ON tickets(at_utc, id);
   `,
+
+  // 5: odometer continuity check. fuel.odometer is the reading at the pump: required for a new
+  // fill-up by the API, but NULL for every existing row (nothing is back-filled), so the column is
+  // nullable. The chain of readings and its gaps are NOT stored: odometer.ts derives them on every
+  // read. The only stored thing is a person's "explained" note on one flagged pair of readings.
+  // item_key is an opaque text naming both readings (source, id, km, time, driver), so the note stops
+  // applying when either reading changes; prev_at (the earlier reading's time) lets the purge drop
+  // notes that fell out of the window.
+  `
+  ALTER TABLE fuel ADD COLUMN odometer INTEGER
+    CHECK (odometer IS NULL OR odometer BETWEEN 0 AND 10000000);
+
+  CREATE TABLE odometer_explained (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key   TEXT NOT NULL UNIQUE,
+    prev_at    TEXT NOT NULL CHECK (prev_at GLOB ${UTC_MS}),
+    note       TEXT NOT NULL CHECK (length(trim(note)) BETWEEN 1 AND 500),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX odometer_explained_prev ON odometer_explained(prev_at);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -470,7 +511,16 @@ export function checkDbFile(file: string): { ok: boolean; detail: string; versio
 
 export function countRows(
   db: Db,
-  table: 'users' | 'reservations' | 'usage' | 'sessions' | 'fuel' | 'fuel_requests' | 'tickets' | 'push_subscriptions',
+  table:
+    | 'users'
+    | 'reservations'
+    | 'usage'
+    | 'sessions'
+    | 'fuel'
+    | 'fuel_requests'
+    | 'tickets'
+    | 'odometer_explained'
+    | 'push_subscriptions',
 ): number {
   return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
 }

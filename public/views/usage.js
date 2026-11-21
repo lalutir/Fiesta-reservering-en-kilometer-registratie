@@ -18,6 +18,7 @@ import {
   saveErrorText,
   showFieldErrors,
 } from '../dom.js';
+import { gapDefaults, kmCheckSection, kmMarkers, odometerContext, odometerNote, readingBefore } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
 
 // Contains a form, so it is not re-rendered in the background.
@@ -66,20 +67,21 @@ export function suggestReservation(offered, o) {
 
 /**
  * What a new drive starts with. Running or upcoming reservation (or none): the
- * drive starts now, the end is still open and the start reading is the last
- * known end reading. An ended reservation: its own times, readings left for the
- * person to enter. A reservation note fills an empty note.
+ * drive starts now and the end is still open. An ended reservation: its own
+ * times, the end left for the person to enter. Either way the start reading is
+ * the latest known reading at or before the start (a drive end or a later
+ * fill-up), and a reservation note fills an empty note.
  * @param {import('../api.js').Reservation | null} reservation
  * @param {string} nowIso
- * @param {number | null} lastReading
+ * @param {(iso: string) => import('../api.js').OdometerReading | null} readingAt the latest known reading at or before an instant
  * @returns {{ start: string, end: string | null, odometerStart: number | null, note: string }}
  */
-export function defaultsFor(reservation, nowIso, lastReading) {
+export function defaultsFor(reservation, nowIso, readingAt) {
   const minute = new Date(Math.floor(Date.parse(nowIso) / 60_000) * 60_000).toISOString();
   if (reservation && reservation.end <= nowIso) {
-    return { start: reservation.start, end: reservation.end, odometerStart: null, note: reservation.note };
+    return { start: reservation.start, end: reservation.end, odometerStart: readingAt(reservation.start)?.km ?? null, note: reservation.note };
   }
-  return { start: minute, end: null, odometerStart: lastReading, note: reservation?.note ?? '' };
+  return { start: minute, end: null, odometerStart: readingAt(minute)?.km ?? null, note: reservation?.note ?? '' };
 }
 
 /**
@@ -110,18 +112,28 @@ export async function render(app, route) {
   const from = new Date(now.getTime() - PICKER_BACK_DAYS * DAY_MS).toISOString();
   const to = new Date(now.getTime() + PICKER_AHEAD_DAYS * DAY_MS).toISOString();
 
-  const [list, summary, reservations, pending] = await Promise.all([
+  const [list, summary, reservations, pending, odometer] = await Promise.all([
     /** @type {Promise<{ items: import('../api.js').Usage[] }>} */ (get('/api/usage')),
     /** @type {Promise<{ items: Array<{ userId: number, userName: string, trips: number, km: number }>, together?: { trips: number, km: number }, totalKm: number }>} */ (get('/api/usage/summary')),
     /** @type {Promise<{ items: import('../api.js').Reservation[] }>} */ (get(`/api/reservations?status=confirmed&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)),
     /** @type {Promise<import('../api.js').Pending>} */ (get('/api/usage/pending')),
+    // The kilometre check is a help on this screen: when it cannot be loaded the form still works, without prefill.
+    /** @type {Promise<import('../api.js').OdometerChain | null>} */ (get('/api/odometer').catch(() => null)),
   ]);
+  /** @type {import('../api.js').OdometerChain} */
+  const chain = odometer ?? { window: { from: '', to: '' }, readings: [], items: [], latest: null };
 
   // A drive I started and have not finished is what this form is for: open it in finish mode.
   const openDraft = list.items.find((u) => u.userId === me.id && u.status === 'draft') ?? null;
   const existing = (editId ? list.items.find((u) => u.id === editId) : null) ?? (editId ? null : openDraft);
   const mode = /** @type {'new' | 'draft' | 'completed'} */ (existing ? existing.status : 'new');
-  const lastReading = list.items.find((u) => u.odometerEnd !== null)?.odometerEnd ?? null;
+  // The reading to start from: the latest at or before a moment, leaving out the drive being edited (its own readings are not "before" it).
+  /** @param {string} iso */
+  const readingAt = (iso) => readingBefore(chain.readings, iso, { drive: existing?.id ?? null });
+  // "Add the missing drive" opens the form with a stretch's readings and times; a key that is not flagged any more (a reading changed since) gives the normal form and says so.
+  const gapKey = editId ? null : route.query.get('gap') || null;
+  const gapItem = gapKey === null ? null : (chain.items.find((i) => i.key === gapKey && i.kind === 'gap') ?? null);
+  const gap = gapItem ? gapDefaults(gapItem) : null;
 
   /**
    * A confirmed reservation by id: from the fetched range when it is there,
@@ -143,8 +155,8 @@ export async function render(app, route) {
   // A drive keeps its link; a draft without one takes the reservation the link asked for (it is linked when finished).
   const wantedId = existing ? (existing.reservationId ?? (existing.status === 'draft' ? presetId : null)) : presetId;
   const offered = offeredReservations(reservations.items, await findReservation(wantedId));
-  const selected = existing ? (offered.find((r) => r.id === wantedId) ?? null) : suggestReservation(offered, { meId: me.id, nowIso, presetId });
-  const defaults = defaultsFor(existing ? null : selected, nowIso, lastReading);
+  const selected = existing ? (offered.find((r) => r.id === wantedId) ?? null) : gap ? null : suggestReservation(offered, { meId: me.id, nowIso, presetId });
+  const defaults = defaultsFor(existing ? null : selected, nowIso, readingAt);
   const initialLink = existing?.reservationId === null || existing?.reservationId === undefined ? '' : String(existing.reservationId);
 
   const driver = driverSelect(app.users, me.id, !isAdmin);
@@ -157,21 +169,24 @@ export async function render(app, route) {
   ]);
   if (selected) reservation.value = String(selected.id);
 
-  const start = dateTimeField(S.usage.start, existing?.start ?? defaults.start, app.tz);
+  const start = dateTimeField(S.usage.start, existing?.start ?? gap?.start ?? defaults.start, app.tz);
   // Finishing a draft: the end is now unless the person says otherwise. A new or open drive may leave it empty.
   const minuteNow = new Date(Math.floor(now.getTime() / 60_000) * 60_000).toISOString();
-  const endInitial = existing ? (existing.end ?? minuteNow) : defaults.end;
+  const endInitial = existing ? (existing.end ?? minuteNow) : (gap?.end ?? defaults.end);
   const end = dateTimeField(S.usage.end, endInitial, app.tz, {
     optional: mode !== 'completed',
     hint: mode !== 'completed' ? S.usage.endHint : undefined,
   });
-  const odoStart = numberInput(existing ? existing.odometerStart : defaults.odometerStart);
-  const odoEnd = numberInput(existing ? existing.odometerEnd : null);
+  const odoStart = numberInput(existing ? existing.odometerStart : (gap?.odometerStart ?? defaults.odometerStart));
+  const odoEnd = numberInput(existing ? existing.odometerEnd : (gap?.odometerEnd ?? null));
   const note = h('input', { type: 'text', maxlength: '500', value: existing?.note ?? defaults.note, autocomplete: 'off' });
 
   const fDriver = field(S.usage.driver, driver);
   const fReservation = field(S.usage.reservation, reservation);
-  const fOdoStart = field(S.usage.odometerStart, odoStart, lastReading === null ? undefined : S.usage.lastReading(lastReading));
+  const fOdoStart = field(S.usage.odometerStart, odoStart);
+  // Under the start reading: where the prefilled value comes from, and (never blocking) a warning when what is typed does not fit it.
+  const kmNote = odometerNote({ tz: app.tz, meId: me.id });
+  fOdoStart.row.appendChild(kmNote.el);
   const fOdoEnd = field(S.usage.odometerEnd, odoEnd);
   const fNote = field(S.usage.note, note, S.noteHint);
   // Whose kilometres these are. The driver stays the driver (obligation, reminders, overlap); only the
@@ -194,6 +209,20 @@ export async function render(app, route) {
   end.onInput(syncSubmit);
   odoEnd.addEventListener('input', syncSubmit);
   syncSubmit();
+
+  const showKmNote = () => kmNote.show(odometerContext(chain.readings, start.getIso() ?? existing?.start ?? nowIso, { drive: existing?.id ?? null }), readNumber(odoStart.value));
+  // A new drive follows its start time: the prefilled reading is replaced only while nobody has typed over it.
+  let autoFilled = odoStart.value;
+  start.onInput(() => {
+    if (mode === 'new' && !gap && odoStart.value === autoFilled) {
+      const iso = start.getIso();
+      odoStart.value = String((iso ? readingAt(iso)?.km : null) ?? '');
+      autoFilled = odoStart.value;
+    }
+    showKmNote();
+  });
+  odoStart.addEventListener('input', showKmNote);
+  showKmNote();
 
   const form = h(
     'form',
@@ -249,7 +278,7 @@ export async function render(app, route) {
           // A note is recommended, never required: an empty one only earns a friendly tip.
           app.toast(note.value.trim() === '' ? `${done} ${S.noteTip}` : done);
           // Leave edit / prefilled mode; otherwise just reload the list with an empty form.
-          if (existing || presetId) app.navigate('#/usage');
+          if (existing || presetId || gapKey !== null) app.navigate('#/usage');
           else await app.refresh();
         } catch (err) {
           const apiErr = /** @type {import('../api.js').ApiError} */ (err);
@@ -272,6 +301,8 @@ export async function render(app, route) {
       mode === 'draft' && existing
         ? h('p', { class: 'hint', text: S.usage.openDraft(fmtWhen(existing.start, app.tz)) })
         : null,
+      gap ? h('p', { class: 'hint', text: S.kmcheck.gapForm }) : null,
+      gapKey !== null && !gapItem ? h('p', { class: 'hint', role: 'status', text: S.kmcheck.stale }) : null,
       isAdmin ? fDriver.row : null,
       fReservation.row,
       start.row,
@@ -323,6 +354,7 @@ export async function render(app, route) {
         ? h('div', { class: 'sub', text: `${u.odometerStart ?? '?'} → ${u.odometerEnd ?? '?'} km` })
         : null,
       kmOwnerLine(u, me.id),
+      kmMarkers(u, chain.items),
       u.note ? h('div', { class: 'note', text: u.note }) : null,
       u.fuelLocked ? h('p', { class: 'hint', text: S.usage.fuelLocked }) : null,
       u.can.edit || u.can.delete
@@ -363,6 +395,9 @@ export async function render(app, route) {
     ]),
     pendingBanner(app, pending),
     form,
+    // After the form, not before it: the findings can run to a screenful, and every link in them ("Add the missing drive",
+    // "Edit the earlier reading", "Finish the drive") opens this form, which must be what the person sees when it opens.
+    kmCheckSection(chain, { meId: me.id, isAdmin, tz: app.tz, hrefBase: '', toast: (message, isError) => app.toast(message, isError), onChange: () => app.refresh() }),
     summary.items.length > 0 || (summary.together?.km ?? 0) > 0
       ? h('section', { class: 'card' }, [
           h('h3', { text: S.usage.kmTotals }),
