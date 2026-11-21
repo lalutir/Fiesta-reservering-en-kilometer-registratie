@@ -1,6 +1,9 @@
 import { HttpError } from './http.ts';
 import { addCalendarMonths, daysInMonth } from '../shared/time.js';
 
+/** The highest odometer reading (km) accepted for a drive or a fill-up. */
+export const MAX_ODOMETER = 10_000_000;
+
 /** 422 with one code per offending field, e.g. { start: 'outside_window' }. */
 export class ValidationError extends HttpError {
   constructor(fields: Record<string, string>, code = 'validation_failed') {

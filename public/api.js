@@ -97,9 +97,11 @@
  * @property {number} millilitres
  * @property {number} totalCents
  * @property {number} pricePerLitreMillis thousandths of a euro
+ * @property {number | null} [odometer] the reading at the pump (km); null for a fill-up made before the kilometre check existed
  * @property {string} note
  * @property {{ from: string | null, to: string }} period
  * @property {number} totalKm
+ * @property {number} [unaccountedKm] km in unexplained odometer gaps that end in this period (display only: the split is unchanged)
  * @property {number} [togetherKm] of totalKm: driven together, split in the same ratio as the personal kilometres
  * @property {boolean} equalSplit
  * @property {boolean} firstInData
@@ -107,8 +109,35 @@
  * @property {boolean} hasPaidRequests
  * @property {boolean} [settledByLater] a later payment settled a share of this fill-up
  * @property {{ edit: boolean, delete: boolean }} can
+ * @property {boolean} [canOdometer] the fueler or an admin can correct the reading, also while everything else is locked
  */
 /** @typedef {{ fromUserId: number, fromName: string, toUserId: number, toName: string, cents: number }} Balance */
+
+/**
+ * One odometer reading in the chain (the odometer check): the start or end of a drive, the start of a drive
+ * that has not ended, or a fill-up.
+ * @typedef {object} OdometerReading
+ * @property {'drive-start' | 'drive-end' | 'draft-start' | 'fuel'} source
+ * @property {number} id the usage row or the fill-up
+ * @property {number} km
+ * @property {string} at
+ * @property {number} userId the driver, or the fueler
+ * @property {string} userName
+ * @property {boolean} draft the start reading of a drive that has not ended yet
+ */
+/** @typedef {{ id: number, note: string, byId: number, byName: string, at: string }} OdometerExplained */
+/**
+ * Two neighbouring readings that do not fit: a gap (the later one is higher) or a mismatch (it is lower).
+ * @typedef {object} OdometerItem
+ * @property {string} key names both readings; an explanation is stored under it
+ * @property {'gap' | 'mismatch'} kind
+ * @property {number} km how many
+ * @property {OdometerReading} prev
+ * @property {OdometerReading} next
+ * @property {OdometerExplained | null} explained
+ * @property {{ explain: boolean, unexplain: boolean }} can
+ */
+/** @typedef {{ window: { from: string, to: string }, readings: OdometerReading[], items: OdometerItem[], latest: OdometerReading | null }} OdometerChain */
 
 /**
  * A traffic ticket. `driver` and `basis` are worked out by the server on every read.

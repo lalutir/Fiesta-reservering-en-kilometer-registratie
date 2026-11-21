@@ -13,6 +13,8 @@ export interface PurgeResult {
   fuelRequests: number;
   /** Traffic tickets whose offence time is older than the window. */
   tickets: number;
+  /** "Explained" notes on odometer findings whose earlier reading is older than the window: the pair can no longer be flagged. */
+  odometerExplained: number;
   sessions: number;
 }
 
@@ -39,8 +41,11 @@ export function purge(db: Db, now: Date, tz: string, log: Logger, months = 6): P
     // draft, whose end is its start: one forgotten for six months is purged on its own and can stop
     // answering for a ticket in the first day after the cutoff (the ticket then shows no driver).
     const tickets = run(db, 'DELETE FROM tickets WHERE at_utc < ?', cutoff).changes;
+    // An explanation belongs to a pair of readings; the odometer chain only looks at readings from the cutoff
+    // on (odometer.ts), so once the earlier reading is older than that the pair can never be flagged again.
+    const odometerExplained = run(db, 'DELETE FROM odometer_explained WHERE prev_at < ?', cutoff).changes;
     const sessions = run(db, 'DELETE FROM sessions WHERE expires_at < ?', nowIso).changes;
-    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, tickets, sessions };
+    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, tickets, odometerExplained, sessions };
     setMeta(db, 'last_purge_at', nowIso);
     setMeta(db, 'last_purge', JSON.stringify(r));
     return r;
@@ -111,6 +116,7 @@ export function retentionStatus(ctx: Ctx): Record<string, unknown> {
       fuel: countRows(db, 'fuel'),
       fuelRequests: countRows(db, 'fuel_requests'),
       tickets: countRows(db, 'tickets'),
+      odometerExplained: countRows(db, 'odometer_explained'),
       sessions: countRows(db, 'sessions'),
     },
     oldest: {

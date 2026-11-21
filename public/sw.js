@@ -4,7 +4,7 @@
 // It also shows the reminder notifications the server pushes (see the end of this file).
 // Keep PRECACHE equal to the files in public/ (test/pwa.test.ts checks this).
 
-const CACHE = 'car-static-v4';
+const CACHE = 'car-static-v5';
 
 const PRECACHE = [
   '/',
@@ -12,6 +12,7 @@ const PRECACHE = [
   '/api.js',
   '/dom.js',
   '/calendar.js',
+  '/kmcheck.js',
   '/strings.js',
   '/style.css',
   '/manifest.webmanifest',

@@ -501,13 +501,13 @@ test('the limits in the browser are the limits on the server', () => {
 
 test('retention texts include tickets, and counts an older stored result does not have default to 0', () => {
   const r = S.admin.retention;
-  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 3 expired sessions');
-  assert.equal(r.lastPurgeCounts(1, 2, 3), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 3 expired sessions', 'a result stored before fill-ups and tickets existed');
-  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 0 tickets, 3 expired sessions', 'a result stored before tickets existed');
-  assert.equal(r.countsText(1, 2, 3, 4, 5), '1 reservations, 2 drives, 3 fill-ups, 4 payment requests, 5 tickets');
-  assert.equal(r.countsText(1, 2), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets');
-  assert.equal(r.done(1, 2, 3, 4), 'Purged 1 reservations, 2 drives, 3 fill-ups and 4 tickets.');
-  assert.equal(r.done(1, 2), 'Purged 1 reservations, 2 drives, 0 fill-ups and 0 tickets.');
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 7 odometer explanations, 3 expired sessions');
+  assert.equal(r.lastPurgeCounts(1, 2, 3), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 3 expired sessions', 'a result stored before fill-ups and tickets existed');
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 0 odometer explanations, 3 expired sessions', 'a result stored before the kilometre check existed');
+  assert.equal(r.countsText(1, 2, 3, 4, 5, 6), '1 reservations, 2 drives, 3 fill-ups, 4 payment requests, 5 tickets, 6 odometer explanations');
+  assert.equal(r.countsText(1, 2), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations');
+  assert.equal(r.done(1, 2, 3, 4, 5), 'Purged 1 reservations, 2 drives, 3 fill-ups, 4 tickets and 5 odometer explanations.');
+  assert.equal(r.done(1, 2), 'Purged 1 reservations, 2 drives, 0 fill-ups, 0 tickets and 0 odometer explanations.');
 });
 
 test('admin retention tab: tickets are counted, the oldest one counts for the oldest item, and a purge result stored before tickets existed still renders', async () => {
@@ -538,11 +538,11 @@ test('admin retention tab: tickets are counted, the oldest one counts for the ol
     'POST /api/admin/retention/run': () => {
       current = {
         ...base,
-        lastPurge: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, sessions: 3 },
-        counts: { reservations: 4, usage: 5, fuel: 1, fuelRequests: 0, tickets: 2, sessions: 6 },
+        lastPurge: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, odometerExplained: 4, sessions: 3 },
+        counts: { reservations: 4, usage: 5, fuel: 1, fuelRequests: 0, tickets: 2, odometerExplained: 6, sessions: 6 },
         oldest: { reservationEnd: at(-3000), usageEnd: null, fuelAt: null, ticketAt: at(-5000) },
       };
-      return { result: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, sessions: 3 }, status: current };
+      return { result: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, odometerExplained: 4, sessions: 3 }, status: current };
     },
   };
   await withClient({ now: NOW, routes }, async ({ dom }) => {
@@ -565,15 +565,15 @@ test('admin retention tab: tickets are counted, the oldest one counts for the ol
 
     await one(adminRoot, 'button[data-tab="retention"]').fire('click');
     await until(() => all(adminRoot, 'dt').length > 0, 'the retention tab');
-    assert.ok(dd(S.admin.retention.lastPurge).endsWith('1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 3 expired sessions'), 'an old stored result shows zero tickets');
-    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 0 fill-ups, 0 payment requests, 0 tickets');
+    assert.ok(dd(S.admin.retention.lastPurge).endsWith('1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 3 expired sessions'), 'an old stored result shows zero tickets and zero explanations');
+    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-3000), TZ));
 
     await byText(adminRoot, 'button', S.admin.retention.runNow).fire('click');
-    await until(() => toastEl.textContent === S.admin.retention.done(1, 2, 3, 7), 'the purge to report its tickets');
-    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('2 tickets')), 'the tab to reload');
-    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 fill-ups, 0 payment requests, 7 tickets, 3 expired sessions'));
-    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 1 fill-ups, 0 payment requests, 2 tickets');
+    await until(() => toastEl.textContent === S.admin.retention.done(1, 2, 3, 7, 4), 'the purge to report its tickets and explanations');
+    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('6 odometer explanations')), 'the tab to reload');
+    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 fill-ups, 0 payment requests, 7 tickets, 4 odometer explanations, 3 expired sessions'));
+    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 1 fill-ups, 0 payment requests, 2 tickets, 6 odometer explanations');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-5000), TZ), 'the oldest ticket is the oldest item');
   });
 });

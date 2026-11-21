@@ -2,11 +2,10 @@ import { isUniqueViolation, many, one, run, tx, type Db, type KmFor, type UsageR
 import { requestedPeriods } from './fuel.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
 import { listConfirmed, listUnregistered } from './reservations.ts';
-import { Fields, ValidationError, assertInsideWindow, failIfAny, queryRange, queryUserId, windowBounds } from './validate.ts';
+import { Fields, MAX_ODOMETER, ValidationError, assertInsideWindow, failIfAny, queryRange, queryUserId, windowBounds } from './validate.ts';
 
 /** A usage record may end (a draft may start) at most this far in the future (clock skew, "just got back"). */
 const FUTURE_SLACK_MS = 5 * 60_000;
-const MAX_ODOMETER = 10_000_000;
 const STATUSES = ['draft', 'completed'] as const;
 const KM_FORS = ['self', 'person', 'together'] as const;
 /** How far back the pending-km list looks by default; the admin can ask for the whole window. */

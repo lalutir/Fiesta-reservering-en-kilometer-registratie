@@ -24,6 +24,7 @@ import {
   showFieldErrors,
   toaster,
 } from '../dom.js';
+import { kmCheckSection } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
 
 /** @typedef {import('../api.js').ApiError} ApiError */
@@ -430,10 +431,12 @@ function pendingSection(pending, days) {
 
 async function renderUsage() {
   const days = pendingFull ? 190 : 30;
-  const [{ users }, { items }, pending] = await Promise.all([
+  const [{ users }, { items }, pending, odometer] = await Promise.all([
     /** @type {Promise<{ users: import('../api.js').User[] }>} */ (get('/api/admin/users')),
     /** @type {Promise<{ items: import('../api.js').Usage[] }>} */ (get('/api/usage')),
     /** @type {Promise<import('../api.js').Pending>} */ (get(`/api/usage/pending?all=1&days=${days}`)),
+    // The same overview every member sees on the Drives tab; the tab still works without it.
+    /** @type {Promise<import('../api.js').OdometerChain | null>} */ (get('/api/odometer').catch(() => null)),
   ]);
   const rows = items.map((u) => [
     u.id,
@@ -455,6 +458,9 @@ async function renderUsage() {
   ]);
   return h('div', {}, [
     pendingSection(pending, days),
+    odometer
+      ? kmCheckSection(odometer, { meId: session.user.id, isAdmin: true, tz, hrefBase: '/', heading: 'h2', toast, onChange: () => showTab('usage') })
+      : null,
     h('div', { class: 'actions' }, [
       button(S.admin.usage.newRecord, () => openUsageEditor('new'), 'primary'),
     ]),
@@ -575,13 +581,13 @@ async function renderRetention() {
         h('dt', { text: r.cutoff }),
         h('dd', { text: formatLocal(s.cutoff, tz) }),
         h('dt', { text: r.lastPurge }),
-        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0) : ''}` : r.never }),
+        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0, last.odometerExplained ?? 0) : ''}` : r.never }),
         h('dt', { text: r.lastMaintenance }),
         h('dd', { text: text(s.lastMaintenanceDay) }),
         h('dt', { text: r.lastBackup }),
         h('dd', { text: s.lastBackupAt ? `${s.lastBackupFile} (${formatLocal(s.lastBackupAt, tz)})` : r.never }),
         h('dt', { text: r.counts }),
-        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0) }),
+        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0, s.counts.odometerExplained ?? 0) }),
         h('dt', { text: r.oldest }),
         h('dd', { text: oldest ? formatLocal(oldest, tz) : '–' }),
       ]),
@@ -590,7 +596,7 @@ async function renderRetention() {
           if (!confirm(r.confirmRun)) return;
           void perform(async () => {
             const res = await post('/api/admin/retention/run', {});
-            toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0, res.result.tickets ?? 0));
+            toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0, res.result.tickets ?? 0, res.result.odometerExplained ?? 0));
           });
         }, 'danger'),
       ]),

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { formatCents, isTikkieLink, requestMessage, manualProvider, type PaymentInput } from '../src/payments.ts';
 import { loadConfig } from '../src/config.ts';
-import { at, createHousehold, insertUsage, stubFetch, type Json, type StubFetch } from './helpers.ts';
+import { FUEL_ODO, at, createHousehold, insertUsage, stubFetch, type Json, type StubFetch } from './helpers.ts';
 
 const API_KEY = 'api-key-must-never-leak-0001';
 const TOKEN = 'access-token-must-never-leak-0002';
@@ -24,7 +24,7 @@ async function household(opts: Parameters<typeof createHousehold>[0] = {}) {
   const h = await createHousehold(opts);
   insertUsage(h.t, { userId: h.anna.id, start: at(h.t.clock, -30), end: at(h.t.clock, -28), odometerStart: 1000, odometerEnd: 1150 });
   insertUsage(h.t, { userId: h.ben.id, start: at(h.t.clock, -26), end: at(h.t.clock, -24), odometerStart: 1150, odometerEnd: 1200 });
-  const fuel = (await h.anna.post('/api/fuel', { at: at(h.t.clock, -10), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+  const fuel = (await h.anna.post('/api/fuel', { at: at(h.t.clock, -10), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
   return { ...h, fuel };
 }
 

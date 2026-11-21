@@ -38,7 +38,7 @@ plus an admin page for the person who manages it.
 - **Reminders.** A phone notification (Web Push) 30 minutes before a reservation starts, when
   it ends, and once more an hour later if the kilometres are still missing. Each person turns it
   on per device on the Account page. On an iPhone the app must be on the Home Screen (iOS 16.4+).
-- **Fuel and costs.** Record who fuelled, when, litres and price. The cost is split by the
+- **Fuel and costs.** Record who fuelled, when, the odometer reading, litres and price. The cost is split by the
   kilometres that count for each person since the previous fill-up, exact to the cent, with a
   running "who owes whom" and paid status. **Admins do not pay for fuel**: their own kilometres are
   not counted and they get no share, so the others pay the whole fill-up (an admin who fuels is
@@ -57,6 +57,16 @@ plus an admin page for the person who manages it.
   and not finished, then the confirmed reservation, otherwise "unknown". Everybody can see every
   ticket; the person who entered it or an admin can correct or delete it. The app does not collect
   the money or send anything about a ticket.
+- **Kilometre check.** The app lines up every odometer reading it knows (the start and end of
+  each drive, the start of a drive you have not finished, and the reading at each fill-up) and
+  shows **gaps** (the next reading is higher: kilometres nobody registered) and **mismatches** (it is
+  lower: probably a typo) to everybody: a *Kilometre check* list on the Drives tab and the admin
+  page, a line under the drives involved on the Drives tab and the History, and a note on a fuel
+  card whose period holds an unexplained gap. A new drive starts from the last known reading and
+  says where it comes from; a reading that does not fit gets a warning, never a block. A gap is
+  cleared by *Add the missing drive*, by correcting a reading, or by **explaining** it with a note
+  (the driver or fueler at either end, or an admin). A fill-up now needs its odometer reading.
+  It is information only: the fuel split, the kilometre totals and every save are unchanged.
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
   day and at start-up.
@@ -96,6 +106,20 @@ plus an admin page for the person who manages it.
   replaced by a later completed drive, a confirmed reservation, else nobody. The drive log beats the
   reservation because it records who actually drove; pending, declined and expired suggestions never
   count. Correcting a drive or a reservation therefore corrects the ticket with it.
+- **The odometer chain is derived, not stored.** `deriveChain()` in `src/odometer.ts` works out the gaps
+  and mismatches on every read from the drive log and the fill-ups, like who drove a ticket. Readings
+  are ordered by time and, at the same instant, by a fixed rank (the end of a drive, a zero-length
+  drive, a fill-up, the start of a drive), then by id, so the same data always gives the same list.
+  A fill-up that falls inside a finished drive (the pump stop was part of the trip) is not a link in
+  the chain: it is only checked against that drive's own start and end readings. Only readings from
+  the retention window take part and the oldest has no predecessor, so running the purge never
+  changes the list. A person's "explained" note is the one thing stored (`odometer_explained`), under
+  a key made of both neighbouring readings (source, row id, km, time, driver): correcting either
+  reading, changing the driver or adding a drive in between gives the pair a new key, and the note
+  stops applying. Drafts take part with their start reading but their kilometres never count.
+  `public/kmcheck.js` is the browser side; it repeats only the two small rules the forms need before
+  saving (the latest reading at or before a moment, and whether a fill-up lies inside a trip), and a
+  test ties both to the server.
 - **Web Push without a library.** VAPID signing and message encryption use `node:crypto` and
   `fetch` (checked against the RFC 8291 test vector), so there is still no runtime dependency.
   Subscription addresses are only accepted for the four push services the browsers use.
@@ -156,14 +180,14 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
   fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
   fuel-carry.ts  carried-over amounts and settlement (pure)        fuel-notify.ts  the push for a new fill-up
-  tickets.ts  traffic tickets and who was driving at the time
+  tickets.ts  traffic tickets and who was driving at the time       odometer.ts  the odometer chain, its gaps and explanations
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v4, migrations)
+  db.ts       the only file that touches node:sqlite (schema v5, migrations)
 shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
-public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views)
-            and public/admin/ (admin page)
+public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views,
+            kmcheck.js the Kilometre check: prefill, warnings, the findings list) and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
@@ -348,6 +372,15 @@ backups, updates and a monthly cost estimate (about $4-6).
   ticket with its price and reason. A ticket is deleted with the 6-month rule, by the time of the
   offence, so an unpaid ticket older than that is gone from the app (keep the letter). The list has
   no cap and works out each driver separately, which is fine for a household and its six months.
+- **Kilometre check.** There is no tolerance: any difference between two neighbouring readings is
+  flagged, so the few kilometres to the pump show up as a small gap after a fill-up (one constant,
+  `GAP_TOLERANCE_KM`, if real use shows it is too noisy). A drive from before the check that has only
+  one reading contributes that reading, so the stretch next to it can look like a gap; adding the
+  missing reading or one explanation clears it. An explanation belongs to the exact pair of readings
+  and applies again if exactly that pair returns. Fill-ups from before the check have no reading and
+  are simply not in the chain. A phone that still runs an old copy of the app needs one reload before
+  it can save a fill-up (the old form does not send the reading). The odometer of a fill-up that a
+  payment depends on can still be corrected, since no money moves; its other fields stay locked.
 - The fill-up push is sent once, after saving, and not retried; a person without a device signed up
   for reminders hears nothing and finds the amount on the History screen.
 - Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,

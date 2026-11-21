@@ -242,7 +242,7 @@ try {
     const bens = summary.items.find((i) => i.userId === ben.id);
     expect(bens?.km === 50 && summary.together.km === 0, `summary: Ben ${bens?.km}, together ${summary.together?.km}`);
 
-    const fuel = await fetch(`${base}/api/fuel`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(1), millilitres: 40000, totalCents: 6000 }) });
+    const fuel = await fetch(`${base}/api/fuel`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(1), millilitres: 40000, totalCents: 6000, odometer: 2150 }) });
     expect(fuel.status === 201, `fill-up ${fuel.status}`);
     const fuelId = (await fuel.json()).fuel.id;
 
@@ -291,6 +291,67 @@ try {
     expect((await fetch(`${base}/api/tickets/${nobody.id}`, { method: 'DELETE', headers: json })).status === 204, 'delete');
     const left = (await (await fetch(`${base}/api/tickets`, { headers: { Cookie: cookie } })).json()).items;
     expect(left.length === 2, `${left.length} tickets left after the delete`);
+  });
+  // Relies on what the earlier checks left: the admin's drive 1000 to 1042 (just now), the drives 2000 to 2100 and 2100 to
+  // 2150 (10 to 7 hours ago, Ben is neither of their drivers) and the fill-up at 2150 one hour ago. So the chain has one
+  // finding to begin with: the drive just now starts at 1000 although the fill-up before it read 2150 (a mismatch of 1150 km).
+  await check('the odometer chain: gaps and mismatches for everybody, explaining one needs a note and an involved person, correcting a reading clears it, a fill-up needs its reading', async () => {
+    const json = { 'Content-Type': 'application/json', Cookie: cookie };
+    const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+    expect((await fetch(`${base}/api/odometer`)).status === 401, 'anonymous gets 401');
+    const chain = async (cookieHeader = cookie) => (await (await fetch(`${base}/api/odometer`, { headers: { Cookie: cookieHeader } })).json());
+
+    const noReading = await fetch(`${base}/api/fuel`, { method: 'POST', headers: json, body: JSON.stringify({ at: hoursAgo(0.5), millilitres: 1000, totalCents: 100 }) });
+    expect(noReading.status === 422 && (await noReading.json()).error.fields.odometer === 'required', `a fill-up without its reading gave ${noReading.status}`);
+
+    const first = await chain();
+    const startMismatch = first.items.find((i) => i.kind === 'mismatch');
+    expect(first.items.length === 1 && startMismatch?.km === 1150, `one mismatch of 1150 km to begin with: ${JSON.stringify(first.items.map((i) => [i.kind, i.km]))}`);
+    expect(startMismatch.prev.source === 'fuel' && startMismatch.next.source === 'drive-start', 'it names both neighbours: the fill-up and the drive after it');
+    expect(first.latest?.km === 1042, `the latest known reading is the end of the drive just now: ${first.latest?.km}`);
+
+    // The admin drives 2180 to 2200 six to five hours ago: 30 km after the drive that ended at 2150, and 50 km above the fill-up that follows.
+    const made = await fetch(`${base}/api/usage`, { method: 'POST', headers: json, body: JSON.stringify({ start: hoursAgo(6), end: hoursAgo(5), odometerStart: 2180, odometerEnd: 2200 }) });
+    expect(made.status === 201, `the drive after the gap ${made.status}`);
+    const driveId = (await made.json()).usage.id;
+    const second = await chain();
+    const gap = second.items.find((i) => i.kind === 'gap');
+    const fillMismatch = second.items.find((i) => i.kind === 'mismatch' && i.km === 50);
+    expect(second.items.length === 3 && gap?.km === 30 && fillMismatch, `a gap of 30 and mismatches of 50 and 1150: ${JSON.stringify(second.items.map((i) => [i.kind, i.km]))}`);
+    expect(gap.prev.km === 2150 && gap.next.km === 2180 && gap.next.id === driveId, 'the gap names the end of the earlier drive and the start of the new one');
+
+    const fuelCard = async () => (await (await fetch(`${base}/api/fuel`, { headers: { Cookie: cookie } })).json()).items[0];
+    expect((await fuelCard()).unaccountedKm === 30, `the fuel card notes the 30 km: ${(await fuelCard()).unaccountedKm}`);
+
+    const explain = (body, cookieHeader = cookie) =>
+      fetch(`${base}/api/odometer/explain`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookieHeader }, body: JSON.stringify(body) });
+    const noNote = await explain({ key: gap.key });
+    expect(noNote.status === 422 && (await noNote.json()).error.fields.note === 'required', `an explanation without a note gave ${noNote.status}`);
+    const blank = await explain({ key: gap.key, note: '   ' });
+    expect(blank.status === 422, `a blank note gave ${blank.status}`);
+    expect((await explain({ key: 'no-such-stretch', note: 'x' })).status === 404, 'an unknown stretch is 404');
+
+    // Ben did not drive or fill up at either end of the gap, so it is not his to explain; he still sees it.
+    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'smokeben', password: 'smoke-ben-password-1' }) });
+    const benCookie = (login.headers.getSetCookie()[0] ?? '').split(';')[0];
+    expect(login.status === 200 && benCookie !== '', `Ben signs in ${login.status}`);
+    expect((await chain(benCookie)).items.length === 3, 'everybody sees the same findings');
+    expect((await explain({ key: gap.key, note: 'not mine' }, benCookie)).status === 403, 'somebody who is not involved cannot explain it');
+
+    const done = await explain({ key: gap.key, note: 'Borrowed by a neighbour' });
+    expect(done.status === 201, `explained ${done.status}`);
+    const explained = (await chain()).items.find((i) => i.key === gap.key);
+    expect(explained?.explained?.note === 'Borrowed by a neighbour', 'the note shows on the item');
+    expect((await fuelCard()).unaccountedKm === 0, `an explained gap is not counted on the card: ${(await fuelCard()).unaccountedKm}`);
+
+    expect((await fetch(`${base}/api/odometer/explained/${explained.explained.id}`, { method: 'DELETE', headers: json })).status === 204, 'the explanation can be removed');
+    expect((await chain()).items.find((i) => i.key === gap.key)?.explained === null, 'and the gap is open again');
+
+    // Correcting the reading is the other way out: the gap is gone, the mismatch with the fill-up stays.
+    const fixed = await fetch(`${base}/api/usage/${driveId}`, { method: 'PATCH', headers: json, body: JSON.stringify({ odometerStart: 2150 }) });
+    expect(fixed.status === 200, `correcting the start reading ${fixed.status}`);
+    const third = await chain();
+    expect(third.items.every((i) => i.kind === 'mismatch') && third.items.length === 2, `the gap is gone: ${JSON.stringify(third.items.map((i) => [i.kind, i.km]))}`);
   });
 } catch (err) {
   failures.push('startup');

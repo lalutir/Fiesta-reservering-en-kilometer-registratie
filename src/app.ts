@@ -19,6 +19,7 @@ import {
 import { registerFuelRoutes } from './fuel.ts';
 import { createFuelNotifier } from './fuel-notify.ts';
 import { startMaintenance, tick } from './maintenance.ts';
+import { registerOdometerRoutes } from './odometer.ts';
 import { createPush, registerPushRoutes } from './push.ts';
 import { createReminders, type Reminders } from './reminders.ts';
 import { registerReservationRoutes } from './reservations.ts';
@@ -72,6 +73,7 @@ export function createApp(deps: AppDeps): App {
   const fuelNotifier = createFuelNotifier(ctx, push);
   registerFuelRoutes(router, ctx, fuelNotifier);
   registerTicketRoutes(router, ctx);
+  registerOdometerRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);

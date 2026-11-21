@@ -3,7 +3,7 @@
 // item shows up its note shows up with it. (The nudge itself is in forms.test.ts.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ODO, at, createHousehold, insertReservation, type Client, type Json, type TestApp } from './helpers.ts';
+import { ODO, FUEL_ODO, at, createHousehold, insertReservation, type Client, type Json, type TestApp } from './helpers.ts';
 
 type Kind = 'reservation' | 'drive' | 'fill-up';
 const KINDS: Kind[] = ['reservation', 'drive', 'fill-up'];
@@ -22,7 +22,7 @@ async function create(t: TestApp, who: Client, kind: Kind, slot: number, note: s
     const res = await who.post('/api/usage', { start: at(t.clock, -60 + slot * 3), end: at(t.clock, -59 + slot * 3), ...ODO, ...extra });
     return { status: res.status, item: res.body.usage, res };
   }
-  const res = await who.post('/api/fuel', { at: at(t.clock, -30 + slot), millilitres: 40_000, totalCents: 6000, ...extra });
+  const res = await who.post('/api/fuel', { at: at(t.clock, -30 + slot), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO, ...extra });
   return { status: res.status, item: res.body.fuel, res };
 }
 
@@ -136,7 +136,7 @@ test('the note shows up everywhere its item does: agenda, detail, inbox, drives,
     // ... a finished drive, an open drive and a fill-up.
     const finished = (await ben.post('/api/usage', { start: at(t.clock, -20), end: at(t.clock, -19), ...ODO, note: 'Airport' })).body.usage;
     const open = (await anna.post('/api/usage', { status: 'draft', start: at(t.clock, -0.5), odometerStart: 10_050, note: 'Still out' })).body.usage;
-    const filled = (await carla.post('/api/fuel', { at: at(t.clock, -10), millilitres: 30_000, totalCents: 5000, note: 'Shell' })).body.fuel;
+    const filled = (await carla.post('/api/fuel', { at: at(t.clock, -10), millilitres: 30_000, totalCents: 5000, odometer: FUEL_ODO, note: 'Shell' })).body.fuel;
 
     const drives = (await ben.get('/api/usage')).body.items as Json[];
     assert.equal(drives.find((u) => u.id === finished.id)?.note, 'Airport');

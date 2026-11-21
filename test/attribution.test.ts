@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { one } from '../src/db.ts';
 import { computeShares, type ShareDrive } from '../src/fuel.ts';
 import { attributionErrors } from '../src/usage.ts';
-import { ODO, at, createHousehold, insertReservation, insertUsage, type Json } from './helpers.ts';
+import { ODO, FUEL_ODO, at, createHousehold, insertReservation, insertUsage, type Json } from './helpers.ts';
 
 // ------------------------------------------------------------ the pure rules
 
@@ -215,7 +215,7 @@ test('a drive locked by a payment request: a member cannot change whose kilometr
   const { t, admin, anna, ben } = await createHousehold();
   try {
     const id = (await ben.post('/api/usage', drive(t, -30, -28))).body.usage.id;
-    const fuel = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+    const fuel = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
     assert.equal((await ben.patch(`/api/usage/${id}`, { kmFor: 'together', note: 'before the request' })).status, 200, 'free before a request');
     assert.equal((await ben.patch(`/api/usage/${id}`, { kmFor: 'self' })).status, 200);
     assert.equal((await anna.post(`/api/fuel/${fuel.id}/requests`, { debtorId: ben.id })).status, 201);
@@ -237,7 +237,7 @@ test('a member cannot register kilometres for someone else or for everybody into
     const count = (): number => one<{ n: number }>(t.db, 'SELECT COUNT(*) AS n FROM usage')!.n;
     const billed = (over: Json) => ({ ...drive(t, -20, -19), kmFor: 'person', kmUserId: ben.id, note: 'for Ben', ...over });
     assert.equal((await ben.post('/api/usage', drive(t, -30, -28))).status, 201);
-    const fuel = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+    const fuel = (await anna.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
     assert.equal((await anna.post('/api/usage', billed({ start: at(t.clock, -26), end: at(t.clock, -25) }))).status, 201, 'free before a request');
     assert.equal((await anna.post(`/api/fuel/${fuel.id}/requests`, { debtorId: ben.id })).status, 201);
     // Anna's draft is open already (nothing is billed to anyone until it is finished).
@@ -462,7 +462,7 @@ test('the fuel split follows the owner: kilometres Anna drove for Ben are Ben\'s
   try {
     await anna.post('/api/usage', drive(t, -40, -39, { odometerStart: 0, odometerEnd: 100 }));
     await anna.post('/api/usage', drive(t, -38, -37, { odometerStart: 100, odometerEnd: 200, kmFor: 'person', kmUserId: ben.id, note: 'for Ben' }));
-    const first = (await carla.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000 })).body.fuel;
+    const first = (await carla.post('/api/fuel', { at: at(t.clock, -20), millilitres: 40_000, totalCents: 6000, odometer: FUEL_ODO })).body.fuel;
     const names = (f: Json): Json[] => f.shares.map((s: Json) => [s.userName, s.km, s.cents]);
     assert.deepEqual(names(first), [['Anna', 100, 3000], ['Ben', 100, 3000]], 'Ben pays for what Anna drove for him');
     assert.equal(first.totalKm, 200);
@@ -472,7 +472,7 @@ test('the fuel split follows the owner: kilometres Anna drove for Ben are Ben\'s
     // and the admin (who does not pay for fuel) has no share either way.
     await anna.post('/api/usage', drive(t, -18, -17, { odometerStart: 200, odometerEnd: 300, kmFor: 'together', note: 'for all' }));
     await ben.post('/api/usage', drive(t, -16, -15, { odometerStart: 300, odometerEnd: 400 }));
-    const second = (await carla.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 8000 })).body.fuel;
+    const second = (await carla.post('/api/fuel', { at: at(t.clock, -10), millilitres: 40_000, totalCents: 8000, odometer: FUEL_ODO })).body.fuel;
     assert.equal(second.totalKm, 200);
     assert.equal(second.togetherKm, 100);
     assert.deepEqual(names(second), [['Ben', 100, 8000]]);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { one } from '../src/db.ts';
 import { computeShares, pricePerLitreMillis, splitCents, type ShareDrive, type ShareFuel } from '../src/fuel.ts';
-import { at, createHousehold, insertDraft, insertFuel, insertUsage, type Json } from './helpers.ts';
+import { FUEL_ODO, at, createHousehold, insertDraft, insertFuel, insertUsage, type Json } from './helpers.ts';
 
 const MIN = 60_000;
 
@@ -115,6 +115,7 @@ const body = (t: { clock: Parameters<typeof at>[0] }, over: Record<string, unkno
   at: at(t.clock, -10),
   millilitres: 40_000,
   totalCents: 6000,
+  odometer: FUEL_ODO,
   ...over,
 });
 

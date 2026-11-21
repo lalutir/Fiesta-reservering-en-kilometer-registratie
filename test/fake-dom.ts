@@ -451,8 +451,13 @@ export interface ApiStub {
   restore(): void;
 }
 
-/** Routes are keyed "METHOD /path" (query string ignored); a plain object answers 200, a Reply anything else. */
-export function stubApi(routes: Routes): ApiStub {
+/**
+ * Routes are keyed "METHOD /path" (query string ignored); a plain object answers 200, a Reply anything else.
+ * GET /api/odometer (the kilometre check every drive, fill-up and history screen asks for) answers an empty
+ * chain unless a test plans something else, so a test about something else does not have to know about it.
+ */
+export function stubApi(planned: Routes): ApiStub {
+  const routes: Routes = { 'GET /api/odometer': () => odometerChain(), ...planned };
   const g = globalThis as Json;
   const before = Object.getOwnPropertyDescriptor(g, 'fetch');
   const stub: ApiStub = {
@@ -530,6 +535,32 @@ export function usage(over: Json = {}): Json {
 /** Anna's drive that has started and not ended. */
 export const draft = (over: Json = {}): Json =>
   usage({ id: 9, userId: 1, userName: 'Anna', status: 'draft', start: at(-60), end: null, odometerStart: 41120, odometerEnd: null, distanceKm: null, reservationId: 7, note: 'Groceries', can: { edit: true, delete: true }, ...over });
+
+// ------------------------------------------------------- the odometer chain
+
+/** One reading in the chain: by default the end of Ben's drive 3 (see usage()). */
+export function reading(over: Json = {}): Json {
+  return { source: 'drive-end', id: 3, km: 41120, at: at(-480), userId: 2, userName: 'Ben', draft: false, ...over };
+}
+
+/** A finding between two readings, open (not explained) and open to everybody who is involved. */
+export function finding(prev: Json, next: Json, over: Json = {}): Json {
+  const km = (next['km'] as number) - (prev['km'] as number);
+  const key = [prev, next].map((r) => `${r['source']}:${r['id']}:${r['km']}:${r['at']}:${r['userId']}`).join('>');
+  return { key, kind: km > 0 ? 'gap' : 'mismatch', km: Math.abs(km), prev, next, explained: null, can: { explain: true, unexplain: false }, ...over };
+}
+
+/** The answer of GET /api/odometer: readings in chain order, findings newest first. */
+export function odometerChain(readings: Json[] = [], items: Json[] = []): Json {
+  return {
+    window: { from: '2025-12-15T00:00:00.000Z', to: '2026-12-15T00:00:00.000Z' },
+    readings,
+    items,
+    latest: readings[readings.length - 1] ?? null,
+  };
+}
+
+export const odometerRoutes = (chain: Json = odometerChain()): Routes => ({ 'GET /api/odometer': () => chain });
 
 // ------------------------------------------------------------------ the app
 

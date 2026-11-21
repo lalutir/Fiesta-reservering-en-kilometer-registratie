@@ -36,7 +36,10 @@ import {
   hintOf,
   installFakeBrowser,
   makeApp,
+  odometerChain,
+  odometerRoutes,
   one,
+  reading,
   refuse,
   reservation,
   submitForm,
@@ -177,6 +180,8 @@ function driveRoutes(over: { usage?: Json[]; reservations?: Json[]; pending?: Js
   };
 }
 const driveForm = (app: ReturnType<typeof makeApp>, query = '') => renderUsage(app.app, { query: new URLSearchParams(query) });
+/** The chain a household with Ben's finished drive 3 (41000 to 41120) has. */
+const benChain = (): Json => odometerChain([reading({ source: 'drive-start', km: 41000, at: at(-600) }), reading()]);
 const startOf = (form: unknown) => dateTime(fieldRow(form, S.usage.start));
 const endOf = (form: unknown) => dateTime(fieldRow(form, S.usage.end));
 const readingStart = (form: unknown) => control(fieldRow(form, S.usage.odometerStart));
@@ -184,14 +189,15 @@ const readingEnd = (form: unknown) => control(fieldRow(form, S.usage.odometerEnd
 
 test('a drive started from a reservation that has not begun is saved as a draft, linked to it, with only the start reading', async () => {
   const me = makeApp(ANNA);
-  const routes = driveRoutes({ usage: [usage()], reservations: [reservation()] });
+  const routes = driveRoutes({ usage: [usage()], reservations: [reservation()], extra: odometerRoutes(benChain()) });
   await withClient({ now: NOW, routes }, async ({ dom, api }) => {
     const form = view(dom, await driveForm(me, 'res=7'));
     assert.equal(one(form, 'h2').textContent, S.usage.logTitle);
     assert.equal(control(fieldRow(form, S.usage.reservation)).value, '7', 'the reservation from the card is preselected');
     assert.deepEqual([startOf(form).date.value, startOf(form).time.value], ['2026-06-15', '12:00'], 'the drive starts now');
     assert.deepEqual([endOf(form).date.value, endOf(form).time.value], ['', ''], 'the end is left for later');
-    assert.equal(readingStart(form).value, '41120', 'the last known end reading is the starting point');
+    assert.equal(readingStart(form).value, '41120', 'the latest known reading is the starting point');
+    assert.equal(one(form, '.km-last').textContent, S.kmcheck.lastKnown(41120, 'Ben', fmtWhen(at(-480), TZ)), 'and it says where that reading comes from');
     assert.equal(submitButton(form).textContent, S.usage.submitDraft);
     assert.equal(hintOf(fieldRow(form, S.usage.note)), S.noteHint);
 
@@ -921,12 +927,13 @@ test('fuel form: two of litres, total and price are enough; the app works out th
     assert.equal(hintOf(fieldRow(form, S.reserve.note)), S.noteHint);
     await typeInto(control(fieldRow(form, S.fuel.litres)), '40,5');
     await typeInto(control(fieldRow(form, S.fuel.total)), '81');
-    assert.equal(one(form, 'p[aria-live="polite"]').textContent, S.fuel.worked(fmtLitres(40500), fmtCents(8100), fmtPrice(2000)), 'the figures worked out are shown before saving');
+    await typeInto(control(fieldRow(form, S.fuel.odometer)), '41200');
+    assert.equal(one(form, 'p.hint[aria-live="polite"]').textContent, S.fuel.worked(fmtLitres(40500), fmtCents(8100), fmtPrice(2000)), 'the figures worked out are shown before saving');
 
     await submitForm(form);
     const sent = onlyWrite(api);
     assert.equal(`${sent.method} ${sent.path}`, 'POST /api/fuel');
-    assert.deepEqual(sent.body, { at: NOW, millilitres: 40500, totalCents: 8100, note: '' });
+    assert.deepEqual(sent.body, { at: NOW, millilitres: 40500, totalCents: 8100, note: '', odometer: 41200 });
     assert.deepEqual(me.toasts, [{ message: `${S.fuel.saved} ${S.noteTip}`, isError: false }]);
     assert.deepEqual(me.navigated, ['#/fuel']);
   });
@@ -958,6 +965,7 @@ test('fuel form: an admin records a fill-up for someone else, and a server refus
     control(fieldRow(form, S.fuel.who)).value = String(BEN.id);
     await typeInto(control(fieldRow(form, S.fuel.litres)), '40');
     await typeInto(control(fieldRow(form, S.fuel.total)), '80');
+    await typeInto(control(fieldRow(form, S.fuel.odometer)), '41200');
     answer = refuse(422, 'validation_failed', { fields: { at: 'in_future' } });
     await submitForm(form);
     assert.equal(api.writes()[0]?.body['userId'], BEN.id);
