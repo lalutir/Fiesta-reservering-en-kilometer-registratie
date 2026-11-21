@@ -4,11 +4,13 @@ This guide puts the shared car app on one small cloud server (a "droplet" on
 DigitalOcean, or the equivalent on Hetzner) with automatic HTTPS, a persistent
 SQLite database and nightly backups. Plan on about an hour the first time.
 
-> **Not verified here.** The Docker, Docker Compose and Caddy files in this
-> repository were reviewed but never run by the people who wrote them, and every
-> price below is from memory. Treat the first deployment as a test, follow the
-> smoke checklist at the end, and check the provider's pricing page before you
-> pay for anything.
+> **Partly verified.** On every pull request, CI builds the image, starts the `app`
+> service from `docker-compose.yml` on a throw-away volume, signs in and calls the
+> API, and checks that `docker-compose.yml` and the `Caddyfile` are valid (see
+> "Continuous integration" in the README). Nobody has run the Caddy service with a
+> real domain and certificate, or deployed to a real server, and every price below
+> is from memory. Treat the first deployment as a test, follow the smoke checklist
+> at the end, and check the provider's pricing page before you pay for anything.
 
 What you get:
 
@@ -320,7 +322,11 @@ Both images are pinned to a minor version so a rebuild of the same commit gives
 the same result:
 
 - **Node:** `ARG NODE_VERSION=22.23` at the top of the `Dockerfile` (image
-  `node:22.23-alpine`). This is the only place it is set.
+  `node:22.23-alpine`). The same version is written in the file `.nvmrc`, which
+  the continuous-integration workflow reads (it installs that Node and builds the
+  image with that value). The Dockerfile keeps its own default so that
+  `docker compose build` on the droplet needs no extra argument, and a test
+  (`test/ci.test.ts`) fails when the two files differ: always change both.
 - **Caddy:** `image: caddy:2.11-alpine` in `docker-compose.yml`.
 
 Patch and Alpine security fixes still arrive, but only when you ask for them with
@@ -329,8 +335,9 @@ a plain `docker compose up -d --build` reuses the base image already on the serv
 
 The app uses Node's built-in `node:sqlite`, which is still marked experimental,
 so moving to a newer Node **minor** is a deliberate step: take a backup, change
-`NODE_VERSION` in the `Dockerfile`, run `docker compose up -d --build`, check
-`docker compose logs --tail 50 app`, and run the smoke checklist (section 15).
+`NODE_VERSION` in the `Dockerfile` and the number in `.nvmrc`, run
+`docker compose up -d --build`, check `docker compose logs --tail 50 app`, and run
+the smoke checklist (section 15).
 `docker compose exec app node -v` shows the version that is actually running.
 Treat a new Caddy minor the same way (edit the `image:` line).
 

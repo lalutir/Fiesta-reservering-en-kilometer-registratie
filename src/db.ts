@@ -351,7 +351,14 @@ function copyBeforeMigrating(db: Db, file: string, migrations: readonly string[]
     vacuumInto(db, tmp);
     fs.renameSync(tmp, dest);
   } catch (err) {
-    fs.rmSync(tmp, { force: true });
+    // Clean up the half-written copy, but never let the cleanup replace the real error. When
+    // `backups` is a file, removing `backups/<name>.tmp` fails with ENOTDIR on Linux (Windows says
+    // ENOENT, which `force` ignores), and that would hide why the copy could not be made.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // Best effort: the error below is the one that matters.
+    }
     const why = err instanceof Error ? err.message : String(err);
     throw new Error(`Cannot write the pre-migration copy ${dest}; the database was not changed: ${why}`, { cause: err });
   }

@@ -1,5 +1,6 @@
-// Docker is not available on every dev machine (and not in CI for this repo), so the
-// container files cannot be built here. These tests read them as text and check what
+// Docker is not available on every dev machine, and the CI Docker job (see
+// .github/workflows/ci.yml) is the only place the image is really built and started.
+// These tests read the container files as text, in every run, and check what
 // can go wrong silently: files that disagree with each other (port, data directory),
 // a build input that .dockerignore removes, a secret that could end up in git or in
 // the image, and a deployment guide that names commands or variables that do not exist.
@@ -290,7 +291,7 @@ test('.env.example is complete, free of secrets, and accepted by the config load
 
 // ------------------------------------------------------------ secrets in git
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude', 'data', 'coverage']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude', 'data', 'coverage', 'playwright-report', 'test-results']);
 const TEXT_FILE = /\.(ts|js|mjs|json|md|yml|yaml|html|css|webmanifest|example|txt)$|^(Dockerfile|Caddyfile|\.gitignore|\.dockerignore|\.gitattributes)$/;
 
 function textFiles(dir: string): string[] {

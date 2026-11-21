@@ -1,0 +1,53 @@
+# Weekly update pull requests, grouped so a week brings one pull request per kind of update.
+# Dependabot only opens pull requests; the CI workflow checks each of them like any other change.
+#
+# Not covered, on purpose: the Node version (see the docker entry below) and the actionlint
+# image in the CI workflow, which is pinned by digest and bumped by hand.
+version: 2
+updates:
+  # The app has no runtime dependencies, so everything here is a development tool. Majors stay
+  # separate pull requests, because they are the ones that can need changes in the code.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-tools:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # The Dockerfile (base image). Node is ignored explicitly instead of relying on Dependabot not
+  # understanding `FROM node:${NODE_VERSION}-alpine`: a bump of the ARG alone would make
+  # test/ci.test.ts fail (.nvmrc must change with it), so such a pull request could never be green.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: node
+    groups:
+      docker-images:
+        patterns:
+          - "*"
+
+  # docker-compose.yml (the pinned Caddy image); the docker ecosystem only reads Dockerfiles.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      compose-images:
+        patterns:
+          - "*"
+
+  # The actions in .github/workflows (pinned to a commit SHA with a version comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -11,6 +11,10 @@ data
 *.db-wal
 *.db-shm
 coverage
+playwright-report
+test-results
+.github
+e2e
 test
 docs
 scripts

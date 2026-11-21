@@ -9,4 +9,6 @@ data/
 *.db-shm
 *.db.tmp
 coverage/
+playwright-report/
+test-results/
 *.log

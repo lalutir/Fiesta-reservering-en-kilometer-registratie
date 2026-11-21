@@ -3,11 +3,13 @@
 # Shared car app. Zero runtime npm dependencies: the final image only needs the
 # compiled JavaScript, the browser files and Node itself (node:sqlite is built in).
 #
-# NODE_VERSION is the ONE place the Node version is set (docker-compose.yml does
-# not override it). It is pinned to a minor so two builds of the same commit run
-# the same Node: node:sqlite is still experimental in Node 22, so move this up
-# deliberately, see docs/DEPLOYMENT.md "Pinning the Node version". Patch and
-# Alpine security updates arrive with `docker compose build --pull`.
+# NODE_VERSION is the Node version of the production image (docker-compose.yml
+# does not override it). The same version is written in .nvmrc, which CI and local
+# tooling read, and test/ci.test.ts fails when the two differ, so change both
+# together. It is pinned to a minor so two builds of the same commit run the same
+# Node: node:sqlite is still experimental in Node 22, so move this up deliberately,
+# see docs/DEPLOYMENT.md section 13. Patch and Alpine security updates arrive with
+# `docker compose build --pull`.
 ARG NODE_VERSION=22.23
 
 # ---- build: install dev tooling, compile TypeScript to dist/ -------------------
