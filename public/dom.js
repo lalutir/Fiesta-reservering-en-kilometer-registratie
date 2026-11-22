@@ -1,9 +1,9 @@
 // Safe DOM construction (text only, never innerHTML) and display helpers.
 // The time helpers come from the same file the server uses (/shared/time.js).
-import { formatLocal, localDateKey, localInputToUtc, utcToLocalInput } from '../shared/time.js';
+import { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput } from '../shared/time.js';
 import { S, errorText, fieldErrorText } from './strings.js';
 
-export { formatLocal, localDateKey, localInputToUtc, utcToLocalInput };
+export { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput };
 
 const PROPERTY_KEYS = new Set(['value', 'checked', 'disabled', 'selected', 'hidden', 'required', 'readOnly', 'multiple']);
 

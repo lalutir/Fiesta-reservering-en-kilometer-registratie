@@ -4,6 +4,7 @@ import { h, setContent, toaster } from './dom.js';
 import { S, errorText } from './strings.js';
 import * as account from './views/account.js';
 import * as agenda from './views/agenda.js';
+import * as car from './views/car.js';
 import * as fuel from './views/fuel.js';
 import * as history from './views/history.js';
 import * as inbox from './views/inbox.js';
@@ -25,13 +26,14 @@ import * as usage from './views/usage.js';
  */
 
 /** @type {Record<string, View>} */
-const VIEWS = { agenda, reserve, inbox, usage, fuel, tickets, history, account };
+const VIEWS = { agenda, reserve, inbox, usage, fuel, tickets, history, car, account };
 const TABS = [
   ['agenda', S.nav.agenda],
   ['reserve', S.nav.reserve],
   ['inbox', S.nav.inbox],
   ['usage', S.nav.usage],
   ['history', S.nav.history],
+  ['car', S.nav.car],
   ['account', S.nav.account],
 ];
 // Routes that live under a tab: Fuel and costs and Traffic tickets are reached from Drives, so that tab stays highlighted.

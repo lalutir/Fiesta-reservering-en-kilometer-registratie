@@ -6,7 +6,7 @@ import path from 'node:path';
 import { runCli, type CliIo } from '../src/cli.ts';
 import { many, one, openDb, run } from '../src/db.ts';
 import { purge } from '../src/retention.ts';
-import { ODO, at, createHousehold, createTestApp, insertDraft, insertFuel, insertReservation, insertTicket, insertUsage, makeClock, type TestApp } from './helpers.ts';
+import { ODO, at, createHousehold, createTestApp, insertApk, insertDamage, insertDraft, insertFuel, insertReservation, insertTicket, insertUsage, makeClock, type TestApp } from './helpers.ts';
 
 const TZ = 'Europe/Amsterdam';
 const NOW = '2026-06-15T10:00:00.000Z';
@@ -123,18 +123,18 @@ test('the deleted-row counts are logged as one JSON line and kept for the admin 
     t.logs.length = 0;
     const res = await admin.post('/api/admin/retention/run');
     assert.equal(res.status, 200);
-    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
+    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
     const lines = t.logs.filter((l) => l['event'] === 'retention.purge');
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
+    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
 
     const status = (await admin.get('/api/admin/retention')).body;
     assert.equal(status.cutoff, CUTOFF);
     assert.equal(status.windowMonths, 6);
     assert.deepEqual(status.window, { from: CUTOFF, to: '2026-12-15T11:00:00.000Z' });
     assert.equal(status.lastPurgeAt, NOW);
-    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: 0 });
-    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, sessions: status.counts.sessions });
+    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
+    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: status.counts.sessions });
     assert.equal(status.oldest.reservationEnd, null);
     assert.equal(status.timeZone, 'Europe/Amsterdam');
   } finally {
@@ -250,7 +250,7 @@ test('old tickets are purged by the time of the offence, strictly before the cut
     );
     assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM tickets').some((r) => r.id === before));
     // A ticket does not take anything else with it, and the other counts stay at zero.
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, odometerExplained: 0, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, odometerExplained: 0, damageReports: 0, sessions: 0 });
     t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 1);
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 0, 'idempotent');
@@ -296,7 +296,7 @@ test('the purge command says how many tickets it removed', async (tctx) => {
 
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations and 0 expired sessions older than ${CUTOFF}.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
   );
 
   const db = openDb(path.join(dir, 'car.db'));
@@ -307,7 +307,7 @@ test('the purge command says how many tickets it removed', async (tctx) => {
   db.close();
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets, 0 odometer explanations and 0 expired sessions older than ${CUTOFF}.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
     'two tickets removed, the one exactly at the cutoff kept',
   );
 });
@@ -332,7 +332,7 @@ test('odometer explanations are purged when their earlier reading is strictly be
       [atCutoff, recent],
     );
     assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM odometer_explained').some((r) => r.id === before));
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 1, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 1, damageReports: 0, sessions: 0 });
     assert.equal((await admin.get('/api/admin/retention')).body.counts.odometerExplained, 2);
     t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).odometerExplained, 1);
@@ -443,4 +443,160 @@ test('an abandoned old draft is purged like any other old row, a recent one is k
   } finally {
     await t.close();
   }
+});
+
+// ----------------------------------------------- damage reports (the Car tab)
+
+const damageIds = (t: TestApp): number[] => many<{ id: number }>(t.db, 'SELECT id FROM damage_reports ORDER BY id').map((r) => r.id);
+
+test('an open damage report is never purged, however old; a repaired one goes by the day it was repaired, strictly before the first day of the window', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    // NOW is 12:00 on 15 June 2026 in Amsterdam, so the window starts on 15 December 2025.
+    const openAncient = insertDamage(t, { reportedBy: anna.id, noticedOn: '2020-01-01' });
+    const openLastYear = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01' });
+    const dayBefore = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01', repairedOn: '2025-12-14' });
+    const onCutoffDay = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01', repairedOn: '2025-12-15' });
+    const dayAfter = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01', repairedOn: '2025-12-16' });
+    const longAgo = insertDamage(t, { reportedBy: anna.id, noticedOn: '2020-01-01', repairedOn: '2020-02-01' });
+    const recent = insertDamage(t, { reportedBy: anna.id, noticedOn: '2026-06-01', repairedOn: '2026-06-10' });
+    assert.equal((await admin.get('/api/admin/retention')).body.counts.damageReports, 7);
+    assert.equal((await admin.get('/api/admin/retention')).body.oldest.damageRepairedOn, '2020-02-01', 'the oldest figure only looks at repaired reports');
+
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.equal(result.damageReports, 2, 'the one repaired the day before and the one repaired years ago');
+    assert.deepEqual(damageIds(t), [openAncient, openLastYear, onCutoffDay, dayAfter, recent], 'both open ones, and the repaired ones from the cutoff day on');
+    assert.ok(![dayBefore, longAgo].some((id) => damageIds(t).includes(id)));
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 2, sessions: 0 });
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 0, 'idempotent');
+
+    const status = (await admin.get('/api/admin/retention')).body;
+    assert.equal(status.counts.damageReports, 5);
+    assert.equal(status.oldest.damageRepairedOn, '2025-12-15');
+    // The next day the report repaired on the cutoff day has fallen out of the window too.
+    t.clock.advance(24 * HOUR);
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 1);
+    assert.deepEqual(damageIds(t), [openAncient, openLastYear, dayAfter, recent]);
+  } finally {
+    await t.close();
+  }
+});
+
+test('a report that was repaired long ago and is reopened is open again, so the purge keeps it; an open report that is repaired starts its six months from that day', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    const id = insertDamage(t, { reportedBy: anna.id, noticedOn: '2020-01-01', repairedOn: '2020-02-01', repairNote: 'garage' });
+    const reopened = await anna.patch(`/api/damage/${id}`, { status: 'open' });
+    assert.equal(reopened.status, 200, reopened.text);
+    assert.deepEqual([reopened.body.report.status, reopened.body.report.repairedOn, reopened.body.report.repairNote], ['open', null, '']);
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 0);
+    assert.deepEqual(damageIds(t), [id]);
+
+    // Repaired today: kept now, and deleted once the window has moved past that day.
+    assert.equal((await admin.post(`/api/damage/${id}/repair`, { repairedOn: '2026-06-15' })).status, 200);
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 0);
+    t.clock.set('2026-12-15T10:00:00.000Z'); // the window now starts on 15 June 2026 ...
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 0, '... the repaired day itself is still inside it');
+    t.clock.set('2026-12-16T10:00:00.000Z');
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 1, 'and the day after it has fallen out');
+    assert.deepEqual(damageIds(t), []);
+  } finally {
+    await t.close();
+  }
+});
+
+test('the cutoff day of a repaired report is the local calendar day, not the UTC date of the cutoff instant', async () => {
+  // 00:30 on 15 June in Amsterdam is 22:30 UTC on the 14th. Six months back is 00:30 on 15 December local = 23:30 UTC on the 14th:
+  // the UTC date of the cutoff is the 14th, the local one the 15th.
+  const t = await createTestApp({ now: '2026-06-14T22:30:00.000Z' });
+  try {
+    const anna = await t.signIn('anna');
+    const dec14 = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01', repairedOn: '2025-12-14' });
+    const dec15 = insertDamage(t, { reportedBy: anna.id, noticedOn: '2025-01-01', repairedOn: '2025-12-15' });
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).cutoff, '2025-12-14T23:30:00.000Z');
+    assert.deepEqual(damageIds(t), [dec15], 'repaired on the local 14th: before the local 15th, so deleted; the 15th stays');
+    assert.ok(!damageIds(t).includes(dec14));
+  } finally {
+    await t.close();
+  }
+});
+
+test('damage reports are counted by the retention page, and a purge result stored before the Car tab existed is returned as stored', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    assert.equal((await admin.get('/api/admin/retention')).body.oldest.damageRepairedOn, null, 'nothing repaired yet');
+    insertDamage(t, { reportedBy: anna.id });
+    assert.equal((await admin.get('/api/admin/retention')).body.oldest.damageRepairedOn, null, 'an open report has no repaired day');
+    insertDamage(t, { reportedBy: anna.id, repairedOn: '2026-06-12' });
+    insertDamage(t, { reportedBy: anna.id, repairedOn: '2026-06-11' });
+    const status = (await admin.get('/api/admin/retention')).body;
+    assert.equal(status.counts.damageReports, 3);
+    assert.equal(status.oldest.damageRepairedOn, '2026-06-11');
+    // The previous release stored no damageReports key: the page reads it with ?? 0, the server hands it back untouched.
+    run(t.db, "INSERT INTO meta (key, value) VALUES ('last_purge', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify({ cutoff: CUTOFF, reservations: 1, usage: 2, fuel: 3, fuelRequests: 4, tickets: 6, odometerExplained: 7, sessions: 5 }));
+    const old = (await admin.get('/api/admin/retention')).body;
+    assert.equal(old.lastPurge.damageReports, undefined);
+    assert.equal(old.lastPurge.odometerExplained, 7);
+    const manual = await admin.post('/api/admin/retention/run');
+    assert.equal(manual.body.result.damageReports, 0);
+    assert.equal(manual.body.status.lastPurge.damageReports, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('the APK record is never purged, however old its date or its last update, and the purge neither counts nor reports it', async () => {
+  const { t, admin, anna } = await createHousehold();
+  try {
+    insertApk(t, { userId: anna.id, expiresOn: '2019-03-01' });
+    run(t.db, "UPDATE car_apk SET updated_at = '2019-01-01T00:00:00.000Z'");
+    const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 }, 'nothing counted, no APK key');
+    assert.deepEqual(many(t.db, 'SELECT id, expires_on, updated_by, updated_at FROM car_apk'), [{ id: 1, expires_on: '2019-03-01', updated_by: anna.id, updated_at: '2019-01-01T00:00:00.000Z' }], 'the one row is still there, unchanged');
+    // A purge that does remove other things leaves it alone too, and the page still shows it as expired.
+    insertDamage(t, { reportedBy: anna.id, noticedOn: '2020-01-01', repairedOn: '2020-02-01' });
+    assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 1);
+    assert.equal(many(t.db, 'SELECT id FROM car_apk').length, 1);
+    const apk = (await admin.get('/api/car/apk')).body.apk;
+    assert.deepEqual([apk.expiresOn, apk.updatedBy.name, apk.daysLeft < 0], ['2019-03-01', 'Anna', true]);
+    const status = (await admin.get('/api/admin/retention')).body;
+    assert.ok(!JSON.stringify(status.counts).includes('apk') && !JSON.stringify(status.oldest).includes('apk'), 'it is not something that is kept for six months, so the retention page does not list it');
+  } finally {
+    await t.close();
+  }
+});
+
+test('the purge command counts the repaired damage reports it removed, and says that open ones are never purged', async (tctx) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'car-ret-cli-damage-'));
+  tctx.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const env = { DATA_DIR: dir, SCRYPT_N: '1024', SCRYPT_P: '1' };
+  const db = openDb(path.join(dir, 'car.db'));
+  const user = run(db, "INSERT INTO users (username, display_name, password_hash, role, created_at, updated_at) VALUES ('anna', 'Anna', 'x', 'member', 'now', 'now')").lastInsertRowid;
+  const add = (noticedOn: string, repairedOn: string | null): void => {
+    run(
+      db,
+      `INSERT INTO damage_reports (noticed_on, reported_by, description, location, status, repaired_on, created_at, updated_at) VALUES (?, ?, 'A dent', 'front', ?, ?, 'now', 'now')`,
+      noticedOn,
+      user,
+      repairedOn ? 'repaired' : 'open',
+      repairedOn,
+    );
+  };
+  add('2020-01-01', null); // open for years: stays
+  add('2025-01-01', '2025-12-14'); // repaired before the window: goes
+  add('2025-01-01', '2025-12-15'); // repaired on the first day of the window: stays
+  db.close();
+  const out: string[] = [];
+  const io: CliIo = { readStdin: async () => '', out: (l) => out.push(l), err: () => undefined };
+  assert.equal(await runCli(['purge'], env, io, makeClock(NOW)), 0);
+  assert.equal(
+    out.join('\n'),
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 1 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
+  );
+  const after = openDb(path.join(dir, 'car.db'));
+  assert.deepEqual(many(after, 'SELECT noticed_on, status FROM damage_reports ORDER BY id'), [
+    { noticed_on: '2020-01-01', status: 'open' },
+    { noticed_on: '2025-01-01', status: 'repaired' },
+  ]);
+  after.close();
 });

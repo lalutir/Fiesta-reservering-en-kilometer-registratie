@@ -894,6 +894,126 @@ Defaults taken (none scope-changing; no one was asked):
 - Invocation: the request above, typed as `/implement ...`; the `implement` skill was not installed in this session, so it was carried out directly. Base commit `a3953c1b445e3526e377ea9394d3f99c28559df6`.
 <!-- implement:run:push-notifications-on-behalf:end -->
 
+<!-- implement:run:car-tab-damage-reports-apk-expiry:start -->
+### Car tab with damage reports and the APK expiry date (car-tab-damage-reports-apk-expiry)
+
+Date 2026-11-22. Branch `implement/car-tab-damage-reports-apk-expiry`. Base branch `main`, base commit `6f62bbca245fe2af56cd835d2b60ac8c59654b9b` (origin/main with PR #10 merged; the ledger names the stale local `main`, `a3953c1b445e3526e377ea9394d3f99c28559df6`, see Honesty flags).
+
+### Request
+
+> Add a new tab, "Car", with two things: damage reports and the APK expiry date. If a seventh tab does not fit the bar at 320 px, reorganise the bar minimally (a more-menu or merging). A full redesign of the navigation follows in a later change.
+>
+> Damage reports:
+> - Fields: date first noticed (required, not in the future), who noticed it (an active household member, defaulting to the reporter, plus an "unknown" option), who reported it (the logged-in user, automatic), a description (required), the location on the car (a choice list such as front, rear, left, right, roof, interior, wheels and tyres, windows, mechanical, other), and a status (open or repaired, with the repaired date and an optional note).
+> - Show, as a neutral hint and not an accusation, who last drove before the noticed date. Reuse the whoDrove logic from src/tickets.ts and derive it live, never store it.
+> - Anyone can add a report. The creator or an admin can edit or delete one, following the ticket pattern, and any member can mark one repaired. Everybody sees everything.
+> - Push to ALL other active users when a report is created, using the central notifier from the previous change. Not to the reporter. Do not push when it is marked repaired; that stays in-app.
+> - Retention: the 6-month purge must NOT delete open reports. Repaired reports follow the 6-month rule counted from the repaired date. Update purge counts, the admin Retention tab and the CLI line accordingly.
+> - No photo upload in this change. It would need file storage, size limits and backups. Mention it in your report as a follow-up decision.
+>
+> APK expiry (the Dutch periodic car inspection, "APK"):
+> - One record for the car: the expiry date (a calendar date), plus who last updated it and when. Any active member can update it when the APK is renewed, and the change is audit-logged. The initial state is "not set", with a clear prompt to enter it.
+>
+> Use an additive migration (with the pre-migrate backup), strict validation like the other modules, the shared window and date helpers, tests (API, permissions, retention exemption, push recipients, APK date edge cases, DST and time zone handling for the calendar date), a smoke check, README and DEPLOYMENT updates, and a headless Chromium pass at 390 and 320 px. The browser smoke suite from the CI change must stay green.
+
+### What was built
+
+A seventh tab, Car, holds the damage reports and the one APK expiry date of the car. Any member files a report (calendar day noticed, who noticed it or unknown, description, location from a fixed list), everybody sees all of them, the filer or an admin edits and deletes, any member marks one repaired once, and a neutral "who drove before" hint is worked out on every read, never stored. Filing a report pushes every other active person through the central notifier (one new row, `damage.created`); edit, repair and delete push nothing. The purge keeps open reports for ever and deletes repaired ones by their repaired date; the APK is one audit-logged row with a "not set" prompt. Nothing is committed: HEAD is `6f62bbc`; git shows 31 modified tracked files (+1555/-83 against HEAD) and 5 untracked (`src/car.ts`, `public/views/car.js`, `test/car.test.ts`, `test/apk.test.ts`, `test/car-view.test.ts`) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 8). One `src/car.ts`, one view, one additive migration and one notifier row, a close clone of the ticket pattern; the acceptance rules are kept literal (no midnight slack, 404 then 403 then body) and the seventh tab was measured before a font size was chosen.
+- Rejected: idiomatic (count-agnostic tab bar rework: larger surface that the later navigation redesign replaces) and robust (Account moved to the top bar, extra helper layers; kept only as the measured fallback).
+- Rejected: `PUT /api/car/apk` (no put helper in the client or tests; PATCH reuses them), a stored hint, a `repaired_by` column, midnight slack on "not in the future", a more-menu or merged tabs (would break the e2e locators), separate `damage.ts` and `apk.ts` (split only past about 450 lines; `car.ts` has 363), photo upload (out of scope).
+
+### How it works
+
+Start with the top comment of `src/car.ts`, then migration 6 in `src/db.ts`, then `public/views/car.js`.
+
+- Routes, all signed-in: `GET` and `POST /api/damage`, `PATCH` and `DELETE /api/damage/:id`, `POST /api/damage/:id/repair`, `GET` and `PATCH /api/car/apk`. Edit and delete check creator-or-admin (403) before the body is read; PATCH and repair re-read the row after the body arrives, and repair writes `AND status = 'open'` (second repair is 409 `already_repaired`). Creator or admin reopens through edit, which clears repaired date and note.
+- Dates are `YYYY-MM-DD` text. `shared/time.js` gains `parseDateKey`, `isCalendarDate`, `daysBetween`, `addDateKeyYears`, `startOfLocalDay`, `formatDateKey` (UTC arithmetic, so DST never enters); `validate.ts` gains `Fields.date` (years 2000 to 2100), `windowStartDate` and `isFutureDate` (no slack; today is the household's local date). Noticed date: not future, no window limit. Repaired date: not before noticed, not future, inside the 6-month window. APK date: up to 5 years ahead (`APK_YEARS_AHEAD`), a past date is accepted and shown as expired; one `apk.updated` log line with actor and both dates, no free text.
+- Hint: `whoDrove` at the start of the noticed local day (drive log, open draft, confirmed reservation), else the driver of the last completed drive that ended before it, else null; the basis is shown. Noticed-by absent means the reporter, `null` means unknown, else an active user; `reportedBy` is always the session.
+- Migration 6 (`damage_reports`, `car_apk` with `id = 1`, indexes `damage_noticed` and partial `damage_repaired`): CHECKs for real calendar dates, the location list, status, `repaired_on` set exactly when repaired, no repair note while open. `backups/pre-migrate-v5.db` is written first.
+- Retention: `DELETE ... WHERE status = 'repaired' AND repaired_on < windowStartDate(...)`, so a report repaired on the cutoff's own day is kept (date granularity). `PurgeResult.damageReports`, `counts.damageReports`, `oldest.damageRepairedOn`, the CLI sentence and the admin Retention tab cover it.
+- Push: the `damage.created` row addresses all active users; the engine drops the reporter, the deactivated and people without a device; tag `damage-<id>`, link `/#/car`, sent after the response.
+- Client: `car` in `TABS` and `VIEWS`; cache `car-static-v6` with `/views/car.js` precached. Seven tabs fit at 320 px with a 0.66rem label and a non-bold current tab at 420 px and below (worst label/tab ratio 0.922 in Verdana, 0.838 in the system font, tab 45.7 px).
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/car.ts`, `public/views/car.js` | added | Damage and APK routes, DTOs and hint (363 lines); the Car view (440 lines) |
+| `src/db.ts`, `src/validate.ts`, `shared/time.js` | modified | Migration 6 and row types; date field, window start, future check; calendar-date helpers |
+| `src/notify.ts`, `src/notify-texts.ts`, `src/app.ts` | modified | `damage.created` row and text; route registration |
+| `src/retention.ts`, `src/cli.ts`, `public/admin/admin.js` | modified | Purge, counts, oldest, CLI sentence, Retention tab |
+| `public/app.js`, `strings.js`, `api.js`, `dom.js`, `style.css`, `sw.js` | modified | Tab and route, texts, typedefs, date helper exports, tab fit and view styles, cache v6 |
+| `scripts/smoke.mjs`, `e2e/fixtures.ts`, `e2e/app.spec.ts`, `e2e/guard.spec.ts` | modified | One Car smoke check (21 in all); `expectTabsFit`, a non-mutating Car step, 3 self-tests |
+| `test/car.test.ts`, `apk.test.ts`, `car-view.test.ts` | added | 34, 12 and 43 tests |
+| `test/db`, `maintenance`, `retention`, `notify`, `time`, `validate`, `pwa`, `tickets-view`, `odometer-api` `.test.ts`, `helpers.ts` | modified | v6 and v5-backup pins, purge and counts, recipients, date helpers, tab count 7, cache name and precache |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Feature, schema v6, limits, upgrade and going back, checklist; this entry |
+| `package.json`, lockfile, `Dockerfile`, compose, `Caddyfile`, `.github/` | unchanged | No dependency, container or CI change |
+
+### How to run and test
+
+Node 22.23.1, Windows; last test stage, final tree, all exit 0. This documentation step ran no test command.
+
+- `npm run typecheck` and `npm run lint`: clean. `npm test`: 1049 of 1049, 0 skipped (911 on `origin/main`; 1035 after build, 1037, 1040 and 1049 after the UI, backend and test stages); also with process zones UTC and PST8PDT. `npm run build`: clean. `npm run smoke`: 21 of 21. `npm run e2e` (installed Chromium via `E2E_CHROMIUM_PATH`): 52 passed at 390 and 320 px. `npm audit --omit=dev`: 0 vulnerabilities.
+- Headless Chromium Car pass, 390 and 320 px, light and dark: 264 of 264 checks (tab fit, APK states, create, edit, repair, reopen, delete, second member, errors, focus, contrast at least 4.5, no console or network errors, no sideways scroll); UI/UX pass 32 of 32.
+- Mutation checks, all killed, files restored and SHA-256 compared: 21 in build, 17 in the test stage.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design:frontend-design | No | 6 fixes: Edit left the form off-screen at 320x568 (form now under the heading), Mark repaired name starts with its visible text, one primary action in the APK card, hint set apart from "Reported by", lighter repaired cards, APK hint no repeat; tests 1035 to 1037 |
+| Backend | engineering-skills:senior-backend | No | Edit and repair used a row loaded before the body: a slow edit undid a repair, a stale repair gave 500 not 422, repair after delete gave 409 not 404; re-read after the body; 3 tests (1040) |
+| Data | engineering-advanced-skills:database-designer | No | No change. v5 file with rows, v1 file and failing v6 probed; CHECKs match the validators; query plans use the new indexes; 158 targeted tests pass |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; files read directly, filtering inline |
+| Simplicity | simplify | No | 4 behaviour-neutral cleanups in `notify-texts.ts`, `car.ts`, `validate.ts`, `car.js`; single inline pass |
+| DevOps | none | n/a | Did not run (no ledger entry; no Docker, Caddy or CI change) |
+
+### Verification
+
+Verified (ran and saw pass): the commands and browser passes above; each acceptance criterion maps to at least one test; the test stage added 9 tests (a new report is always open, `reportedBy` ignored on edit, non-object bodies give 400, hint names the driver not the km owner, hint tie, APK never purged, nobody else active, buttons disabled while busy, migration 6 purely additive); a v5 file with rows upgrades with one `pre-migrate-v5.db`, a v5 backup restores, a failing v6 rolls back.
+
+NOT verified:
+- Linux and GitHub Actions on this branch (nothing pushed). The seven-tab fit was measured with Windows fonts and Verdana as a wide stand-in; DejaVu or Noto in the CI Browser job is untested. If it fails there, change font size or padding in `public/style.css`, never loosen the check.
+- Real phones, an installed PWA picking up `car-static-v6`, the service worker in a real browser, WebKit and Gecko, screen readers, real push delivery.
+- Docker, compose, Caddy, a droplet deploy, the live v5 database (synthetic files only), a full disk during the pre-migration copy, a real two-process migration race.
+- No coverage report (judged by criterion mapping and mutation checks); a process zone east of UTC with DST could not be set through `TZ` here.
+
+Test confidence: high for what the commands cover (test stage); not for the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 15 findings, 0 confirmed, nothing blocking, no review fix.
+
+Remaining minor notes (not fixed): the view computes "today" once, so a page left open past midnight uses the old day; `render()` in `car.js` is about 370 lines; `focusHeading` and the error line are copies of the tickets view; retention text functions take ever more positional numbers; `docs/DEPLOYMENT.md` section 18 title and intro do not mention the Car tab; a backdated repair date lets any member purge another member's old open report within a day; the creation push has no duplicate or volume guard. Nits: no separator before "Open Car to see it.", `GET /api/damage` is unbounded, `ApkDto.daysLeft` and the `day` kind of `formatDateKey` have no production user, the location list is written six times, two assertions in `notify.test.ts` cannot fail, e2e `ALL_TABS` mixes constants and literals, the global textarea rule also changes the fuel payment textarea, a description of only invisible characters is accepted.
+
+### Assumptions and open questions
+
+Defaults taken for nine open questions (none scope-changing; no one was asked):
+- The notifier prerequisite was met: HEAD already equals origin/main with `src/notify.ts`; no second notifier. "Date first noticed" is a calendar date; the hint is anchored at the start of that local day and drives on the noticed day are not counted.
+- No window limit on the noticed date (an old known dent must be enterable; not before 2000); any member marks repaired once; reopening is for the creator or an admin. APK date from 2000-01-01 to 5 years ahead, past dates allowed; no history table, no reminder, no push, no badge.
+- Follow-ups for the owner: photo upload (file storage on the data volume or blobs, size and type limits, backup and retention rules, CSP `img-src`), an APK reminder or push, a cap on the damage list, a smaller tab label font until the navigation redesign, day-granular retention of repaired reports.
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, ledger caveats none; the test stage and the review ran once.
+- Ledger and git disagree on the base: the ledger's `base_sha` is `a3953c1` (and its notes name a branch `worktree-car-tab-...`), but git has this work on `implement/car-tab-damage-reports-apk-expiry` at HEAD `6f62bbc` (= origin/main). Local `main` is still `a3953c1`, so `git diff main` also shows PR #10's 43-file change; this entry counts against HEAD. The build stage found HEAD already on origin/main and merged nothing; it did not run `npm ci` (dependencies were installed).
+- The tree held steps 1 to 8 of the plan from an earlier build pass the ledger does not name; the build stage audited and kept them (994 tests green, 2 type errors in `test/apk.test.ts` at its start).
+- The build stage cites a green run with `TZ=America/Los_Angeles`; the test stage found that zone, JST-9 and NZST-12NZDT do not take effect on this Windows Node, so only UTC and PST8PDT (confirmed by probing) count.
+- The test stage's first Chromium run failed 8 checks from 3 stale locators in its throw-away driver (the UI pass renamed the Mark repaired button); the driver was fixed, the product was not changed, and the final run is 264 of 264. The ledger lists no failures.
+- Tests: git has 34, 12 and 43 declarations in the three new files (the ledger's build counts 26, 12 and 40, plus 8 and 3 from later stages); the other 49 new tests (911 to 1049) sit in modified files, which the ledger names without counts. New tests were not run red on the untouched tree; mutation checks stand in (one first-run survivor was an equivalent mutant and was replaced).
+- Existing tests changed only where tied to the change: tab count 6 to 7, cache name and precache, purge and count strings and `deepEqual`s, schema v5 pins, one README pin in `test/odometer-api.test.ts`; nothing skipped or loosened. Deviation from the plan: the Account-to-top-bar fallback was not used; the current tab is non-bold at 420 px and below instead. Unrequested extras: `.tab .badge { white-space: nowrap }` (a pre-existing two-digit wrap), `expectTabsFit` with 3 self-tests, `oldest.damageRepairedOn`.
+- Security and simplify ran inline (Agent tool unavailable); the security skill's diff section arrived empty and files were read directly. The data pass ran targeted tests only.
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git. Audit directory: `.claude/runs/car-tab-damage-reports-apk-expiry` (git-excluded). Base commit `6f62bbca245fe2af56cd835d2b60ac8c59654b9b`.
+<!-- implement:run:car-tab-damage-reports-apk-expiry:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

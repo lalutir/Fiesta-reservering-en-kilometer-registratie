@@ -7,7 +7,7 @@
 // These tests use Playwright's plain `test`, not the guarded one from ./fixtures.ts, because they
 // are SUPPOSED to produce problems; they assert on what the guard collected instead.
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoHorizontalScroll, expectNoProblems, isLoggedOutProbe, watch, type Problems } from './fixtures.ts';
+import { expectNoHorizontalScroll, expectNoProblems, expectTabsFit, isLoggedOutProbe, watch, type Problems } from './fixtures.ts';
 
 const ORIGIN = 'http://guard.test';
 
@@ -190,4 +190,30 @@ test('guard: an element wider than the phone fails the horizontal-scroll check, 
   await openFakeApp(page);
   await page.evaluate("document.body.append(Object.assign(document.createElement('div'), { style: 'width: 2000px; height: 10px' }))");
   await expect(expectNoHorizontalScroll(page, 'the wide page')).rejects.toThrow(/the wide page: the page is \d+px wide/);
+});
+
+// ----------------------------------------------------------------------- the tab bar
+
+/** A "Main" navigation of three tabs in a grid, each tab `tabPx` wide, the middle label drawn at `fontPx`. */
+async function openTabBar(page: Page, tabPx: number, fontPx: number): Promise<void> {
+  await openFakeApp(page);
+  const tab = (name: string, px: number) =>
+    `<a href="#/${name}" style="display:flex;justify-content:center;align-items:center;min-width:0;height:40px;color:black"><span style="white-space:nowrap;font:${px}px sans-serif">${name}</span></a>`;
+  const html = `<nav aria-label="Main" style="display:grid;grid-template-columns:repeat(3,${tabPx}px);width:${tabPx * 3}px">${tab('Agenda', 12)}${tab('Account', fontPx)}${tab('Car', 12)}</nav>`;
+  await page.evaluate(`document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(html)})`);
+}
+
+test('guard: tabs whose words lie inside their tabs pass the tab-fit check', async ({ page }) => {
+  await openTabBar(page, 100, 12);
+  await expectTabsFit(page, 'a roomy bar', ['Agenda', 'Account', 'Car']);
+});
+
+test('guard: a label wider than its tab fails the tab-fit check, and the message names the tab', async ({ page }) => {
+  await openTabBar(page, 100, 40);
+  await expect(expectTabsFit(page, 'a cramped bar', ['Agenda', 'Account', 'Car'])).rejects.toThrow(/a cramped bar: the tab "Account" (starts at|ends at) [\d.]+px/);
+});
+
+test('guard: a tab narrower than a touch target fails the tab-fit check', async ({ page }) => {
+  await openTabBar(page, 20, 8);
+  await expect(expectTabsFit(page, 'a thin bar', ['Agenda', 'Account', 'Car'])).rejects.toThrow(/a thin bar: the tab "Agenda" is 20\.0px wide/);
 });

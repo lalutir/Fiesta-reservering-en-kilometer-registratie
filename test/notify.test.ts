@@ -14,8 +14,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LOCATIONS } from '../src/car.ts';
 import { run } from '../src/db.ts';
 import { EVENTS, createNotifier, fit, row, type Events } from '../src/notify.ts';
+import { LOCATION_LABEL, damageReported } from '../src/notify-texts.ts';
 import { createPush } from '../src/push.ts';
 import { S } from '../public/strings.js';
 import { formatLocal, localDateKey } from '../shared/time.js';
@@ -24,6 +26,7 @@ import {
   ODO,
   at,
   createHousehold,
+  insertDamage,
   insertFuel,
   insertReservation,
   insertTicket,
@@ -523,6 +526,44 @@ const SCENARIOS: Scenario[] = [
     act: (w) => w.people.anna.post('/api/tickets', { at: hours(w, -5) }),
     told: () => ({}),
   },
+
+  // ----------------------------------------------------------------- 8. damage reports (the one broadcast event)
+  {
+    name: '8. a damage report is filed: everybody else who is active is told, not the one who filed it',
+    status: 201,
+    act: (w) => w.people.ben.post('/api/damage', { noticedOn: '2026-06-14', location: 'left', description: 'Dent in the rear left door' }),
+    told: (_w, _c, r) => {
+      const note: Note = { title: 'Ben reported damage to the car', body: /^Left side: Dent in the rear left door Open Car to see it\.$/, url: '/#/car', tag: `damage-${r.body.report.id}` };
+      return { admin: note, anna: note, carla: note };
+    },
+  },
+  {
+    name: '8. a damage report is edited: nobody is told',
+    status: 200,
+    prepare: (w) => ({ id: insertDamage(w.h.t, { reportedBy: w.people.anna.id }) }),
+    act: (w, c) => w.people.anna.patch(`/api/damage/${c.id}`, { description: 'A bigger dent than we thought', location: 'rear' }),
+    told: () => ({}),
+  },
+  {
+    name: '8. a damage report is deleted: nobody is told',
+    status: 204,
+    prepare: (w) => ({ id: insertDamage(w.h.t, { reportedBy: w.people.anna.id }) }),
+    act: (w, c) => w.people.admin.del(`/api/damage/${c.id}`),
+    told: () => ({}),
+  },
+  {
+    name: '8. a damage report is marked repaired: it stays in the app, nobody is told',
+    status: 200,
+    prepare: (w) => ({ id: insertDamage(w.h.t, { reportedBy: w.people.anna.id }) }),
+    act: (w, c) => w.people.ben.post(`/api/damage/${c.id}/repair`, { repairedOn: '2026-06-15', repairNote: 'Fixed at the garage' }),
+    told: () => ({}),
+  },
+  {
+    name: '8. the APK date is entered: nobody is told',
+    status: 200,
+    act: (w) => w.people.anna.patch('/api/car/apk', { expiresOn: '2027-03-01' }),
+    told: () => ({}),
+  },
 ];
 
 // ------------------------------------------------------------------ the five checks
@@ -948,6 +989,7 @@ test('the list on the Account page mentions every event of the table, so a new e
     'fuel.changed': [/fill-up is edited or deleted and your share changes/],
     'fuel.paid': [/marked paid or unpaid, or somebody says they paid you/],
     'ticket.changed': [/traffic ticket is entered, changed or deleted/],
+    'damage.created': [/reports new damage to the car/],
   };
   assert.deepEqual(Object.keys(listed).sort(), Object.keys(EVENTS).sort());
   for (const [kind, patterns] of Object.entries(listed)) {
@@ -960,6 +1002,7 @@ test('the list on the Account page mentions every event of the table, so a new e
 test('the event table covers every event and each row gives a screen of the app, a tag within the limit and a text', () => {
   const sample = { id: 1, userId: 2, userName: 'Ben', createdBy: 3, createdByName: 'Anna', status: 'pending' as const, start: '2026-06-17T10:00:00.000Z', end: '2026-06-17T12:00:00.000Z', note: '' };
   assert.deepEqual(Object.keys(EVENTS).sort(), [
+    'damage.created',
     'fuel.changed',
     'fuel.created',
     'fuel.paid',
@@ -982,4 +1025,86 @@ test('the event table covers every event and each row gives a screen of the app,
   );
   // A suggestion that is not pending (an own reservation) concerns nobody.
   assert.deepEqual(spec.who({ ...event, reservation: { ...sample, status: 'confirmed', createdBy: 2 } }, { isActive: () => true, activeUserIds: () => [] }), []);
+});
+
+// ----------------------------------------------------------- damage reports (the broadcast event)
+
+test('a damage report goes to every active person with a device, once per device: not the reporter, not a deactivated person, not somebody without a phone', async () => {
+  const w = await world('api');
+  try {
+    const { admin, anna, ben, carla } = w.people;
+    run(w.h.t.db, 'UPDATE users SET active = 0 WHERE id = ?', carla.id);
+    // The admin has no phone signed up for notifications: nothing to send, and nothing to fail.
+    run(w.h.t.db, 'DELETE FROM push_subscriptions WHERE user_id = ?', admin.id);
+    const reply = await ben.post('/api/damage', { noticedOn: '2026-06-14', location: 'roof', description: 'Scratch' });
+    assert.equal(reply.status, 201, reply.text);
+    await w.h.t.app.idle();
+    const reached = w.stub.calls.map((c) => c.url).sort();
+    assert.deepEqual(reached, w.phones.anna.map((p) => p.endpoint).sort(), 'Anna, on both her phones: Ben did it, Carla is deactivated, the admin has no phone');
+    assert.equal(anna.id > 0, true);
+    assert.ok(!w.h.t.logs.some((l) => l['event'] === 'notify.error'));
+  } finally {
+    await w.h.t.close();
+  }
+});
+
+test('a damage report filed when nobody else is active tells nobody, fails nothing and saves the report', async () => {
+  const w = await world('api');
+  try {
+    // Everybody else has been deactivated (their phones are still on file): the reporter is the only one left.
+    run(w.h.t.db, 'UPDATE users SET active = 0 WHERE id <> ?', w.people.ben.id);
+    const reply = await w.people.ben.post('/api/damage', { noticedOn: '2026-06-14', location: 'front', description: 'Scratch on the bumper' });
+    assert.equal(reply.status, 201, reply.text);
+    await w.h.t.app.idle();
+    assert.equal(w.stub.calls.length, 0, 'nobody to tell: not even the reporter, who has two phones on file');
+    assert.ok(!w.h.t.logs.some((l) => l['event'] === 'notify.error' || l['event'] === 'push.send_failed'));
+    assert.equal(((await w.people.ben.get('/api/damage')).body.items as unknown[]).length, 1, 'and the report is saved');
+  } finally {
+    await w.h.t.close();
+  }
+});
+
+test('the damage notification is one line with the reporter, the place and a clipped description, and never goes over what the service worker shows', async () => {
+  const w = await world('api');
+  try {
+    run(w.h.t.db, 'UPDATE users SET display_name = ? WHERE id = ?', '🚗'.repeat(60), w.people.ben.id);
+    // 1000 characters (the longest a description can be) of multi-byte text with a line break near the start.
+    const description = `${'ä'.repeat(30)}\n\n${'🚗'.repeat(484)}`;
+    assert.equal(description.length, 1000);
+    const reply = await w.people.ben.post('/api/damage', { noticedOn: '2026-06-14', location: 'wheels_tyres', description });
+    assert.equal(reply.status, 201, reply.text);
+    await w.h.t.app.idle();
+    assert.equal(w.stub.calls.length, 6, 'three people, two phones each');
+    const message = w.phones.anna[0]!.read(w.stub.calls.find((c) => c.url === w.phones.anna[0]!.endpoint)!);
+    assert.ok([...message.title].length <= 100 && [...message.body].length <= 300 && [...message.tag].length <= 64 && [...message.url].length <= 300, JSON.stringify(message));
+    assert.ok(Buffer.byteLength(JSON.stringify(message)) < 1000, 'light enough for a push service');
+    assert.match(message.body, /^Wheels and tyres: ä{30} 🚗{88}… Open Car to see it\.$/u, 'the place, then the first 120 characters of the description on one line (the line break became a space)');
+    assert.ok(!message.body.includes('\n'));
+    assert.equal(message.url, '/#/car');
+    assert.equal(message.tag, `damage-${reply.body.report.id}`);
+    assert.ok(message.title.includes('…'), 'the 60-emoji name is shortened on purpose');
+    assert.ok(!w.h.t.logs.some((l) => l['event'] === 'notify.error' || l['event'] === 'push.send_failed'));
+  } finally {
+    await w.h.t.close();
+  }
+});
+
+test('the damage text keeps the description to 120 characters and does not mention anybody it should not', () => {
+  const longDescription = 'a'.repeat(500);
+  const text = damageReported({ actor: 'Ben', location: 'front', description: longDescription });
+  assert.equal(text.title, 'Ben reported damage to the car');
+  assert.equal(text.body, `Front: ${'a'.repeat(119)}… Open Car to see it.`);
+  assert.equal(damageReported({ actor: 'Ben', location: 'front', description: 'Short' }).body, 'Front: Short Open Car to see it.');
+  assert.equal(damageReported({ actor: 'Ben', location: 'front', description: 'b'.repeat(120) }).body, `Front: ${'b'.repeat(120)} Open Car to see it.`, 'exactly 120 characters is not cut');
+  assert.equal(damageReported({ actor: 'Ben', location: 'not-a-place', description: 'x' }).body, 'Other: x Open Car to see it.', 'an unknown place falls back to Other');
+  assert.equal(damageReported({ actor: 'Ben', location: 'front', description: '  two\n\nlines\tand   spaces ' }).body, 'Front: two lines and spaces Open Car to see it.');
+});
+
+test('the words for the places on the car are the same in the notification, the Car tab, the database and the route', async () => {
+  const sql = (await import('../src/db.ts')).MIGRATIONS[5] as string;
+  const listed = /location\s+TEXT NOT NULL CHECK \(location IN\s*\(([^)]*)\)\)/.exec(sql)?.[1] ?? '';
+  const inSql = [...listed.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+  assert.deepEqual(inSql, [...LOCATIONS], 'the CHECK in migration 6 lists the places the route accepts, in the same order');
+  assert.deepEqual(Object.keys(LOCATION_LABEL), [...LOCATIONS]);
+  assert.deepEqual({ ...LOCATION_LABEL }, { ...S.car.location }, 'the notification says the same words as the screen');
 });

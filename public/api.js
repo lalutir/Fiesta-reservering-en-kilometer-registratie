@@ -154,6 +154,31 @@
  */
 
 /**
+ * A damage report on the car. `hint` is worked out by the server on every read and is information, not blame.
+ * @typedef {object} DamageReport
+ * @property {number} id
+ * @property {string} noticedOn the day it was first noticed ('YYYY-MM-DD', a calendar day, not an instant)
+ * @property {{ id: number, name: string } | null} noticedBy null means unknown
+ * @property {{ id: number, name: string }} reportedBy
+ * @property {string} description
+ * @property {'front' | 'rear' | 'left' | 'right' | 'roof' | 'interior' | 'wheels_tyres' | 'windows' | 'mechanical' | 'other'} location
+ * @property {'open' | 'repaired'} status
+ * @property {string | null} repairedOn the day it was repaired; null while open
+ * @property {string} repairNote '' when there is none
+ * @property {{ driver: { id: number, name: string } | null, basis: 'drive' | 'draft' | 'reservation' | 'last_drive' | 'none' }} hint who was driving before the noticed day
+ * @property {{ edit: boolean, delete: boolean, repair: boolean }} can
+ */
+
+/**
+ * The APK record of the car: one expiry date, who entered it and when. All null until somebody enters it.
+ * @typedef {object} Apk
+ * @property {string | null} expiresOn 'YYYY-MM-DD'
+ * @property {number | null} daysLeft calendar days from today to the expiry (negative: expired)
+ * @property {{ id: number, name: string } | null} updatedBy
+ * @property {string | null} updatedAt UTC ISO
+ */
+
+/**
  * What every view gets: the signed-in session, the user list and a few actions.
  * @typedef {object} App
  * @property {Session} session

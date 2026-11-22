@@ -19,10 +19,10 @@
 //      text, the database or the push service, is logged by the name of the error (never an endpoint,
 //      key, note, price or reason) and dropped. App.idle() and close() wait for the sends in flight.
 //
-// Adding an event (the damage report that goes to everybody is the next one): add its payload to
-// `Events`, add one row to EVENTS (who is told, the text, where a tap goes, the tag), call emit from
-// the route. Nothing in the engine below changes: a broadcast row is `who: (e, dir) => dir.activeUserIds()
-// .map((userId) => ({ userId }))`. test/notify.test.ts plugs a made-up broadcast event in this way.
+// Adding an event: add its payload to `Events`, add one row to EVENTS (who is told, the text, where a
+// tap goes, the tag), call emit from the route. Nothing in the engine below changes: a broadcast row is
+// `who: (e, dir) => dir.activeUserIds().map((userId) => ({ userId }))`. The damage report is the one
+// event that goes to everybody (damage.created); test/notify.test.ts also plugs a made-up one in this way.
 //
 // Tags: one per record (reservation-7, usage-12, fuel-3, ticket-5), so a later change to the same
 // record replaces the notification still on the phone instead of piling up beside it (the service
@@ -128,6 +128,8 @@ export type Events = {
     driverBefore: Person | null;
     driverAfter: Person | null;
   };
+  /** A damage report was filed: everybody else who is active is told. Nothing is sent when it is edited, deleted or repaired. */
+  'damage.created': { actor: Actor; report: { id: number; location: string; description: string } };
 };
 
 // ------------------------------------------------------------------- the table
@@ -380,6 +382,16 @@ const ticketChanged = row<Events['ticket.changed'], TicketEntry>({
   tag: (e) => `ticket-${e.ticket.id}`,
 });
 
+// ---- damage reports
+
+const damageCreated = row<Events['damage.created'], Audience>({
+  // Everybody who is active; the engine drops the reporter, the inactive and people without a device.
+  who: (_e, dir) => dir.activeUserIds().map((userId) => ({ userId })),
+  text: (e) => T.damageReported({ actor: e.actor.displayName, location: e.report.location, description: e.report.description }),
+  link: () => '/#/car',
+  tag: (e) => `damage-${e.report.id}`,
+});
+
 /** The table. Each row is the whole definition of one event. */
 export const EVENTS: EventTable<Events> = {
   'reservation.suggested': reservationSuggested,
@@ -391,6 +403,7 @@ export const EVENTS: EventTable<Events> = {
   'fuel.changed': fuelChanged,
   'fuel.paid': fuelPaid,
   'ticket.changed': ticketChanged,
+  'damage.created': damageCreated,
 };
 
 // ------------------------------------------------------------------- the engine

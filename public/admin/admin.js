@@ -9,6 +9,7 @@ import {
   fmtDriveRange,
   fmtRange,
   fmtWhen,
+  formatDateKey,
   formatLocal,
   h,
   kmOwnerControl,
@@ -581,22 +582,25 @@ async function renderRetention() {
         h('dt', { text: r.cutoff }),
         h('dd', { text: formatLocal(s.cutoff, tz) }),
         h('dt', { text: r.lastPurge }),
-        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0, last.odometerExplained ?? 0) : ''}` : r.never }),
+        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0, last.odometerExplained ?? 0, last.damageReports ?? 0) : ''}` : r.never }),
         h('dt', { text: r.lastMaintenance }),
         h('dd', { text: text(s.lastMaintenanceDay) }),
         h('dt', { text: r.lastBackup }),
         h('dd', { text: s.lastBackupAt ? `${s.lastBackupFile} (${formatLocal(s.lastBackupAt, tz)})` : r.never }),
         h('dt', { text: r.counts }),
-        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0, s.counts.odometerExplained ?? 0) }),
+        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0, s.counts.odometerExplained ?? 0, s.counts.damageReports ?? 0) }),
         h('dt', { text: r.oldest }),
         h('dd', { text: oldest ? formatLocal(oldest, tz) : '–' }),
+        h('dt', { text: r.oldestRepaired }),
+        h('dd', { text: s.oldest.damageRepairedOn ? formatDateKey(s.oldest.damageRepairedOn) : '–' }),
       ]),
+      h('p', { class: 'hint', text: r.damageNote }),
       h('div', { class: 'actions' }, [
         button(r.runNow, () => {
           if (!confirm(r.confirmRun)) return;
           void perform(async () => {
             const res = await post('/api/admin/retention/run', {});
-            toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0, res.result.tickets ?? 0, res.result.odometerExplained ?? 0));
+            toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0, res.result.tickets ?? 0, res.result.odometerExplained ?? 0, res.result.damageReports ?? 0));
           });
         }, 'danger'),
       ]),

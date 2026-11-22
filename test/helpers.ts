@@ -385,6 +385,53 @@ export function insertTicket(t: TestApp, seed: TicketSeed): number {
   ).lastInsertRowid;
 }
 
+export interface DamageSeed {
+  /** Who filed it. */
+  reportedBy: number;
+  /** The day it was noticed ('YYYY-MM-DD'). Default 2026-06-10. */
+  noticedOn?: string;
+  /** Who noticed it; absent or null means unknown. */
+  noticedBy?: number | null;
+  description?: string;
+  location?: string;
+  /** The day it was repaired; setting it makes the report repaired, absent leaves it open. */
+  repairedOn?: string | null;
+  repairNote?: string;
+}
+
+/** Insert a damage report directly, bypassing the API rules (for fixtures such as an old or a repaired one). */
+export function insertDamage(t: TestApp, seed: DamageSeed): number {
+  const now = t.clock.now().toISOString();
+  const repaired = seed.repairedOn !== undefined && seed.repairedOn !== null;
+  return run(
+    t.db,
+    `INSERT INTO damage_reports (noticed_on, noticed_by, reported_by, description, location, status, repaired_on, repair_note, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    seed.noticedOn ?? '2026-06-10',
+    seed.noticedBy ?? null,
+    seed.reportedBy,
+    seed.description ?? 'A dent',
+    seed.location ?? 'front',
+    repaired ? 'repaired' : 'open',
+    repaired ? (seed.repairedOn as string) : null,
+    repaired ? (seed.repairNote ?? '') : '',
+    now,
+    now,
+  ).lastInsertRowid;
+}
+
+/** Set the APK record directly, bypassing the API rules (for fixtures such as a date the API would not take). */
+export function insertApk(t: TestApp, seed: { userId: number; expiresOn: string }): void {
+  run(
+    t.db,
+    `INSERT INTO car_apk (id, expires_on, updated_by, updated_at) VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET expires_on = excluded.expires_on, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+    seed.expiresOn,
+    seed.userId,
+    t.clock.now().toISOString(),
+  );
+}
+
 export interface Household {
   t: TestApp;
   admin: Client;

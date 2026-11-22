@@ -116,6 +116,35 @@ export interface OdometerExplainedRow {
   updated_at: string;
 }
 
+export type DamageStatus = 'open' | 'repaired';
+
+/**
+ * A damage report on the car. noticed_on and repaired_on are calendar dates ('YYYY-MM-DD'), noticed_by is
+ * NULL when nobody knows who saw it first. Who was driving before the noticed day is not stored: car.ts
+ * derives it on every read.
+ */
+export interface DamageRow {
+  id: number;
+  noticed_on: string;
+  noticed_by: number | null;
+  reported_by: number;
+  description: string;
+  location: string;
+  status: DamageStatus;
+  repaired_on: string | null;
+  repair_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The one APK record of the one car (id is always 1). No row means the date was never entered. */
+export interface ApkRow {
+  id: number;
+  expires_on: string;
+  updated_by: number;
+  updated_at: string;
+}
+
 export interface PushSubscriptionRow {
   id: number;
   user_id: number;
@@ -131,6 +160,13 @@ export interface PushSubscriptionRow {
 // CHECK is the type: a hand-edited '2026-06-15 10:00' fails loudly instead of
 // silently sorting before every same-day value.
 const UTC_MS = "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'";
+
+// A calendar date ('YYYY-MM-DD', no time, no zone) in the years 2000 to 2100, and a day that exists. The shape
+// comes first because SQLite's date() also accepts other spellings ('2026-1-5', a time on the end). date() turns
+// a day that does not exist into the next valid one ('2026-02-30' gives '2026-03-02') or into NULL (month 13);
+// either way it differs from the text, which `IS` sees. `=` would not: a CHECK that evaluates to NULL passes.
+const CAL_DATE = (col: string): string =>
+  `${col} GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND ${col} >= '2000-01-01' AND ${col} <= '2100-12-31' AND date(${col}) IS ${col}`;
 
 // Append-only once released: never edit an entry that has shipped, add the next
 // one (additive first; a table rebuild needs foreign_keys=OFF outside the
@@ -336,6 +372,44 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX odometer_explained_prev ON odometer_explained(prev_at);
   `,
+
+  // 6: the Car tab: damage reports and the one APK date. Additive: two new tables.
+  // A damage report is about a day (noticed_on, repaired_on are calendar dates, not instants), so they are
+  // text 'YYYY-MM-DD' with a CHECK that the day exists. The driver "before the noticed date" is NOT stored:
+  // car.ts derives it on every read, like the traffic-ticket driver. noticed_by is NULL for "unknown".
+  // repaired_on is set exactly when the report is repaired, and a report that is open has no repair note.
+  // The location list is written out here because a migration never changes once released: car.ts has the
+  // same list as LOCATIONS and a test compares the two.
+  // car_apk holds the single row of the one car (id = 1); no row means "not set". There is no history table:
+  // the audit trail is the log line.
+  `
+  CREATE TABLE damage_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    noticed_on  TEXT NOT NULL CHECK (${CAL_DATE('noticed_on')}),
+    noticed_by  INTEGER REFERENCES users(id),
+    reported_by INTEGER NOT NULL REFERENCES users(id),
+    description TEXT NOT NULL CHECK (length(trim(description)) BETWEEN 1 AND 1000),
+    location    TEXT NOT NULL CHECK (location IN
+      ('front', 'rear', 'left', 'right', 'roof', 'interior', 'wheels_tyres', 'windows', 'mechanical', 'other')),
+    status      TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'repaired')),
+    repaired_on TEXT CHECK (repaired_on IS NULL OR (${CAL_DATE('repaired_on')})),
+    repair_note TEXT NOT NULL DEFAULT '' CHECK (length(repair_note) <= 500),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    CHECK ((status = 'repaired') = (repaired_on IS NOT NULL)),
+    CHECK (repaired_on IS NULL OR repaired_on >= noticed_on),
+    CHECK (status = 'repaired' OR repair_note = '')
+  );
+  CREATE INDEX damage_noticed ON damage_reports(noticed_on, id);
+  CREATE INDEX damage_repaired ON damage_reports(repaired_on) WHERE status = 'repaired';
+
+  CREATE TABLE car_apk (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    expires_on TEXT NOT NULL CHECK (${CAL_DATE('expires_on')}),
+    updated_by INTEGER NOT NULL REFERENCES users(id),
+    updated_at TEXT NOT NULL CHECK (updated_at GLOB ${UTC_MS})
+  );
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -520,6 +594,7 @@ export function countRows(
     | 'fuel_requests'
     | 'tickets'
     | 'odometer_explained'
+    | 'damage_reports'
     | 'push_subscriptions',
 ): number {
   return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;

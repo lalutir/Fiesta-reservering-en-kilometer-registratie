@@ -382,6 +382,12 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 - [ ] After an update from the version with traffic tickets: `docker compose exec app ls -l /data/backups`
       lists `pre-migrate-v4.db`. The Drives tab shows a **Kilometre check** with any stretches that do not
       add up (section 18); a new fill-up asks for **Current odometer (km)**. Existing data is not changed.
+- [ ] After an update from the version with the kilometre check: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v5.db`. The bottom bar has a seventh tab, **Car**, and all seven labels are
+      readable on your phone without sideways scrolling. It asks for the APK date; enter it and the
+      card shows the days left. File a damage report: with reminders on for a second phone, that
+      phone gets a notification that opens the Car tab, and the report says who had the car before the
+      day you noticed it (section 18).
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -601,6 +607,7 @@ allowed to do what; the notification is sent after the change has been saved.
 | The fueler or an admin marks your share as paid, or takes the mark off | the debtor | History |
 | You press **I have paid this request** | the fueler | Fuel |
 | A traffic ticket is entered, changed or deleted for a moment the app names you as the driver (also the person it no longer names, when its time moved) | that person | Tickets |
+| Somebody files a damage report on the Car tab (the only message that is not about something of yours; editing, repairing or deleting one sends nothing) | every other active person | Car |
 
 - **Never the person who did it, never the deactivated, only with a device.** The
   actor is dropped by the notifier itself, whatever a row of the table says. A person
@@ -611,7 +618,7 @@ allowed to do what; the notification is sent after the change has been saved.
   or fail the change; a failure is logged by the name of the error (`notify.error`,
   never an address, key, note or price) and not retried. Shutting the app down waits
   for sends that are on their way.
-- **One tag per record** (`reservation-7`, `usage-12`, `fuel-3`, `ticket-5`), so
+- **One tag per record** (`reservation-7`, `usage-12`, `fuel-3`, `ticket-5`, `damage-4`), so
   a later change replaces the notification that is still on the phone and alerts again.
   The fueler's "somebody paid" notification has the debtor in its tag, so two debtors
   do not replace each other.
@@ -856,10 +863,86 @@ payment request, balance or kilometre total changes because of it.
 - A fuel card whose period holds an unexplained gap says how many kilometres are
   unaccounted for. The split still only counts registered kilometres.
 
+### Car tab: damage reports and the APK date
+
+**Updating from the version with the kilometre check (schema v5).** The first start of
+this version upgrades the database once more, to schema v6: two new tables, one for the
+damage reports and one for the single APK date. Nothing is changed or removed. The same
+rules apply as for the earlier upgrades, with another copy,
+`/data/backups/pre-migrate-v5.db`:
+
+- Take a backup first (section 12). Right before the upgrade the app writes a full
+  copy of the database as it was to `/data/backups/pre-migrate-v5.db`. It is written
+  once, not rotated and not deleted by the daily clean-up. It holds password hashes
+  like every backup, so treat it as a secret and delete it
+  (`docker compose exec app rm /data/backups/pre-migrate-v5.db`) once you are happy
+  with the new version. If it cannot be written (disk full) the app refuses to start
+  and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from
+  section 11, and start the previous version. Damage reports and the APK date entered
+  after the upgrade are lost by a restore, and an older app refuses to open a v6
+  database. If you go back and later try the update again, delete `pre-migrate-v5.db`
+  first: the app never overwrites an existing copy.
+- If you come from an older version than v5, the app upgrades straight to v6 in one
+  start and writes only the copy of the version it found.
+- The phones pick up the new tab by themselves: the app files are cached under a new
+  name (`car-static-v6`), so the old copy is dropped the next time the app is opened
+  with a connection. A phone that has not reloaded yet simply shows six tabs until it
+  has.
+
+**How it works.**
+
+- **The Car tab** is the seventh tab, between History and Account. On a phone narrower
+  than 420 px the tab labels are a little smaller and the current tab is marked by
+  colour and the bar above it instead of bold text, so that seven fit (see the README).
+- **Damage reports.** Anybody signed in files one: the day it was first noticed (not in
+  the future, 2000 or later), who noticed it (the person filing it by default, somebody
+  else who is active, or unknown), where on the car (front, rear, left side, right side,
+  roof, interior, wheels and tyres, windows, mechanical, other) and a description of up
+  to 1000 characters. Everybody sees every report. The person who filed it, or an admin,
+  edits and deletes it. **Anybody** can mark one repaired, with the day it was repaired
+  (not before it was noticed, not in the future, inside the 6 month window) and an
+  optional note of up to 500 characters; a second "repaired" is refused so a stale screen
+  cannot overwrite the date. The person who filed it or an admin can reopen it, which
+  clears the repaired date and the note.
+- **The "who had the car before" line** is worked out on every read and never stored.
+  The start of the noticed day (household time zone) goes through the same rule as a
+  traffic ticket: the drive log, then a drive that was started and not finished, then a
+  confirmed reservation; when none of them covers that moment, the driver of the last
+  finished drive that ended before it. The screen words it as information and names its
+  basis. If somebody corrects a drive, the line changes on the next read.
+- **Everybody else who is active gets one push when a report is filed**, one per device,
+  never the person who filed it and never a deactivated person. Nothing is sent when it
+  is edited, repaired or deleted, and nothing for the APK. The notification names the
+  person, the place and the start of the description, and opens the Car tab. Like all
+  pushes it is sent after the answer and cannot delay or fail the save.
+- **The APK date.** One date for the one car. Until somebody enters it the tab says
+  "not entered yet". Any member can enter or change it (a date in the past is fine: the
+  APK may already have run out; at most five years ahead, 2000 or later; 29 February
+  exists only in a leap year). The card shows the date, the days left or "expired", and
+  who entered it and when. Every change writes one log line (`apk.updated`) with the
+  person and the old and new date, and nothing else; there is no history table and no
+  reminder.
+- **Retention.** An **open damage report is never deleted**, however old, because the
+  damage is still on the car. A repaired one is deleted when the day it was repaired is
+  before the first day of the 6 month window (so one repaired on that first day is
+  still kept: dates are compared as days, which is a little coarser than the times used
+  for drives). The admin Retention tab and the `purge` command
+  (`docker compose exec app node dist/src/cli.js purge`) count the repaired reports
+  deleted, and the tab says when the oldest repaired report was repaired. The APK date
+  is never purged.
+- **Not covered, on purpose.** No photos of the damage (that needs file storage, size
+  limits, backups and a retention rule, so it is a separate decision), no reminder for
+  the APK date, no cap on the damage list.
+- **Not verified:** real push delivery to phones, the seven tabs on real phones and
+  fonts (they were measured at 320 to 390 px in a headless Chromium with the system font
+  and with Verdana as a wide stand-in), and the installed app picking up
+  `car-static-v6`.
+
 ### Switching things off
 
 - Reminders and every other push (a new fill-up, and everything somebody else does on your behalf):
   `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
-- Nothing else needs a rollback; fuel costs, drafts, traffic tickets and the kilometre check are simply not used
+- Nothing else needs a rollback; fuel costs, drafts, traffic tickets, the kilometre check and the Car tab are simply not used
   (the check has no switch: it shows findings and changes nothing).

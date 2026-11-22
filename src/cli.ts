@@ -118,7 +118,7 @@ export async function runCli(
         default: {
           const r = purge(db, clock.now(), config.tz, log, config.windowMonths);
           io.out(
-            `Purged ${r.reservations} reservations, ${r.usage} usage records, ${r.fuel} fill-ups (${r.fuelRequests} payment requests), ${r.tickets} tickets, ${r.odometerExplained} odometer explanations and ${r.sessions} expired sessions older than ${r.cutoff}.`,
+            `Purged ${r.reservations} reservations, ${r.usage} usage records, ${r.fuel} fill-ups (${r.fuelRequests} payment requests), ${r.tickets} tickets, ${r.odometerExplained} odometer explanations, ${r.damageReports} repaired damage reports and ${r.sessions} expired sessions older than ${r.cutoff}. Open damage reports are never purged.`,
           );
           return 0;
         }
