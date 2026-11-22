@@ -168,6 +168,21 @@ async function remindersCard(app) {
 }
 
 /**
+ * What this device gets notified about, one line per kind of event (mirrors the table in src/notify.ts).
+ * There are no per-category settings: turning reminders on or off for the device is the one switch.
+ * @returns {HTMLElement}
+ */
+function notificationsCard() {
+  const N = S.account.notifications;
+  return h('section', { class: 'card' }, [
+    h('h3', { text: N.title }),
+    h('p', { text: N.intro }),
+    h('ul', { class: 'notify-list' }, N.items.map((text) => h('li', { text }))),
+    h('p', { class: 'hint', text: N.fallback }),
+  ]);
+}
+
+/**
  * Who am I, change password, sign out, how to install the app.
  * @param {import('../api.js').App} app
  * @returns {Promise<HTMLElement>}
@@ -240,6 +255,8 @@ export async function render(app) {
       h('p', { class: 'hint', text: S.account.window(app.session.windowMonths) }),
     ]),
     reminders,
+    // Shown wherever the server has notifications on, also on a phone that cannot get them (it says why in the card above).
+    reminders ? notificationsCard() : null,
     form,
     signOut,
     h('section', { class: 'card' }, [

@@ -403,6 +403,23 @@ export const S = {
       unsupportedEndpoint: "This browser's push service is not supported, so reminders cannot be turned on here.",
       fallback: 'Without reminders the Drives tab still shows what is waiting to be registered.',
     },
+    // The list on the Account page. It mirrors the event table of the server (src/notify.ts): keep the two in step.
+    notifications: {
+      title: 'What you get notified about',
+      intro: 'With reminders on, this device gets a notification for each of these. You never get one for something you do yourself.',
+      items: [
+        'A reminder 30 minutes before your reservation starts, when it ends, and an hour later if the kilometres are still missing.',
+        'A new fill-up that you owe money for.',
+        'Somebody suggests a reservation for you, or changes it or withdraws it.',
+        'Somebody approves or declines a suggestion you made.',
+        'Somebody else, such as an admin, changes or cancels one of your reservations.',
+        'A drive is logged, changed or deleted in your name, or on your reservation, by somebody else.',
+        'Another driver registers kilometres as yours, or changes or removes them.',
+        'A fill-up is edited or deleted and your share changes, somebody enters a fill-up in your name, your share is marked paid or unpaid, or somebody says they paid you.',
+        'A traffic ticket is entered, changed or deleted for a moment the app has you down as the driver. It never shows the price or the reason.',
+      ],
+      fallback: 'Without notifications the Inbox, the Drives tab and the History screen still show everything that is waiting for you.',
+    },
   },
 
   admin: {

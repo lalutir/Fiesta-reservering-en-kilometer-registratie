@@ -22,12 +22,13 @@
 //
 // What a person still owes the same fueler from earlier fill-ups rides along with their
 // next share, and a payment request settles those earlier shares when it is paid: the
-// rules are in fuel-carry.ts. Registering a fill-up tells everybody who owes money
-// (fuel-notify.ts).
+// rules are in fuel-carry.ts. Registering a fill-up tells everybody who owes money, and what
+// somebody else does to a fill-up or a payment mark that concerns you (an edit, a delete, "paid",
+// "I have paid") is pushed to you by the central notifier (notify.ts).
 import { many, one, run, tx, type Db, type FuelRequestRow, type FuelRow, type KmFor } from './db.ts';
 import { carryKey, carryOver } from './fuel-carry.ts';
-import type { FuelNotifier } from './fuel-notify.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
+import type { FuelHead, Notifier, ShareSnapshot } from './notify.ts';
 import { gapsOrEmpty, type OpenGap } from './odometer.ts';
 import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, type PaymentInput, type PaymentProvider } from './payments.ts';
 import { Fields, MAX_ODOMETER, ValidationError, assertPastInsideWindow, windowBounds } from './validate.ts';
@@ -221,6 +222,23 @@ export interface BalanceDto {
 
 interface FuelJoin extends FuelRow {
   user_name: string;
+}
+
+/** What the notifier needs to name a fill-up. */
+function headOfRow(row: FuelJoin): FuelHead {
+  return { id: row.id, userId: row.user_id, userName: row.user_name, at: row.at_utc, totalCents: row.total_cents };
+}
+const headOfDto = (dto: FuelDto): FuelHead => ({ id: dto.id, userId: dto.userId, userName: dto.userName, at: dto.at, totalCents: dto.totalCents });
+
+/**
+ * Every share somebody owes, per fill-up, flattened so that the moments before and after an edit or a
+ * delete can be compared: the people whose share moved are told (notify.ts). Admins and the fueler
+ * themselves never owe, so they are not in it.
+ */
+export function shareSnapshot(db: Db, actor: Principal): ShareSnapshot {
+  return fuelOverview(db, actor).items.flatMap((f) =>
+    f.shares.filter((s) => s.owes).map((s) => ({ fuelId: f.id, userId: s.userId, cents: s.cents, dueCents: s.dueCents })),
+  );
 }
 
 function mayManage(actor: Principal, fuel: Pick<FuelRow, 'user_id'>): boolean {
@@ -433,7 +451,7 @@ function paymentInputOf(fuel: FuelDto, share: FuelShareDto, tz: string): Payment
   };
 }
 
-export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNotifier): void {
+export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {
   const { db, config } = ctx;
   // Chosen once: without all three Tikkie settings nothing outbound is ever called.
   const provider: PaymentProvider = config.tikkie ? tikkieProvider(config.tikkie, ctx.fetch, ctx.log) : manualProvider;
@@ -514,9 +532,9 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     const created = view(actor, id);
     // shares: how many people the cost was split over (0 when nobody pays, for example a household of admins).
     ctx.log({ event: 'fuel.created', id, by: actor.id, userId, shares: created.shares.length, equalSplit: created.equalSplit });
-    // Everybody who owes money hears about it. Fire and forget: the fill-up is saved, so a slow or
-    // broken push service can neither delay nor fail this answer.
-    notifier?.fuelCreated(created);
+    // Everybody who owes money hears about it, and the fueler when somebody else registered it in their name.
+    // Fire and forget: the fill-up is saved, so a slow or broken push service can neither delay nor fail this answer.
+    notifier?.emit('fuel.created', () => ({ actor, fuel: created }));
     return ok({ fuel: created }, 201);
   });
 
@@ -544,6 +562,8 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     }
     const now = ctx.clock.now();
     if (at !== undefined) checkAt(at, now);
+    // What everybody owed before the change, to tell the people whose share it moves (taken before anything is written).
+    const sharesBefore = notifier?.capture(() => shareSnapshot(db, actor));
     tx(db, () => {
       guardChange(actor, existing, odometerOnly);
       if (userId !== existing.user_id) {
@@ -566,7 +586,16 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     });
     // odometerOnly marks the one change that skips the paid-request lock, so it can be told apart in the log.
     ctx.log({ event: 'fuel.updated', id, by: actor.id, odometerOnly });
-    return ok({ fuel: view(actor, id) });
+    const updated = view(actor, id);
+    notifier?.emit('fuel.changed', () => ({
+      actor,
+      change: 'updated',
+      before: headOfRow(existing),
+      after: headOfDto(updated),
+      sharesBefore,
+      sharesAfter: shareSnapshot(db, actor),
+    }));
+    return ok({ fuel: updated });
   });
 
   router.add('DELETE', '/api/fuel/:id', 'user', (req) => {
@@ -574,8 +603,17 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
     const id = idParam(req.params['id']);
     const existing = loadFuel(db, id);
     guardChange(actor, existing);
+    const sharesBefore = notifier?.capture(() => shareSnapshot(db, actor));
     run(db, 'DELETE FROM fuel WHERE id = ?', id);
     ctx.log({ event: 'fuel.deleted', id, by: actor.id });
+    notifier?.emit('fuel.changed', () => ({
+      actor,
+      change: 'deleted',
+      before: headOfRow(existing),
+      after: null,
+      sharesBefore,
+      sharesAfter: shareSnapshot(db, actor),
+    }));
     return noContent();
   });
 
@@ -700,6 +738,16 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: FuelNoti
       return true;
     });
     if (changed) ctx.log({ event: paid ? 'fuel.paid' : 'fuel.unpaid', id, by: actor.id, debtorId });
-    return ok({ fuel: view(actor, id) });
+    const dto = view(actor, id);
+    // The debtor hears when the fueler or an admin marks their share, the fueler when the debtor says "I have paid".
+    // Only a real change: a double tap or a retry changed nothing and says nothing.
+    if (changed) {
+      notifier?.emit('fuel.paid', () => {
+        const share = dto.shares.find((s) => s.userId === debtorId);
+        if (!share) throw new Error('the share is not on the fill-up');
+        return { actor, fuel: headOfDto(dto), debtor: { id: debtorId, name: share.userName }, paid: paid === true, amountCents: share.request?.amountCents ?? share.dueCents };
+      });
+    }
+    return ok({ fuel: dto });
   });
 }

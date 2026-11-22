@@ -4,11 +4,12 @@
 // the image" problems such as the public/ and shared/ directories not being found.
 //   npm run smoke
 import { execFileSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ADMIN = { username: 'smoke', password: 'smoke-test-password-1' };
@@ -360,6 +361,168 @@ try {
   child.kill();
   await Promise.race([exitPromise, new Promise((r) => setTimeout(r, 5000))]);
   fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+// ---- the second server: notifications for what somebody else does on your behalf ------------------------------------
+// The built server once more, this time with push switched on (DOMAIN is set) and fetch replaced by
+// scripts/smoke-push-stub.mjs: every push the notifier makes is recorded on stdout and none leaves the machine.
+// This checks the wiring in the built output (who is told, who is not, that answers are unaffected). That a push
+// really reaches a phone cannot be checked here.
+{
+  const notifyPort = await freePort();
+  const notifyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'car-smoke-notify-'));
+  const stub = pathToFileURL(path.join(root, 'scripts', 'smoke-push-stub.mjs')).href;
+  const notifyChild = spawn(
+    process.execPath,
+    ['--disable-warning=ExperimentalWarning', '--import', stub, path.join('dist', 'src', 'server.js')],
+    { cwd: root, env: { ...env, PORT: String(notifyPort), DATA_DIR: notifyDir, DOMAIN: 'smoke.example.test' }, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let notifyOut = '';
+  notifyChild.stdout.on('data', (d) => (notifyOut += d));
+  notifyChild.stderr.on('data', (d) => (notifyOut += d));
+  let notifyExited = false;
+  const notifyExit = new Promise((resolve) =>
+    notifyChild.on('exit', (code) => {
+      notifyExited = true;
+      resolve(code);
+    }),
+  );
+  const nbase = `http://127.0.0.1:${notifyPort}`;
+
+  try {
+    console.log(`Starting a second server with push on and fetch stubbed, on port ${notifyPort}...`);
+    for (let i = 0; ; i++) {
+      if (notifyExited) throw new Error(`second server exited early:\n${notifyOut}`);
+      if (i >= 100) throw new Error(`second server did not start:\n${notifyOut}`);
+      try {
+        if ((await fetch(`${nbase}/api/health`)).ok) break;
+      } catch {
+        // not listening yet
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+
+    const call = (cookieHeader, method, route, body) =>
+      fetch(`${nbase}${route}`, { method, headers: { 'Content-Type': 'application/json', Cookie: cookieHeader }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const login = async (username, password) => {
+      const res = await fetch(`${nbase}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      expect(res.status === 200, `${username} signs in: ${res.status}`);
+      return (res.headers.getSetCookie()[0] ?? '').split(';')[0];
+    };
+    const pushes = () => notifyOut.split('\n').filter((line) => line.startsWith('{"event":"smoke.push"')).map((line) => JSON.parse(line).url);
+    const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Run an action; the pushes it causes follow the answer, and must be exactly to these endpoints (none: nobody is told).
+    async function told(label, action, wanted) {
+      const before = pushes().length;
+      const res = await action();
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && pushes().length - before < wanted.length) await pause(25);
+      await pause(150); // anything extra would have arrived by now
+      const got = pushes().slice(before).sort();
+      const want = [...wanted].sort();
+      expect(JSON.stringify(got) === JSON.stringify(want), `${label}: pushes went to ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+      return res;
+    }
+    const hour = 3_600_000;
+    const iso = (h) => new Date(Date.now() + h * hour).toISOString();
+    const device = (who, i) => `https://fcm.googleapis.com/fcm/send/smoke-${who}-${i}`;
+    const subscription = (endpoint) => {
+      const ecdh = crypto.createECDH('prime256v1');
+      ecdh.generateKeys();
+      return { endpoint, keys: { p256dh: ecdh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') } };
+    };
+
+    const adminCookie = await login(ADMIN.username, ADMIN.password);
+    const member = async (username, displayName) => {
+      const made = await call(adminCookie, 'POST', '/api/admin/users', { username, displayName, password: 'smoke-notify-password-1' });
+      expect(made.status === 201, `create ${username}: ${made.status}`);
+      return { id: (await made.json()).user.id, cookie: await login(username, 'smoke-notify-password-1') };
+    };
+    const ann = await member('smokeann', 'Ann');
+    const ben = await member('smokeben2', 'Ben');
+    const devices = { admin: [device('admin', 0)], ann: [device('ann', 0)], ben: [device('ben', 0), device('ben', 1)] };
+
+    await check('push is on in the second server and everybody signs their phones up (the admin one, Ann one, Ben two)', async () => {
+      const key = await (await call(adminCookie, 'GET', '/api/push/key')).json();
+      expect(key.enabled === true, 'push should be on when DOMAIN is set');
+      for (const [who, cookieHeader] of [['admin', adminCookie], ['ann', ann.cookie], ['ben', ben.cookie]]) {
+        for (const endpoint of devices[who]) {
+          const res = await call(cookieHeader, 'POST', '/api/push/subscribe', subscription(endpoint));
+          expect(res.status === 201, `${who} subscribes ${endpoint}: ${res.status}`);
+        }
+      }
+    });
+
+    await check('notifications: a suggestion, its answer and what an admin does to the reservation tell the other person, one push per phone, and never the person who did it', async () => {
+      let res = await told('a suggestion for Ben', () => call(ann.cookie, 'POST', '/api/reservations', { userId: ben.id, start: iso(30), end: iso(32) }), devices.ben);
+      expect(res.status === 201, `suggest ${res.status}`);
+      const reservation = (await res.json()).reservation;
+      res = await told('Ben approves', () => call(ben.cookie, 'POST', `/api/reservations/${reservation.id}/approve`, {}), devices.ann);
+      expect(res.status === 200, `approve ${res.status}`);
+      res = await told('an admin moves it', () => call(adminCookie, 'PATCH', `/api/reservations/${reservation.id}`, { start: iso(50), end: iso(52) }), devices.ben);
+      expect(res.status === 200, `move ${res.status}`);
+      res = await told('an admin cancels it', () => call(adminCookie, 'DELETE', `/api/reservations/${reservation.id}`), devices.ben);
+      expect(res.status === 204, `cancel ${res.status}`);
+      res = await told('Ben reserves for himself', () => call(ben.cookie, 'POST', '/api/reservations', { start: iso(70), end: iso(71) }), []);
+      expect(res.status === 201, `own reservation ${res.status}`);
+    });
+
+    await check('notifications: a drive in your name, kilometres put on your name and what happens to them tell the person they concern, not the one who did it', async () => {
+      const drive = (cookieHeader, body) => call(cookieHeader, 'POST', '/api/usage', body);
+      let res = await told('an admin logs a drive for Ben', () => drive(adminCookie, { userId: ben.id, start: iso(-10), end: iso(-9), odometerStart: 1000, odometerEnd: 1050 }), devices.ben);
+      expect(res.status === 201, `drive for Ben ${res.status}`);
+      res = await told('Ann registers kilometres as Ben\'s', () => drive(ann.cookie, { start: iso(-8), end: iso(-7), odometerStart: 1050, odometerEnd: 1100, kmFor: 'person', kmUserId: ben.id, note: 'Took Ben to the station' }), devices.ben);
+      expect(res.status === 201, `kilometres for Ben ${res.status}`);
+      const attributed = (await res.json()).usage;
+      res = await told('Ann changes them', () => call(ann.cookie, 'PATCH', `/api/usage/${attributed.id}`, { odometerEnd: 1110 }), devices.ben);
+      expect(res.status === 200, `change ${res.status}`);
+      res = await told('Ann removes them', () => call(ann.cookie, 'DELETE', `/api/usage/${attributed.id}`), devices.ben);
+      expect(res.status === 204, `remove ${res.status}`);
+      res = await told('Ben logs his own drive', () => drive(ben.cookie, { start: iso(-6), end: iso(-5), odometerStart: 1100, odometerEnd: 1120 }), []);
+      expect(res.status === 201, `own drive ${res.status}`);
+    });
+
+    await check('notifications: a fill-up that moves your share, "I have paid" and the paid mark taken off tell the other person (who owes, who is owed)', async () => {
+      let res = await told('a new fill-up tells the person who owes', () => call(ann.cookie, 'POST', '/api/fuel', { at: iso(-1), millilitres: 40000, totalCents: 6000, odometer: 5000 }), devices.ben);
+      expect(res.status === 201, `fill-up ${res.status}`);
+      const fuelId = (await res.json()).fuel.id;
+      res = await told('a dearer fill-up moves his share', () => call(ann.cookie, 'PATCH', `/api/fuel/${fuelId}`, { totalCents: 7000 }), devices.ben);
+      expect(res.status === 200, `edit ${res.status}`);
+      res = await told('Ben says he paid: the fueler hears', () => call(ben.cookie, 'POST', `/api/fuel/${fuelId}/requests/${ben.id}/paid`, { paid: true }), devices.ann);
+      expect(res.status === 200, `paid ${res.status}`);
+      res = await told('an admin takes the mark off: the debtor hears', () => call(adminCookie, 'POST', `/api/fuel/${fuelId}/requests/${ben.id}/paid`, { paid: false }), devices.ben);
+      expect(res.status === 200, `unpaid ${res.status}`);
+      res = await told('the fill-up is deleted: the share goes', () => call(ann.cookie, 'DELETE', `/api/fuel/${fuelId}`), devices.ben);
+      expect(res.status === 204, `delete ${res.status}`);
+    });
+
+    await check('notifications: a traffic ticket for a moment Ben was driving tells Ben, also when it is changed or deleted (its text has no price or reason: the unit tests read the decrypted text)', async () => {
+      let res = await told('a ticket is entered', () => call(ann.cookie, 'POST', '/api/tickets', { at: iso(-9.5), amountCents: 7500, reason: 'Speeding' }), devices.ben);
+      expect(res.status === 201, `ticket ${res.status}`);
+      const ticket = (await res.json()).ticket;
+      expect(ticket.driver?.id === ben.id, `the app names Ben as the driver: ${JSON.stringify(ticket.driver)}`);
+      res = await told('it is changed', () => call(ann.cookie, 'PATCH', `/api/tickets/${ticket.id}`, { amountCents: 9000 }), devices.ben);
+      expect(res.status === 200, `edit ${res.status}`);
+      res = await told('it is deleted', () => call(ann.cookie, 'DELETE', `/api/tickets/${ticket.id}`), devices.ben);
+      expect(res.status === 204, `delete ${res.status}`);
+    });
+
+    await check('notifications: only the made-up smoke phones were ever called, nothing failed, and the Account page list is served', async () => {
+      const urls = pushes();
+      expect(urls.length >= 20, `${urls.length} pushes were recorded`);
+      expect(urls.every((u) => /^https:\/\/fcm\.googleapis\.com\/fcm\/send\/smoke-(admin|ann|ben)-\d$/.test(u)), 'only the made-up smoke devices');
+      expect(!/"event":"(notify\.error|push\.send_failed|error)"/.test(notifyOut), 'no failure was logged by the notifier, the push sender or the server');
+      const strings = await (await fetch(`${nbase}/strings.js`)).text();
+      expect(strings.includes('What you get notified about'), 'the Account page list is in the served strings');
+    });
+  } catch (err) {
+    failures.push('notification server');
+    console.log(`  FAIL notification server: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    notifyChild.kill();
+    await Promise.race([notifyExit, new Promise((r) => setTimeout(r, 5000))]);
+    fs.rmSync(notifyDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 }
 
 if (failures.length > 0) {

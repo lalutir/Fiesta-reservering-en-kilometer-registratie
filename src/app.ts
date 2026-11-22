@@ -17,8 +17,8 @@ import {
   type Logger,
 } from './http.ts';
 import { registerFuelRoutes } from './fuel.ts';
-import { createFuelNotifier } from './fuel-notify.ts';
 import { startMaintenance, tick } from './maintenance.ts';
+import { createNotifier } from './notify.ts';
 import { registerOdometerRoutes } from './odometer.ts';
 import { createPush, registerPushRoutes } from './push.ts';
 import { createReminders, type Reminders } from './reminders.ts';
@@ -44,7 +44,7 @@ export interface App {
   router: Router;
   listen(port?: number, host?: string): Promise<AddressInfo>;
   close(): Promise<void>;
-  /** Resolves when background work started by requests (the notifications for a new fill-up) has finished. */
+  /** Resolves when background work started by requests (the push notifications for what somebody else changed) has finished. */
   idle(): Promise<void>;
   /** The daily purge and backup. Nothing runs until start() is called (by server.ts). */
   maintenance: { tick(): boolean; start(): { stop(): void } };
@@ -66,13 +66,14 @@ export function createApp(deps: AppDeps): App {
     ctx.db.prepare('SELECT 1').get();
     return ok({ status: 'ok' });
   });
-  registerUserRoutes(router, ctx);
-  registerReservationRoutes(router, ctx);
-  registerUsageRoutes(router, ctx);
   const push = createPush(ctx);
-  const fuelNotifier = createFuelNotifier(ctx, push);
-  registerFuelRoutes(router, ctx, fuelNotifier);
-  registerTicketRoutes(router, ctx);
+  // One notifier for everything somebody else enters, changes or removes on a person's behalf (notify.ts).
+  const notifier = createNotifier(ctx, push);
+  registerUserRoutes(router, ctx);
+  registerReservationRoutes(router, ctx, notifier);
+  registerUsageRoutes(router, ctx, notifier);
+  registerFuelRoutes(router, ctx, notifier);
+  registerTicketRoutes(router, ctx, notifier);
   registerOdometerRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
@@ -175,10 +176,10 @@ export function createApp(deps: AppDeps): App {
         });
         server.closeIdleConnections();
       });
-      // Let the notifications for a fill-up that was just saved finish (each send has its own timeout).
-      await fuelNotifier.idle();
+      // Let the notifications for a change that was just saved finish (each send has its own timeout).
+      await notifier.idle();
     },
-    idle: () => fuelNotifier.idle(),
+    idle: () => notifier.idle(),
     maintenance: { tick: () => tick(ctx), start: () => startMaintenance(ctx) },
     reminders,
   };

@@ -667,6 +667,13 @@ select:disabled {
 .banner .note {
   color: inherit;
 }
+ul.notify-list {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+ul.notify-list li {
+  margin-bottom: 6px;
+}
 ul.pending,
 ul.shares {
   list-style: none;

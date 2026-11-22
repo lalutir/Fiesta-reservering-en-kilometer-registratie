@@ -1,11 +1,12 @@
 // What a person still owes from earlier fill-ups rides along with the next share, a payment settles
 // it, the debtor can say "I have paid" for their own share, and a new fill-up tells the people who
-// owe money. The rules are in src/fuel-carry.ts (pure) and src/fuel.ts, src/fuel-notify.ts.
+// owe money. The rules are in src/fuel-carry.ts (pure) and src/fuel.ts; the notifier is src/notify.ts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { many, one, run } from '../src/db.ts';
 import { carryKey, carryOver, type CarryFuel, type CarryRequest, type CarryShare } from '../src/fuel-carry.ts';
-import { createFuelNotifier, fuelMessage } from '../src/fuel-notify.ts';
+import { createNotifier, fit } from '../src/notify.ts';
+import { fuelCreated as fuelCreatedText } from '../src/notify-texts.ts';
 import { requestMessage } from '../src/payments.ts';
 import { purge } from '../src/retention.ts';
 import { windowBounds } from '../src/validate.ts';
@@ -165,12 +166,13 @@ test('the request text: nothing carried reads exactly as before, carried amounts
   assert.doesNotMatch(pooled, /equal part/);
 });
 
+// The words are in src/notify-texts.ts; where a tap opens and the tag are the row of the event table (src/notify.ts), checked over HTTP below.
 test('the push text names the fueler and the amount, and says what is carried', () => {
-  const m = fuelMessage({ id: 7, userName: 'Anna' }, { cents: 1500, carriedCents: 0, dueCents: 1500 });
-  assert.deepEqual({ ...m }, { title: 'Anna fuelled the car', body: 'You owe Anna EUR 15.00. This can still change when more drives are registered.', url: '/#/history', tag: 'fuel-7' });
-  assert.match(fuelMessage({ id: 7, userName: 'Anna' }, { cents: 1500, carriedCents: 1000, dueCents: 2500 }).body, /You owe Anna EUR 25\.00 \(EUR 15\.00 now plus EUR 10\.00 still open from earlier\)/);
-  assert.match(fuelMessage({ id: 7, userName: 'Anna' }, { cents: 1500, carriedCents: -400, dueCents: 1100 }).body, /You owe Anna EUR 11\.00 \(EUR 15\.00 now, minus EUR 4\.00 that Anna owes you from earlier\)/);
-  const long = fuelMessage({ id: 1, userName: 'A'.repeat(200) }, { cents: 1, carriedCents: 0, dueCents: 1 });
+  const text = (carriedCents: number, dueCents: number, shareCents = 1500, fueler = 'Anna') => fuelCreatedText({ fueler, shareCents, carriedCents, dueCents });
+  assert.deepEqual({ ...text(0, 1500) }, { title: 'Anna fuelled the car', body: 'You owe Anna EUR 15.00. This can still change when more drives are registered.' });
+  assert.match(text(1000, 2500).body, /You owe Anna EUR 25\.00 \(EUR 15\.00 now plus EUR 10\.00 still open from earlier\)/);
+  assert.match(text(-400, 1100).body, /You owe Anna EUR 11\.00 \(EUR 15\.00 now, minus EUR 4\.00 that Anna owes you from earlier\)/);
+  const long = fit({ ...text(0, 1, 1, 'A'.repeat(200)), url: '/#/history', tag: 'fuel-1' });
   assert.ok(Buffer.byteLength(JSON.stringify(long)) < 600, 'a long name cannot push the message over the size limit');
 });
 
@@ -470,7 +472,7 @@ test('a new fill-up sends one push to each device of everybody who owes money, a
       assert.equal(call!.redirect, 'manual');
       assert.equal(call!.hasSignal, true, 'every send has a timeout');
     }
-    assert.ok(t.logs.some((l: Json) => l['event'] === 'fuel.push' && l['userId'] === ben.id && l['sent'] === 2 && l['failed'] === 0));
+    assert.ok(t.logs.some((l: Json) => l['event'] === 'notify.sent' && l['kind'] === 'fuel.created' && l['userId'] === ben.id && l['sent'] === 2 && l['failed'] === 0));
   } finally {
     await t.close();
   }
@@ -529,7 +531,7 @@ test('a slow or failing push service never delays or fails the fill-up', async (
   }
 });
 
-test('nothing is sent when push is switched off, or when a fill-up is edited or deleted; only registering one tells people', async () => {
+test('nothing is sent when push is switched off; an edit or a delete tells only the people whose share it moves', async () => {
   const off = await pushHousehold({ env: { PUSH_ENABLED: 'false' } });
   try {
     run(off.t.db, 'INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)', off.ben.id, 'https://fcm.googleapis.com/fcm/send/x', 'k', 'a', at(off.t.clock, 0));
@@ -549,11 +551,17 @@ test('nothing is sent when push is switched off, or when a fill-up is edited or 
     await t.app.idle();
     const before = stub.calls.length;
     assert.equal(before, 1, 'Ben only');
+    // A note moves nobody's share, and the fueler made the change themselves: nobody hears.
     assert.equal((await anna.patch(`/api/fuel/${f.id}`, { note: 'edited' })).status, 200);
+    await t.app.idle();
+    assert.equal(stub.calls.length, before, 'a note moves no share');
+    // A dearer fill-up moves Ben's share (15.00 to 17.50): he hears, once. Carla has no device, the admin owes nothing, Anna did it herself.
     assert.equal((await anna.patch(`/api/fuel/${f.id}`, { totalCents: 7000 })).status, 200);
+    await t.app.idle();
+    assert.equal(stub.calls.length, before + 1);
     assert.equal((await anna.del(`/api/fuel/${f.id}`)).status, 204);
     await t.app.idle();
-    assert.equal(stub.calls.length, before, 'only registering a fill-up sends something');
+    assert.equal(stub.calls.length, before + 2, 'the share is gone: Ben is told again');
   } finally {
     await t.close();
   }
@@ -630,19 +638,19 @@ test('a share that a later payment settled cannot be marked paid again, also whe
   }
 });
 
-test('a notification job that fails is logged and dropped, never an unhandled rejection; each person\'s devices are read once', async () => {
+test('a logger that fails is swallowed, never an unhandled rejection; each person\'s devices are read once', async () => {
   const { t, anna, ben } = await createHousehold();
   const unhandled: unknown[] = [];
   const onRejection = (err: unknown): void => void unhandled.push(err);
   process.on('unhandledRejection', onRejection);
   try {
     const events: string[] = [];
-    // The logger itself fails for the line that reports a finished send, which is the one thing deliver() does outside its try/catch.
+    // The logger itself fails for the line that reports a finished send: that must not become an unhandled rejection either.
     const ctx = {
       ...t.ctx,
       log: (event: Record<string, unknown>) => {
         events.push(String(event['event']));
-        if (event['event'] === 'fuel.push') throw new Error('log down');
+        if (event['event'] === 'notify.sent') throw new Error('log down');
       },
     };
     let reads = 0;
@@ -655,13 +663,13 @@ test('a notification job that fails is logged and dropped, never an unhandled re
         return [{ id: 1 }, { id: 2 }] as never;
       },
     };
-    const notifier = createFuelNotifier(ctx, push as never);
-    notifier.fuelCreated({ id: 1, userId: anna.id, userName: 'Anna', shares: [{ userId: ben.id, owes: true, cents: 100, carriedCents: 0, dueCents: 100 }] } as never);
+    const notifier = createNotifier(ctx, push as never);
+    notifier.emit('fuel.created', () => someFuel({ userId: anna.id, userName: 'Anna' }, [owes(ben.id)]));
     await notifier.idle();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(unhandled, []);
     assert.equal(reads, 1, 'one query for the devices of one debtor');
-    assert.deepEqual(events, ['fuel.push', 'fuel.push_error'], 'the failure is reported once, by the name of the error only');
+    assert.deepEqual(events, ['notify.sent'], 'the finished send was reported, and the report that failed was swallowed');
   } finally {
     process.off('unhandledRejection', onRejection);
     await t.close();
@@ -826,7 +834,7 @@ test('the push says what is really due: nothing when the fueler owes the debtor 
   }
 });
 
-test('an admin registering a fill-up for somebody else tells the others about that person, and not that person', async () => {
+test('an admin registering a fill-up for somebody else tells the debtors about the fueler, and the fueler that it was done in their name', async () => {
   const { t, admin, anna, ben, stub } = await pushHousehold();
   try {
     const benPhone = makeSubscriber('https://fcm.googleapis.com/fcm/send/ben-phone');
@@ -838,10 +846,13 @@ test('an admin registering a fill-up for somebody else tells the others about th
     assert.equal(res.status, 201, res.text);
     assert.equal(res.body.fuel.userId, anna.id);
     await t.app.idle();
-    assert.deepEqual(stub.calls.map((c) => c.url), [benPhone.endpoint], 'Ben owes Anna; Anna fuelled, the admin owes nothing');
-    const message = benPhone.read(stub.calls[0]!);
+    // Ben owes Anna, so he hears; Anna fuelled but did not register it, so she is told that somebody did it in her name (see test/notify.test.ts); the admin did it and owes nothing.
+    assert.deepEqual(stub.calls.map((c) => c.url).sort(), [annaPhone.endpoint, benPhone.endpoint].sort());
+    const message = benPhone.read(stub.calls.find((c) => c.url === benPhone.endpoint)!);
     assert.equal(message.title, 'Anna fuelled the car', 'the fueler is named, not the admin who typed it in');
     assert.equal(message.body, 'You owe Anna EUR 15.00. This can still change when more drives are registered.');
+    assert.equal(annaPhone.read(stub.calls.find((c) => c.url === annaPhone.endpoint)!).title, 'Admin registered a fill-up in your name');
+    assert.ok(!stub.calls.some((c) => c.url === adminPhone.endpoint), 'never the one who did it');
   } finally {
     await t.close();
   }
@@ -849,8 +860,11 @@ test('an admin registering a fill-up for somebody else tells the others about th
 
 // ----------------------------------------------- the notifier on its own (failure paths)
 
-const someFuel = (over: Json = {}, shares: Json[] = []): never =>
-  ({ id: 1, userId: 2, userName: 'Anna', shares, ...over }) as never;
+// A new fill-up as the route hands it to the notifier. The fueler registered it themselves, so only the debtors are on the audience.
+const someFuel = (over: Json = {}, shares: Json[] = []): never => {
+  const fuel = { id: 1, userId: 2, userName: 'Anna', at: '2026-06-01T08:00:00.000Z', totalCents: 6000, shares, ...over };
+  return { actor: { id: fuel.userId, displayName: fuel.userName }, fuel } as never;
+};
 const owes = (userId: number, over: Json = {}): Json => ({ userId, owes: true, cents: 100, carriedCents: 0, dueCents: 100, ...over });
 
 test('the notifier: a device that fails does not stop the others, and the failure is logged by the name of the error only', async () => {
@@ -870,15 +884,15 @@ test('the notifier: a device that fails does not stop the others, and the failur
       },
       subscriptionsOf: () => endpoints.map((endpoint, id) => ({ id, endpoint })) as never,
     };
-    const notifier = createFuelNotifier(ctx, push as never);
-    notifier.fuelCreated(someFuel({}, [owes(ben.id)]));
+    const notifier = createNotifier(ctx, push as never);
+    notifier.emit('fuel.created', () => someFuel({}, [owes(ben.id)]));
     await notifier.idle();
     assert.deepEqual(sent, [endpoints[1]], 'the second device was still told');
     assert.deepEqual(
       logs.map((l) => ({ ...l })),
       [
-        { event: 'fuel.push_error', fuelId: 1, userId: ben.id, reason: 'TypeError' },
-        { event: 'fuel.push', fuelId: 1, userId: ben.id, sent: 1, failed: 1 },
+        { event: 'notify.error', kind: 'fuel.created', userId: ben.id, reason: 'TypeError' },
+        { event: 'notify.sent', kind: 'fuel.created', userId: ben.id, sent: 1, failed: 1 },
       ],
     );
     assert.ok(!JSON.stringify(logs).includes('SECRET'), 'no endpoint, and no error message that could carry one, in the log');
@@ -895,11 +909,11 @@ test('the notifier: it never throws and never reads a device for somebody who is
     let lookups = 0;
     const push = (enabled: boolean, lookup: () => never) => ({ enabled, publicKey: () => '', send: async () => 'ok' as const, subscriptionsOf: () => (lookups++, lookup()) });
     const devices = (): never => [{ id: 1, endpoint: 'https://fcm.googleapis.com/fcm/send/x' }] as never;
-    const silent = createFuelNotifier(ctx, push(true, devices) as never);
+    const silent = createNotifier(ctx, push(true, devices) as never);
 
     // Nobody here is told: the fueler's own share, no debt, a share of nothing, a due of nothing, a deactivated person.
     run(t.db, 'UPDATE users SET active = 0 WHERE id = ?', carla.id);
-    silent.fuelCreated(
+    silent.emit('fuel.created', () =>
       someFuel({ userId: anna.id }, [owes(anna.id), owes(ben.id, { owes: false }), owes(ben.id, { cents: 0 }), owes(ben.id, { dueCents: 0 }), owes(ben.id, { dueCents: -5 }), owes(carla.id)]),
     );
     await silent.idle();
@@ -908,20 +922,20 @@ test('the notifier: it never throws and never reads a device for somebody who is
     assert.equal(logs.length, 0, 'nothing was logged either');
 
     // Switched off: nothing at all, not even a lookup.
-    createFuelNotifier(ctx, push(false, devices) as never).fuelCreated(someFuel({ userId: anna.id }, [owes(ben.id)]));
+    createNotifier(ctx, push(false, devices) as never).emit('fuel.created', () => someFuel({ userId: anna.id }, [owes(ben.id)]));
     assert.equal(lookups, 0);
 
     // A lookup that blows up must not escape into the request that saved the fill-up; it is logged by the error's name.
-    const broken = createFuelNotifier(
+    const broken = createNotifier(
       ctx,
       push(true, () => {
         throw new RangeError('database is locked: https://fcm.googleapis.com/fcm/send/SECRET');
       }) as never,
     );
-    assert.doesNotThrow(() => broken.fuelCreated(someFuel({ id: 9, userId: anna.id }, [owes(ben.id)])));
+    assert.doesNotThrow(() => broken.emit('fuel.created', () => someFuel({ id: 9, userId: anna.id }, [owes(ben.id)])));
     await broken.idle();
     assert.equal(lookups, 1);
-    assert.deepEqual(logs.map((l) => ({ ...l })), [{ event: 'fuel.push_error', fuelId: 9, reason: 'RangeError' }]);
+    assert.deepEqual(logs.map((l) => ({ ...l })), [{ event: 'notify.error', kind: 'fuel.created', userId: ben.id, reason: 'RangeError' }]);
     assert.ok(!JSON.stringify(logs).includes('SECRET'));
   } finally {
     await t.close();
@@ -943,12 +957,12 @@ test('the notifier: a logger that is itself broken cannot turn a finished send i
       },
     };
     const push = { enabled: true, publicKey: () => '', send: async () => 'ok' as const, subscriptionsOf: () => [{ id: 1 }] as never };
-    const notifier = createFuelNotifier(ctx, push as never);
-    notifier.fuelCreated(someFuel({}, [owes(ben.id)]));
+    const notifier = createNotifier(ctx, push as never);
+    notifier.emit('fuel.created', () => someFuel({}, [owes(ben.id)]));
     await notifier.idle();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(unhandled, []);
-    assert.equal(calls, 2, 'the finished send was reported, the report failed, and the failure of that was swallowed');
+    assert.equal(calls, 1, 'the finished send was reported, the report failed, and the failure of that was swallowed');
   } finally {
     process.off('unhandledRejection', onRejection);
     await t.close();

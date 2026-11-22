@@ -1,5 +1,6 @@
 import { many, one, run, tx, type Db, type KmFor, type ReservationRow, type ReservationStatus, type UsageStatus, type UserRow } from './db.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Req, type Router } from './http.ts';
+import type { Notifier, ReservationSnap } from './notify.ts';
 import { Fields, ValidationError, assertInsideWindow, queryRange, queryUserId, windowBounds } from './validate.ts';
 
 /** 'expired' is never stored: it is a pending suggestion whose start has passed. */
@@ -196,6 +197,21 @@ export function toDto(row: ReservationJoin, actor: Principal, nowIso: string): R
   };
 }
 
+/** The reservation as the notifier needs it: plain facts, taken at one moment (notify.ts). */
+function snapOf(row: ReservationJoin, nowIso: string): ReservationSnap {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    userName: row.user_name,
+    createdBy: row.created_by,
+    createdByName: row.created_by_name,
+    status: effectiveStatus(row, nowIso),
+    start: row.start_utc,
+    end: row.end_utc,
+    note: row.note,
+  };
+}
+
 // --------------------------------------------------------------- data access
 
 function load(db: Db, id: number): ReservationJoin {
@@ -272,7 +288,7 @@ function overlapError(conflict: NonNullable<ReturnType<typeof findOverlap>>): Ht
 
 // -------------------------------------------------------------------- routes
 
-export function registerReservationRoutes(router: Router, ctx: Ctx): void {
+export function registerReservationRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {
   const { db, config } = ctx;
   const nowDate = (): Date => ctx.clock.now();
 
@@ -390,6 +406,8 @@ export function registerReservationRoutes(router: Router, ctx: Ctx): void {
       return load(db, lastInsertRowid);
     });
     ctx.log({ event: 'reservation.created', id: created.id, by: actor.id, userId: created.user_id, status: created.status });
+    // A suggestion for somebody else is only visible once they open the app: tell them (an own reservation tells nobody).
+    if (created.status === 'pending') notifier?.emit('reservation.suggested', () => ({ actor, reservation: snapOf(created, nowIso) }));
     return ok({ reservation: toDto(created, actor, nowIso) }, 201);
   });
 
@@ -426,6 +444,7 @@ export function registerReservationRoutes(router: Router, ctx: Ctx): void {
       return load(db, id);
     });
     ctx.log({ event: 'reservation.updated', id, by: actor.id });
+    notifier?.emit('reservation.changed', () => ({ actor, before: snapOf(existing, nowIso), after: snapOf(updated, nowIso) }));
     return ok({ reservation: toDto(updated, actor, nowIso) });
   });
 
@@ -435,6 +454,8 @@ export function registerReservationRoutes(router: Router, ctx: Ctx): void {
     const row = loadFor(db, actor, id, 'cancel');
     run(db, 'DELETE FROM reservations WHERE id = ?', id);
     ctx.log({ event: 'reservation.deleted', id, by: actor.id, status: row.status, userId: row.user_id });
+    // Cancelled (confirmed) or withdrawn (a suggestion): the person it is for hears about it unless they did it themselves.
+    notifier?.emit('reservation.deleted', () => ({ actor, reservation: snapOf(row, nowDate().toISOString()) }));
     return noContent();
   });
 
@@ -464,6 +485,8 @@ export function registerReservationRoutes(router: Router, ctx: Ctx): void {
         return load(db, id);
       });
       ctx.log({ event: `reservation.${decision}d`, id, by: actor.id });
+      // The suggester finds out without opening the app (a suggestion that nobody answers just lapses).
+      notifier?.emit('reservation.answered', () => ({ actor, reservation: snapOf(updated, nowIso), decision: decision === 'approve' ? 'approved' : 'declined' }));
       return ok({ reservation: toDto(updated, actor, nowIso) });
     };
   }

@@ -17,6 +17,7 @@
 // and the pending list use, so the banner and the notification never disagree.
 import { many, run, tx } from './db.ts';
 import type { Ctx } from './http.ts';
+import { reminder as reminderText } from './notify-texts.ts';
 import type { PushMessage, PushService } from './push.ts';
 import { REGISTERED_SQL } from './reservations.ts';
 import { formatLocal } from '../shared/time.js';
@@ -46,18 +47,12 @@ export interface ReminderResult {
   released: number;
 }
 
-/** The text of a reminder. English, composed here: the service worker cannot reach the client's strings file. */
+/**
+ * A reminder as it is pushed: the words come from notify-texts.ts (the service worker cannot reach the
+ * client's strings file), where it opens and its tag are fixed here.
+ */
 export function reminderMessage(kind: Kind, reservationId: number, time: string, hasDraft: boolean): PushMessage {
-  const url = `/#/usage?res=${reservationId}`;
-  const tag = `km-${reservationId}`;
-  if (kind === 'start') {
-    return { title: 'Your car reservation starts soon', body: `It starts at ${time}. Save your starting odometer reading now.`, url, tag };
-  }
-  const prefix = kind === 'repeat' ? 'Reminder: ' : '';
-  if (hasDraft) {
-    return { title: `${prefix}Finish your drive`, body: `Your reservation ended at ${time}. Enter the end odometer reading.`, url, tag };
-  }
-  return { title: `${prefix}Register your kilometres`, body: `Your reservation ended at ${time}. Register the kilometres you drove.`, url, tag };
+  return { ...reminderText(kind, time, hasDraft), url: `/#/usage?res=${reservationId}`, tag: `km-${reservationId}` };
 }
 
 export interface Reminders {

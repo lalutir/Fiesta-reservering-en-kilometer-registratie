@@ -370,6 +370,11 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       fuel share moves to the other person. With reminders on for a second phone, registering a
       fill-up sends that person a notification, and **I have paid this request** on the
       History screen marks their share paid.
+- [ ] Notifications for what somebody else does: with reminders on for two people on two phones,
+      one makes a reservation **for** the other (the other's phone shows the suggestion, and
+      **Account > What you get notified about** lists everything); the other approves it (the first
+      phone hears); an admin moves that reservation (the owner's phone hears, the admin's does not).
+      Nothing arrives for something you did yourself (section 18).
 - [ ] After an update from the version before traffic tickets: `docker compose exec app ls -l /data/backups`
       lists `pre-migrate-v3.db`. On the Drives tab, **Traffic tickets** opens; add a ticket at a
       time you know somebody drove: it names that person, and "From the drive log" or
@@ -398,6 +403,7 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 | `docker compose up` stops with `set DOMAIN in .env` | `DOMAIN` is missing from `.env`. |
 | Build is killed or hangs on the smallest droplet | Add the swap file (section 4) or use the 1 GiB droplet. |
 | The test notification never arrives | Check, in this order: reminders are on for that device (Account page), notifications are allowed for the app in the phone's settings, the app is installed on the Home Screen on an iPhone, `PUSH_ENABLED` is not `false`, `docker compose logs app` has no "Reminders are off" warning from the start-up (it means `DOMAIN` is not a bare host name such as `car.example.com` and `PUSH_CONTACT` is empty), and the same logs show no `push.send_failed` lines (they name the push service and the status). A phone whose push service answers "gone" is removed and has to enable reminders again. |
+| One person never gets the notifications for what others change, while the test notification works | They are only sent to **active** people with a device signed up, and never to the person who made the change. Check that the person is not deactivated, that they enabled reminders on that device, and `docker compose logs app | grep notify`: `notify.sent` lines say how many devices were reached, `notify.error` lines say that something failed (by the name of the error only). |
 | The Account page says this browser's push service is not supported | Only Google (Chrome, Edge, Android), Apple, Mozilla and Microsoft push services are used (section 18). |
 | Times look an hour off | `HOUSEHOLD_TZ` is wrong in `.env`; times are shown in that zone whatever the phone is set to. |
 | Disk is filling up | `docker system df` shows where. Container logs are capped at 3 x 10 MB each; old images and build cache are the usual cause: `docker image prune -f` and `docker builder prune -f`. Do not prune volumes (`docker volume prune`, `docker system prune --volumes`): with the stack down they can remove the database volume. |
@@ -497,7 +503,10 @@ errand, or when a trip is for the whole household.
   reminders and the overlap check all follow the driver; only the kilometre
   totals and the fuel split follow whose kilometres they are. No approval from the
   other person is needed: it is visible, with the note, in History, in the Drives
-  list, on the reservation card and in the admin Drives table.
+  list, on the reservation card and in the admin Drives table. The other person does
+  get a push notification when kilometres are put on their name, and when that is
+  changed or removed (see "Notifications when somebody else changes something of
+  yours"); this replaces the earlier rule that they were not told.
 - **Together** kilometres are not anybody's: when fuel is shared out they are a
   pool that is split **in the same ratio as the personal kilometres of the same
   period** (to the cent, the odd cent goes to the lowest user id). That comes down to
@@ -571,6 +580,63 @@ than 15 minutes in the past.
   disturb"). Without notifications the Drives tab still shows a banner and a count
   of what is waiting.
 
+### Notifications when somebody else changes something of yours
+
+Reminders are one kind of notification. The others tell you when somebody else
+creates, changes or deletes something that is yours. The rule is the same for all of
+them: when person A creates, changes or deletes something whose owner or subject is
+person B, B gets a push, one per device, and A never does. Nothing here changes who is
+allowed to do what; the notification is sent after the change has been saved.
+
+| What happens | Who is told | A tap opens |
+| --- | --- | --- |
+| A reservation is suggested for you; the suggester changes or withdraws it; an admin cancels it | the person it is for | Inbox |
+| The person it was for approves or declines a suggestion; an admin cancels or changes it | the suggester | the Agenda on that day (approved), else the Inbox |
+| A confirmed reservation of yours is edited or cancelled by somebody else, such as an admin | the owner | the Agenda on that day, or the Agenda |
+| A drive is logged, changed or deleted in your name by somebody else (an admin), or taken off your name | the driver | Drives |
+| A drive is linked to your reservation by somebody else ("I drove this"), and later edits or removal of it | the owner of the reservation | History |
+| Another driver registers kilometres as yours, changes them, moves them to someone else or removes them | the person the kilometres are for | Drives |
+| A fill-up is edited or deleted and your share of the fuel moves (also a later fill-up's) | each debtor whose share moved | History |
+| A fill-up is registered, edited or deleted in your name by somebody else | the fueler | Fuel |
+| The fueler or an admin marks your share as paid, or takes the mark off | the debtor | History |
+| You press **I have paid this request** | the fueler | Fuel |
+| A traffic ticket is entered, changed or deleted for a moment the app names you as the driver (also the person it no longer names, when its time moved) | that person | Tickets |
+
+- **Never the person who did it, never the deactivated, only with a device.** The
+  actor is dropped by the notifier itself, whatever a row of the table says. A person
+  who is on the audience twice (for example the driver, who is also the owner of the
+  reservation) gets one notification. Nothing is sent when `PUSH_ENABLED=false`.
+- **After the answer, and never in the way.** The notification is sent once the
+  response has been written. A slow, failing or unreachable push service cannot delay
+  or fail the change; a failure is logged by the name of the error (`notify.error`,
+  never an address, key, note or price) and not retried. Shutting the app down waits
+  for sends that are on their way.
+- **One tag per record** (`reservation-7`, `usage-12`, `fuel-3`, `ticket-5`), so
+  a later change replaces the notification that is still on the phone and alerts again.
+  The fueler's "somebody paid" notification has the debtor in its tag, so two debtors
+  do not replace each other.
+- **What the text says.** Who did it, what, and when. Never a note or a reservation
+  note. A traffic ticket notification has neither its price nor its reason. Fuel
+  amounts are in the fuel notifications, as they always were in the new-fill-up push.
+- **No per-category settings.** The one switch is Reminders on or off for a device.
+  **Account > What you get notified about** lists everything you get. Without a device
+  signed up, the Inbox, the banners on the Drives tab and the History screen show it all as before.
+- **Two earlier defaults are reversed.** Kilometres put on somebody's name used to send
+  that person no push, and the fueler used to get no push when a debtor pressed "I have
+  paid". Both now notify. (The same holds for a few cases the rule implies: a fill-up
+  or a ticket changed or deleted by somebody else, and a drive or fill-up registered in
+  your name.)
+- **Not covered.** A suggestion that nobody answers still lapses without a reminder. A
+  drive that only overlaps somebody's reservation in time, without being linked to it,
+  does not notify its owner. Creating a payment request tells nobody (the fueler sends
+  it), and an admin marking a share paid does not tell the fueler.
+- **All the words are in `src/notify-texts.ts`**, so the Dutch translation is one
+  edit there (and the list in `public/strings.js`). What is told to whom is the table
+  `EVENTS` in `src/notify.ts`; a new kind of notification, such as one for everybody,
+  is one more row.
+- **Not verified:** real delivery to real phones (see the checklist above). The tests
+  use a stand-in for the push services and decrypt what would have been sent.
+
 ### Fuel costs
 
 - Anyone records a fill-up (when, and any two of litres, total price and price per
@@ -618,14 +684,18 @@ than 15 minutes in the past.
   the amount due, and opening the History screen. It is sent after the fill-up is
   saved, so a slow or broken push service never delays or fails the save; a failure
   is logged (host and status, never the address or keys) and not retried. Nothing is
-  sent when reminders are switched off, for people without a device, for deactivated
-  people, or when a fill-up is edited or deleted. The amount can still change when
+  sent when reminders are switched off, for people without a device or for deactivated
+  people. Editing or deleting a fill-up tells the people whose share it moves, and
+  somebody else's change to a fill-up is told to the fueler (see "Notifications when
+  somebody else changes something of yours"). The amount can still change when
   more drives are registered, and the message says so.
 - **"I have paid this request."** The person who owes money sees their open shares
   on the History screen (under **Fuel you owe**) and on the Fuel card, each with the
   amount due and this button. It works with or without a payment request, marks the
   share paid and records who and when. Only the person who is owed (or an admin) can
-  undo it. It is a self-report: nothing is checked against a bank.
+  undo it. It is a self-report: nothing is checked against a bank. The fueler gets a push
+  when somebody presses it (this replaces the earlier rule that they were not told), and the
+  debtor gets one when the fueler or an admin marks their share paid or takes the mark off.
 - **Unpaid amounts are carried over.** What a person still owes the same fueler from
   earlier fill-ups is added to their share of the next one, and what the fueler
   still owes them in return is taken off (never below zero). The card, the payment
@@ -707,8 +777,9 @@ earlier upgrades, with another copy, `/data/backups/pre-migrate-v3.db`:
 - Tickets follow the 6 month rule by the time of the offence: the daily clean-up
   deletes a ticket whose time is older than the window, and the admin Retention tab
   counts them and shows the oldest one. Keep the paper or the letter for anything
-  you still have to pay. The app sends no notification and moves no money for a
-  ticket.
+  you still have to pay. The app moves no money for a ticket. It sends one notification, to
+  the person it names as the driver, when a ticket is entered, changed or deleted: never to
+  the person who did it, and with neither the price nor the reason in the text.
 
 ### Kilometre check
 
@@ -787,7 +858,8 @@ payment request, balance or kilometre total changes because of it.
 
 ### Switching things off
 
-- Reminders and the push for a new fill-up: `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
+- Reminders and every other push (a new fill-up, and everything somebody else does on your behalf):
+  `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
 - Nothing else needs a rollback; fuel costs, drafts, traffic tickets and the kilometre check are simply not used
   (the check has no switch: it shows findings and changes nothing).
