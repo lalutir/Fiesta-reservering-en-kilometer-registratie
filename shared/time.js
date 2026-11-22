@@ -188,6 +188,99 @@ function pad(n, width = 2) {
   return String(n).padStart(width, '0');
 }
 
+// ---- calendar dates ('YYYY-MM-DD': a day of the calendar, no time and no zone) -------------------------
+// A date such as the day a dent was noticed or the APK expiry is not an instant: it means the same day
+// for everybody, so it is kept as text and counted with UTC arithmetic (a day is always one step, DST
+// never enters). Only "what day is it now" needs the household zone, and that is localDateKey().
+
+/**
+ * Epoch ms of midnight UTC on a calendar day. Unlike Date.UTC this takes years 0 to 99 as themselves.
+ * @param {number} year
+ * @param {number} month 1-12
+ * @param {number} day
+ */
+function utcDay(year, month, day) {
+  const d = new Date(0);
+  d.setUTCFullYear(year, month - 1, day);
+  return d.getTime();
+}
+
+/**
+ * Strictly 'YYYY-MM-DD' and a day that exists (no 2026-02-30, 2027-02-29, month 13, 2026-1-5, trailing
+ * text or a time). This is the one place that decides what a calendar date is.
+ * @param {unknown} text
+ * @returns {{ year: number, month: number, day: number } | null}
+ */
+export function parseDateKey(text) {
+  if (typeof text !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!m) return null;
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const back = new Date(utcDay(year, month, day));
+  if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day) return null;
+  return { year, month, day };
+}
+
+/**
+ * @param {unknown} text
+ * @returns {boolean}
+ */
+export function isCalendarDate(text) {
+  return parseDateKey(text) !== null;
+}
+
+/**
+ * Whole calendar days from one date to another (negative when `toKey` is earlier). Counted in UTC, so the
+ * 23 and 25 hour days around a clock change are one day like any other.
+ * @param {string} fromKey 'YYYY-MM-DD'
+ * @param {string} toKey 'YYYY-MM-DD'
+ * @returns {number}
+ */
+export function daysBetween(fromKey, toKey) {
+  const a = parseDateKey(fromKey);
+  const b = parseDateKey(toKey);
+  if (!a || !b) throw new RangeError('Invalid calendar date');
+  return Math.round((utcDay(b.year, b.month, b.day) - utcDay(a.year, a.month, a.day)) / DAY_MS);
+}
+
+/**
+ * The same day and month `years` later, the day clamped to the length of the month (29 Feb + 1 year = 28 Feb).
+ * @param {string} key 'YYYY-MM-DD'
+ * @param {number} years may be negative
+ * @returns {string}
+ */
+export function addDateKeyYears(key, years) {
+  const p = parseDateKey(key);
+  if (!p) throw new RangeError('Invalid calendar date');
+  const year = p.year + years;
+  return `${pad(year, 4)}-${pad(p.month)}-${pad(Math.min(p.day, daysInMonth(year, p.month)))}`;
+}
+
+/**
+ * The UTC instant at which a calendar day begins in a zone (local 00:00; a midnight that does not exist
+ * resolves forward, like any other wall-clock time here).
+ * @param {string} key 'YYYY-MM-DD'
+ * @param {string} tz
+ * @returns {string} UTC ISO string
+ */
+export function startOfLocalDay(key, tz) {
+  const p = parseDateKey(key);
+  if (!p) throw new RangeError('Invalid calendar date');
+  return localToUtc({ year: p.year, month: p.month, day: p.day }, tz);
+}
+
+/**
+ * A calendar date for people ("14 Mar 2026"), the same in every zone: it is formatted at noon UTC in UTC.
+ * @param {string} key 'YYYY-MM-DD'
+ * @param {'date' | 'day'} [kind] 'date' = "14 Mar 2026", 'day' = "Saturday 14 March"
+ * @returns {string} '' when the key is not a calendar date
+ */
+export function formatDateKey(key, kind = 'date') {
+  const p = parseDateKey(key);
+  if (!p) return '';
+  return displayFormatter('UTC', kind).format(new Date(utcDay(p.year, p.month, p.day) + DAY_MS / 2));
+}
+
 /**
  * Combine the value of an <input type="date"> and <input type="time"> that are
  * interpreted in the household zone into a UTC ISO string.

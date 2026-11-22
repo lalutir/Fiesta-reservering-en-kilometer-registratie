@@ -178,7 +178,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -198,8 +198,9 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
 test('service worker: the cache name is bumped with the app files, so phones drop the old copy of the shell', () => {
   // A new view file changes what the shell is: without a new name an installed app keeps serving the old one.
   const source = read(publicDir, 'sw.js');
-  assert.match(source, /const CACHE = 'car-static-v5';/);
+  assert.match(source, /const CACHE = 'car-static-v6';/);
   assert.match(source, /'\/views\/tickets\.js',/, 'the tickets view is precached');
+  assert.match(source, /'\/views\/car\.js',/, 'the Car view is precached');
   assert.match(source, /'\/kmcheck\.js',/, 'the kilometre check module is precached');
 });
 
@@ -212,10 +213,11 @@ test('service worker: precaches on install, drops old caches on activate', async
   assert.ok(sw.store.has('https://car.example/shared/time.js'));
   assert.ok(sw.store.has('https://car.example/views/tickets.js'));
   assert.ok(sw.store.has('https://car.example/kmcheck.js'));
+  assert.ok(sw.store.has('https://car.example/views/car.js'));
   let activated: Promise<unknown> | undefined;
   (sw.handlers['activate'] as (e: Json) => void)({ waitUntil: (p: Promise<unknown>) => (activated = p) });
   await activated;
-  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4'], 'the previous version of the shell goes, the current one stays');
+  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5'], 'the previous versions of the shell go, the current one stays');
 });
 
 test('service worker never handles /api, /admin, non-GET or cross-origin requests', async () => {

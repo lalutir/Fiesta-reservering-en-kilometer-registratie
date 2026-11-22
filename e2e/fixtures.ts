@@ -93,6 +93,33 @@ export async function expectNoHorizontalScroll(page: Page, where: string): Promi
 }
 
 /**
+ * Every tab in the bar can be read: the words of each tab lie inside that tab (nothing is cut off or runs into its
+ * neighbour) and no tab is narrower than the minimum size of a touch target (24 px, WCAG 2.2). A failing check is a
+ * font size or padding to fix in public/style.css, never a reason to loosen this.
+ *
+ * It looks at what a person sees: each tab is found by its name as a link of the "Main" navigation, its words by
+ * their text inside it, and both are measured on screen. A count floating over a corner is not part of the words.
+ */
+export async function expectTabsFit(page: Page, where: string, names: readonly string[]): Promise<void> {
+  const nav = page.getByRole('navigation', { name: 'Main' });
+  for (const name of names) {
+    // A tab's name may carry a count ("Drives, 2 ..."), so it is matched from the start.
+    const tab = nav.getByRole('link', { name: new RegExp(`^${name}`) });
+    await expect(tab, `${where}: the tab "${name}" is in the bar`).toHaveCount(1);
+    const words = tab.getByText(name, { exact: true }).first();
+    const box = await tab.boundingBox();
+    const text = await words.boundingBox();
+    expect(box && text, `${where}: the tab "${name}" and its words are on screen`).toBeTruthy();
+    if (!box || !text) continue;
+    const label = `${where}: the tab "${name}"`;
+    const textRight = text.x + text.width;
+    expect(box.width, `${label} is ${box.width.toFixed(1)}px wide`).toBeGreaterThanOrEqual(24);
+    expect(text.x, `${label} starts at ${text.x.toFixed(1)}px, left of its own tab (${box.x.toFixed(1)}px)`).toBeGreaterThanOrEqual(box.x - 0.5);
+    expect(textRight, `${label} ends at ${textRight.toFixed(1)}px, right of its own tab (${(box.x + box.width).toFixed(1)}px)`).toBeLessThanOrEqual(box.x + box.width + 0.5);
+  }
+}
+
+/**
  * A slot that lies entirely in the past, `fromHoursAgo` to `toHoursAgo` hours before now, as the
  * household-time-zone date (YYYY-MM-DD) and time (HH:MM) the form fields take.
  */

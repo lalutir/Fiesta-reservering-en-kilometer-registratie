@@ -1,8 +1,12 @@
 import { HttpError } from './http.ts';
-import { addCalendarMonths, daysInMonth } from '../shared/time.js';
+import { addCalendarMonths, daysInMonth, localDateKey, parseDateKey } from '../shared/time.js';
 
 /** The highest odometer reading (km) accepted for a drive or a fill-up. */
 export const MAX_ODOMETER = 10_000_000;
+
+/** The calendar years a date field (a day a dent was noticed, the APK expiry) may lie in; the database CHECKs say the same. */
+const MIN_DATE_YEAR = 2000;
+const MAX_DATE_YEAR = 2100;
 
 /** 422 with one code per offending field, e.g. { start: 'outside_window' }. */
 export class ValidationError extends HttpError {
@@ -132,6 +136,21 @@ export class Fields {
     return parsed;
   }
 
+  /**
+   * A calendar date, strictly 'YYYY-MM-DD' (shared/time.js decides what a real day is), in the years
+   * 2000 to 2100. A time, a missing zero or a day that does not exist is 'invalid_date'.
+   */
+  date(key: string, opts: { optional?: boolean } = {}): string | undefined {
+    const raw = this.take(key, opts.optional);
+    if (raw === undefined) return undefined;
+    const parts = parseDateKey(raw);
+    if (!parts || parts.year < MIN_DATE_YEAR || parts.year > MAX_DATE_YEAR) {
+      this.fail(key, 'invalid_date');
+      return undefined;
+    }
+    return raw as string;
+  }
+
   bool(key: string, opts: { optional?: boolean } = {}): boolean | undefined {
     const raw = this.take(key, opts.optional);
     if (raw === undefined) return undefined;
@@ -188,6 +207,23 @@ export function assertPastInsideWindow(at: string, now: Date, tz: string, months
   if (Date.parse(at) > now.getTime() + FUTURE_SLACK_MS) throw new ValidationError({ at: 'in_future' });
   const bounds = windowBounds(now, tz, months);
   if (at < bounds.from || at > bounds.to) throw new ValidationError({ at: 'outside_window' }, 'outside_window');
+}
+
+/**
+ * The first calendar day (household zone) of the retention window: the local date of the instant `months`
+ * months back. One definition for the purge (a repaired damage report is deleted when its repaired date is
+ * before this day) and for the check that a repaired date is not already older than that.
+ */
+export function windowStartDate(now: Date, tz: string, months: number): string {
+  return localDateKey(windowBounds(now, tz, months).from, tz);
+}
+
+/**
+ * Whether a calendar date lies after today in the household zone. No slack: a date has no time of day
+ * for a phone's clock to be a few minutes off by, and at midnight the household's own zone decides.
+ */
+export function isFutureDate(dateKey: string, now: Date, tz: string): boolean {
+  return dateKey > localDateKey(now, tz);
 }
 
 /** Clamp an optional [from, to] query range to the window. */

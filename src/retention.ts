@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { countRows, getMeta, one, run, setMeta, tx, type Db } from './db.ts';
 import { ok, type Ctx, type Logger, type Router } from './http.ts';
-import { windowBounds } from './validate.ts';
+import { windowBounds, windowStartDate } from './validate.ts';
 
 export interface PurgeResult {
   cutoff: string;
@@ -15,6 +15,8 @@ export interface PurgeResult {
   tickets: number;
   /** "Explained" notes on odometer findings whose earlier reading is older than the window: the pair can no longer be flagged. */
   odometerExplained: number;
+  /** Damage reports that were repaired before the first day of the window. An open report is never counted here: it is never purged. */
+  damageReports: number;
   sessions: number;
 }
 
@@ -24,6 +26,9 @@ export interface PurgeResult {
  * The comparison is strictly "end < cutoff": a row ending exactly at the
  * cutoff is still inside the window (validation accepts it) and is kept.
  * Current and future data is never touched.
+ * A damage report is the exception to "ended": an open one is kept however old it is, because the damage is
+ * still on the car; a repaired one goes when the calendar day it was repaired is before the local day of the
+ * cutoff (so one repaired on the cutoff's own day is kept). That is date granularity, coarser than the instants above.
  */
 export function purge(db: Db, now: Date, tz: string, log: Logger, months = 6): PurgeResult {
   const cutoff = windowBounds(now, tz, months).from;
@@ -44,8 +49,10 @@ export function purge(db: Db, now: Date, tz: string, log: Logger, months = 6): P
     // An explanation belongs to a pair of readings; the odometer chain only looks at readings from the cutoff
     // on (odometer.ts), so once the earlier reading is older than that the pair can never be flagged again.
     const odometerExplained = run(db, 'DELETE FROM odometer_explained WHERE prev_at < ?', cutoff).changes;
+    // Only repaired reports, and by the day they were repaired: the status filter is what keeps an open one safe.
+    const damageReports = run(db, "DELETE FROM damage_reports WHERE status = 'repaired' AND repaired_on < ?", windowStartDate(now, tz, months)).changes;
     const sessions = run(db, 'DELETE FROM sessions WHERE expires_at < ?', nowIso).changes;
-    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, tickets, odometerExplained, sessions };
+    const r: PurgeResult = { cutoff, reservations, usage, fuel, fuelRequests, tickets, odometerExplained, damageReports, sessions };
     setMeta(db, 'last_purge_at', nowIso);
     setMeta(db, 'last_purge', JSON.stringify(r));
     return r;
@@ -117,6 +124,7 @@ export function retentionStatus(ctx: Ctx): Record<string, unknown> {
       fuelRequests: countRows(db, 'fuel_requests'),
       tickets: countRows(db, 'tickets'),
       odometerExplained: countRows(db, 'odometer_explained'),
+      damageReports: countRows(db, 'damage_reports'),
       sessions: countRows(db, 'sessions'),
     },
     oldest: {
@@ -124,6 +132,8 @@ export function retentionStatus(ctx: Ctx): Record<string, unknown> {
       usageEnd: one<{ v: string | null }>(db, 'SELECT MIN(end_utc) AS v FROM usage')?.v ?? null,
       fuelAt: one<{ v: string | null }>(db, 'SELECT MIN(at_utc) AS v FROM fuel')?.v ?? null,
       ticketAt: one<{ v: string | null }>(db, 'SELECT MIN(at_utc) AS v FROM tickets')?.v ?? null,
+      // A calendar date ('YYYY-MM-DD'), not an instant, so it has its own row on the admin page. Open reports have none.
+      damageRepairedOn: one<{ v: string | null }>(db, "SELECT MIN(repaired_on) AS v FROM damage_reports WHERE status = 'repaired'")?.v ?? null,
     },
   };
 }

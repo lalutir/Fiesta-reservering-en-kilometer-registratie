@@ -4,7 +4,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HttpError } from '../src/http.ts';
-import { FUTURE_SLACK_MS, Fields, ValidationError, assertPastInsideWindow, failIfAny, queryUserId, windowBounds } from '../src/validate.ts';
+import {
+  FUTURE_SLACK_MS,
+  Fields,
+  ValidationError,
+  assertPastInsideWindow,
+  failIfAny,
+  isFutureDate,
+  queryUserId,
+  windowBounds,
+  windowStartDate,
+} from '../src/validate.ts';
 import { countRows } from '../src/db.ts';
 import { createHousehold, at } from './helpers.ts';
 
@@ -203,4 +213,68 @@ test('login treats non-string or oversized credentials as an ordinary failed log
   } finally {
     await t.close();
   }
+});
+
+// ------------------------------------------------------- calendar dates
+
+test('Fields.date: a real day in strict YYYY-MM-DD, in the years 2000 to 2100', () => {
+  const f = new Fields({ ok: '2026-03-28', leap: '2028-02-29', first: '2000-01-01', last: '2100-12-31' });
+  assert.equal(f.date('ok'), '2026-03-28');
+  assert.equal(f.date('leap'), '2028-02-29');
+  assert.equal(f.date('first'), '2000-01-01');
+  assert.equal(f.date('last'), '2100-12-31');
+  assert.deepEqual(f.errors, {});
+
+  const bad = [
+    ['feb30', '2026-02-30'],
+    ['notLeap', '2027-02-29'],
+    ['month13', '2026-13-01'],
+    ['short', '2026-1-5'],
+    ['datetime', '2026-03-28T10:00:00.000Z'],
+    ['newline', '2026-03-28\n'],
+    ['padded', ' 2026-03-28'],
+    ['before2000', '1999-12-31'],
+    ['after2100', '2101-01-01'],
+    ['empty', ''],
+    ['number', 20260328],
+    ['nul', null],
+    ['list', ['2026-03-28']],
+  ] as const;
+  const g = new Fields(Object.fromEntries(bad));
+  for (const [key] of bad) assert.equal(g.date(key), undefined, key);
+  assert.deepEqual(g.errors, Object.fromEntries(bad.map(([key]) => [key, 'invalid_date'])));
+});
+
+test('Fields.date: absent is required unless optional, and it is reported with the other field errors', () => {
+  const f = new Fields({ other: 'x'.repeat(600) });
+  assert.equal(f.date('missing'), undefined);
+  assert.equal(f.date('absentButOptional', { optional: true }), undefined);
+  f.string('other', { max: 500 });
+  assert.deepEqual(f.errors, { missing: 'required', other: 'too_long' });
+});
+
+test('windowStartDate is the local calendar day of the window start, not the UTC day', () => {
+  // 2026-06-15T10:00Z is 12:00 in Amsterdam: six months back is 2025-12-15 12:00 local.
+  assert.equal(windowStartDate(new Date('2026-06-15T10:00:00.000Z'), 'Europe/Amsterdam', 6), '2025-12-15');
+  // At 23:30 UTC on 2026-06-14 it is already 15 June in Amsterdam: the start moves with the local day.
+  assert.equal(windowStartDate(new Date('2026-06-14T23:30:00.000Z'), 'Europe/Amsterdam', 6), '2025-12-15');
+  assert.equal(windowStartDate(new Date('2026-06-14T23:30:00.000Z'), 'UTC', 6), '2025-12-14');
+  // 31 August minus six months is 28 February (the day is clamped, like the window itself).
+  assert.equal(windowStartDate(new Date('2026-08-31T10:00:00.000Z'), 'Europe/Amsterdam', 6), '2026-02-28');
+  // A window that starts shortly after midnight local time on a day that is still the previous day in UTC.
+  const now = new Date('2026-06-15T10:00:00.000Z');
+  assert.equal(windowStartDate(now, 'Europe/Amsterdam', 6), windowBounds(now, 'Europe/Amsterdam', 6).from.slice(0, 10), 'same day here');
+  const lateNow = new Date('2026-03-27T23:30:00.000Z'); // 28 March in Amsterdam, 00:30
+  assert.equal(windowBounds(lateNow, 'Europe/Amsterdam', 6).from, '2025-09-27T22:30:00.000Z', 'the window start is 28 September 00:30 local');
+  assert.equal(windowStartDate(lateNow, 'Europe/Amsterdam', 6), '2025-09-28', 'so its calendar day is the 28th although the UTC date is the 27th');
+});
+
+test('isFutureDate follows the household zone, with no slack', () => {
+  const tz = 'Europe/Amsterdam';
+  const now = new Date('2026-03-27T23:30:00.000Z'); // already 28 March in Amsterdam
+  assert.equal(isFutureDate('2026-03-28', now, tz), false, 'today in Amsterdam');
+  assert.equal(isFutureDate('2026-03-29', now, tz), true, 'tomorrow in Amsterdam');
+  assert.equal(isFutureDate('2026-03-27', now, tz), false);
+  assert.equal(isFutureDate('2026-03-28', now, 'America/Los_Angeles'), true, 'in Los Angeles it is still 27 March');
+  assert.equal(isFutureDate('2026-03-27', now, 'America/Los_Angeles'), false);
 });

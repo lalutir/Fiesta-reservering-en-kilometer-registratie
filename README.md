@@ -46,7 +46,9 @@ plus an admin page for the person who manages it.
   another driver (and changes or removals), a fill-up edited or deleted that changes your share, a
   fill-up entered in your name, your share marked paid or unpaid, the fueler hearing that a debtor
   pressed **I have paid**, and a traffic ticket entered, changed or deleted for a moment the app has
-  you down as the driver (no price or reason in the text). The Account page lists them. There are
+  you down as the driver (no price or reason in the text). A new damage report goes to everybody else
+  who is active (the one notification that is not about something of yours; edits, repairs and
+  deletes send nothing). The Account page lists them. There are
   no per-category settings: the one switch is Reminders on or off for the device, and without a
   device signed up the Inbox, the banners and the History screen carry the news as before.
   **This reverses two earlier defaults:** attributing kilometres to someone used to send them no
@@ -81,9 +83,22 @@ plus an admin page for the person who manages it.
   cleared by *Add the missing drive*, by correcting a reading, or by **explaining** it with a note
   (the driver or fueler at either end, or an admin). A fill-up now needs its odometer reading.
   It is information only: the fuel split, the kilometre totals and every save are unchanged.
+- **Car tab.** A seventh tab for the car itself. **Damage reports:** anybody files one with the
+  day it was first noticed, who noticed it (you by default, somebody else, or unknown), where on
+  the car (a fixed list) and a description. Everybody sees every report; the person who filed it or
+  an admin edits and deletes it; **anybody can mark one repaired** (with the day and an optional
+  note), and the creator or an admin can reopen it. Each report also shows who had the car before
+  the day it was noticed, taken from the drive log (then an unfinished drive, then a confirmed
+  reservation, then the last drive before that day). That is worked out on every read, never stored,
+  and worded as information, not blame. Everybody else who is active gets one push when a report is
+  filed. **APK:** one expiry date for the car that any member can enter or update. Until somebody
+  does, the tab asks for it; afterwards it shows the date, the days left (or "expired"), and who
+  entered it and when. Nothing reminds anybody of the date.
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
-  day and at start-up.
+  day and at start-up. The one exception is a **damage report that is still open**: the damage is
+  still on the car, so it is kept however old it is. A repaired report is deleted 6 months after
+  the day it was repaired.
 - **Admin page** at `/admin/` (admins only): manage users (create, deactivate, reset password,
   roles), see and correct all reservations and drives, and check the purge and backup status.
 - Times are stored in UTC and shown in the household time zone (default `Europe/Amsterdam`).
@@ -141,8 +156,22 @@ plus an admin page for the person who manages it.
   saving; `src/notify.ts` then (after the response is written) asks the event's row in its table who
   is told, drops the actor and anybody inactive, and sends one push per device, tagged per record so
   a later change replaces the earlier notification. Failures are logged by name and never reach the
-  request. A new event (the damage report for everybody is next) is one payload type, one table row
-  and one `emit` call. All wording is in `src/notify-texts.ts`.
+  request. A new event is one payload type, one table row and one `emit` call; the damage report
+  (`damage.created`, told to everybody active) was added exactly like that. All wording is in
+  `src/notify-texts.ts`.
+- **Calendar dates are not instants.** The day a dent was noticed or repaired and the APK expiry are
+  `YYYY-MM-DD` text, not times: they mean the same day to everybody, whatever the server's own zone.
+  One parser in `shared/time.js` (`parseDateKey`: a real day in exactly that shape) serves the server
+  and the browser; "today" is the household's day (`localDateKey`), "days left" counts calendar days
+  with UTC arithmetic so a 23 or 25 hour day is one day, and a date can never be in the future
+  (no clock slack, unlike an instant). The database says the same with a `CHECK` that the day
+  exists (`date(x) IS x`, because `=` would let an impossible day through). Retention compares
+  dates too: a repaired report is deleted when its repaired date is before the local day of the
+  window's start, which is coarser than the instants used for drives.
+- **The driver hint on a damage report is derived, never stored**, like who drove a ticket: the
+  start of the noticed local day goes through `whoDrove()` (`src/tickets.ts`) and, when that finds
+  nobody, the driver of the last completed drive that ended before it is used. Correcting a drive
+  corrects the hint on the next read.
 - **Upgrades keep a copy.** Before the first migration that changes an existing database the app
   writes `backups/pre-migrate-v<old>.db`.
 - The Inbox tab and its badge show suggestions waiting for your answer; the Drives tab and its
@@ -202,13 +231,15 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   fuel-carry.ts  carried-over amounts and settlement (pure)        notify.ts   the one notifier and its event table
   notify-texts.ts  every word of every notification (translate here)
   tickets.ts  traffic tickets and who was driving at the time       odometer.ts  the odometer chain, its gaps and explanations
+  car.ts      the Car tab: damage reports and the APK date
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v5, migrations)
-shared/     time.js: time zone, DST and calendar-month maths, used by the server and the browser
+  db.ts       the only file that touches node:sqlite (schema v6, migrations)
+shared/     time.js: time zone, DST, calendar-month and calendar-date maths, used by the server and the browser
 public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views,
-            kmcheck.js the Kilometre check: prefill, warnings, the findings list) and public/admin/ (admin page)
+            kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab)
+            and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
@@ -265,7 +296,11 @@ npx playwright show-report          # after a failure: the report with traces an
 ```
 
 `e2e/` holds the suite. It signs in, creates a reservation, registers the kilometres from the
-reservation card, opens History and loads `/admin/`, once at 390 px and once at 320 px wide. In
+reservation card, opens History, opens the Car tab (the APK prompt and the damage form; nothing is
+saved there) and loads `/admin/`, once at 390 px and once at 320 px wide. All seven tabs of the
+bar must be readable: each label has to lie inside its own tab (`expectTabsFit` in
+`e2e/fixtures.ts`; a failure there is a font size or padding to fix in `public/style.css`, not a
+check to loosen; it also runs on the Linux fonts of CI, which could not be tried locally). In
 every step the page must not scroll sideways, and the whole run must have no console errors,
 uncaught errors, failed requests or responses with status 400 and up. The one exception is the
 `401` of `GET /api/auth/me` before sign-in (that is how the app learns it must show the sign-in
@@ -274,7 +309,7 @@ screen); it is allowed once per page. Elements are found with `getByRole`, `getB
 as long as people still read the same words; the words are in one `UI` constant in
 `e2e/app.spec.ts`. `e2e/guard.spec.ts` tests that safety net itself: it makes a page misbehave
 in one way at a time (a console error, an uncaught error, a failed request, a 4xx or 5xx, a
-second `auth/me` probe, sideways scrolling) and expects each one to be reported, so the journey
+second `auth/me` probe, sideways scrolling, a tab label cut off by its tab) and expects each one to be reported, so the journey
 cannot stay green because the guard went quiet. `scripts/container-check.mjs`, the check the
 `Docker` job runs against the container, is tested the same way by `test/container-check.test.ts`
 (inside `npm test`): it must pass against the real app and fail, naming the check, when the
@@ -402,6 +437,18 @@ backups, updates and a monthly cost estimate (about $4-6).
   are simply not in the chain. A phone that still runs an old copy of the app needs one reload before
   it can save a fill-up (the old form does not send the reading). The odometer of a fill-up that a
   payment depends on can still be corrected, since no money moves; its other fields stay locked.
+- **Car tab.** The tab bar now has seven tabs, so on a phone narrower than 420 px the labels are a
+  little smaller (10.6 px) and the tab you are on is marked by colour and the bar above it, not by
+  bold text (a bold label is the widest one; checked at 320 to 390 px in the system font and in
+  Verdana, never on a real phone). It is a stop-gap until the navigation is redesigned. There is no
+  photo of the damage (that needs file storage, size limits and backups, so it is a separate
+  decision), no reminder or push for the APK date, and the damage list has no cap and works out the
+  driver hint per day, which is fine for a household. The hint is a best match from the drive log,
+  not a ruling, and an open draft is used for up to 24 hours, as for tickets. A repaired report is
+  deleted by its repaired date at day granularity, so one repaired on the first day of the window is
+  kept a little longer than a drive of the same moment would be. Nobody is told when a report is
+  edited, repaired or deleted. The APK is one date: there is no history, only the log line of who
+  changed it.
 - **Notifications are sent once**, after the change is saved, and not retried; a person without a
   device signed up hears nothing and finds it in the Inbox, on the Drives tab or on the History
   screen. There is no per-category mute (the switch is per device), a suggestion that nobody

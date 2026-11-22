@@ -198,7 +198,7 @@ img {
   max-width: 640px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding-bottom: env(safe-area-inset-bottom);
@@ -242,6 +242,22 @@ img {
   position: absolute;
   top: 6px;
   left: calc(50% + 12px);
+  white-space: nowrap; /* "12" must not break into two lines in a narrow tab */
+}
+/* Seven tabs: on a narrow phone each is under 56 px wide (45.7 px at 320), so the label is a little smaller and the
+   count sits closer in. The tab you are on is marked by its colour and the bar above it, not by a heavier weight: a bold
+   label is the widest one, and on a phone whose font is wide (measured with Verdana at 320 px) it would not fit. */
+@media (max-width: 420px) {
+  .tab {
+    padding: 4px 0;
+    font-size: 0.66rem;
+  }
+  .tab[aria-current='page'] {
+    font-weight: 400;
+  }
+  .tab .badge {
+    left: calc(50% + 8px);
+  }
 }
 
 .toast {
@@ -593,8 +609,12 @@ select:disabled {
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 8px;
 }
+textarea {
+  resize: vertical;
+}
 .field.invalid input,
-.field.invalid select {
+.field.invalid select,
+.field.invalid textarea {
   border-color: var(--danger);
   box-shadow: inset 0 0 0 1px var(--danger); /* a thicker edge, so the state is not only a colour change */
 }
@@ -969,6 +989,43 @@ ul.km-list {
   margin: 0;
   padding: 0;
   background: none;
+}
+
+/* ---- the Car tab: the APK card and the damage reports ----------------------- */
+
+.apk-card .apk-state {
+  margin: 6px 0 12px;
+}
+.apk-card .notice {
+  margin-bottom: 12px;
+}
+/* A description is typed by a person: keep their line breaks, and never let one long word widen the page. */
+.damage-text {
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.card.damage.open {
+  border-left: 4px solid var(--warn-text);
+}
+.card.damage.repaired {
+  border-left: 4px solid var(--ok-text);
+}
+.damage .sub {
+  overflow-wrap: anywhere;
+}
+/* The driver hint is a different kind of line from "Reported by": set it apart so the two do not read as one. */
+.damage .damage-hint {
+  margin-top: 6px;
+}
+/* A repaired report recedes through lighter type, like a finished reservation (not opacity: that drops below 4.5:1). */
+.card.damage.repaired .when {
+  font-weight: 400;
+}
+.repair-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 @media (min-width: 700px) {

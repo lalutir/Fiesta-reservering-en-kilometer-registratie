@@ -625,7 +625,7 @@ test('the deployment guide and the README describe the v5 upgrade, going back, a
   }
   assert.ok(guide.includes('Kilometre check'), 'the guide has the subsection');
   assert.match(guide, /pre-migrate-v4\.db[\s\S]*Kilometre check|Kilometre check[\s\S]*pre-migrate-v4\.db/);
-  assert.ok(readme.includes('schema v5'), 'the README layout names schema v5');
+  assert.ok(readme.includes('schema v6'), 'the README layout names the current schema (v6 since the Car tab)');
   assert.ok(readme.includes('**Kilometre check.**'), 'the README lists the feature');
   assert.ok(readme.includes('GAP_TOLERANCE_KM'), 'the README says where the tolerance lives');
 });

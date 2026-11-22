@@ -1,13 +1,14 @@
 // One journey through the app, the way a household member uses it, at 390 px and 320 px:
 // sign in, reserve the car, register the kilometres from the reservation card, look at the
 // History, see the Kilometre check on the Drives tab, find that a fill-up needs its odometer
-// reading, and load the admin page (Users, Reservations and Drives). Every step also asserts the page does not scroll sideways;
+// reading, see the APK prompt and the damage form on the Car tab, and load the admin page (Users,
+// Reservations and Drives). All seven tabs must fit the bar. Every step also asserts the page does not scroll sideways;
 // the guard in ./fixtures.ts fails the test on console errors, uncaught errors, failed requests
 // and error responses.
 //
 // Only getByRole, getByLabel and getByText are used (never CSS or XPath), so the suite survives a
 // rebuilt frontend as long as people still see the same words. All the words are in UI below.
-import { expect, expectNoHorizontalScroll, pastSlot, test } from './fixtures.ts';
+import { expect, expectNoHorizontalScroll, expectTabsFit, pastSlot, test } from './fixtures.ts';
 
 /** What a person reads on screen (see public/strings.js). When the wording changes, change it here only. */
 const UI = {
@@ -20,6 +21,15 @@ const UI = {
   tabReserve: 'Reserve',
   tabHistory: 'History',
   tabDrives: /^Drives/,
+  tabCar: 'Car',
+  tabAccount: 'Account',
+  car: 'Car',
+  apkNotSet: 'The APK expiry date has not been entered yet.',
+  reportDamage: 'Report damage',
+  dateNoticed: 'Date first noticed',
+  whereOnCar: 'Where on the car',
+  damageDescription: 'Description',
+  noDamage: 'No damage reports yet. Report the first one with the form above.',
   newReservation: 'New reservation',
   fromDate: 'From: Date',
   fromTime: 'From: Time',
@@ -48,6 +58,9 @@ const UI = {
   adminReservations: 'Reservations',
   adminDrives: 'Drives',
 } as const;
+
+/** The seven tabs of the bar, by the words on them (a count may follow the name; see expectTabsFit). */
+const ALL_TABS = [UI.tabAgenda, UI.tabReserve, 'Inbox', 'Drives', UI.tabHistory, UI.tabCar, UI.tabAccount];
 
 /**
  * Both projects use the same database, and two reservations may not overlap, so each project
@@ -84,6 +97,11 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await page.getByLabel(UI.password, { exact: true }).fill(password);
     await page.getByRole('button', { name: UI.signIn }).click();
     await expect(mainNav).toBeVisible();
+  });
+
+  await test.step('all seven tabs fit in the bar', async () => {
+    await expectTabsFit(page, 'tab bar', ALL_TABS);
+    await expectNoHorizontalScroll(page, 'tab bar');
   });
 
   await test.step('create a reservation', async () => {
@@ -154,6 +172,22 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await expect(page.getByText(UI.required, { exact: true })).toBeVisible();
     expect(sent, 'no fill-up request without the reading').toBe(0);
     await expectNoHorizontalScroll(page, 'fill-up form with the odometer');
+  });
+
+  await test.step('the Car tab asks for the APK date and offers the damage form (nothing is saved here)', async () => {
+    // Nothing is created: both projects share one database, and the APK date and the damage list are shared by everybody.
+    await mainNav.getByRole('link', { name: UI.tabCar, exact: true }).click();
+    await expect(page.getByRole('heading', { name: UI.car, exact: true })).toBeVisible();
+    await expect(page.getByText(UI.apkNotSet, { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: UI.reportDamage })).toBeVisible();
+    await expect(page.getByLabel(UI.dateNoticed)).toBeVisible();
+    await expect(page.getByLabel(UI.whereOnCar)).toBeVisible();
+    await expect(page.getByLabel(UI.damageDescription, { exact: true })).toBeVisible();
+    await expect(page.getByText(UI.noDamage, { exact: true })).toBeVisible();
+    // With the Car tab current, every label still fits its tab.
+    await expect(mainNav.getByRole('link', { name: UI.tabCar, exact: true })).toHaveAttribute('aria-current', 'page');
+    await expectTabsFit(page, 'tab bar on the Car tab', ALL_TABS);
+    await expectNoHorizontalScroll(page, 'car');
   });
 
   await test.step('load the admin page', async () => {

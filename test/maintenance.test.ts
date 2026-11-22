@@ -371,9 +371,36 @@ test('a backup taken at schema v4 restores, and the app then upgrades it to v5 w
   upgraded.close();
 });
 
-test('a backup of the current version (drafts, fuel, odometer explanations) restores as it was', (tctx) => {
+test('a backup taken at schema v5 restores, and the app then upgrades it to v6 with the data intact, "not set" for the APK and no damage reports', (tctx) => {
+  const e = setup(tctx);
+  e.db.close();
+  // What the release before the Car tab wrote: a v5 file with a drive, a fill-up with its reading and an explanation.
+  const v5File = path.join(e.dir, 'old-v5.db');
+  const old = openDb(v5File, MIGRATIONS.slice(0, 5));
+  addReservation(old, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z');
+  run(old, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, created_by, created_at, updated_at) VALUES (1, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z', 100, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (1, '2026-06-14T11:00:00.000Z', 40000, 6000, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO odometer_explained (item_key, prev_at, note, created_by, created_at, updated_at) VALUES ('k', '2026-06-14T10:00:00.000Z', 'an outsider drove', 1, 'now', 'now')");
+  assert.equal(schemaVersion(old), 5);
+  old.close();
+
+  restoreBackup(e.config, v5File, e.clock.now());
+  const upgraded = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
+  assert.deepEqual(many(upgraded, 'SELECT odometer_start, odometer_end FROM usage'), [{ odometer_start: 100, odometer_end: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT total_cents, odometer FROM fuel'), [{ total_cents: 6000, odometer: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT item_key FROM odometer_explained'), [{ item_key: 'k' }]);
+  assert.deepEqual(many(upgraded, 'SELECT id FROM damage_reports'), [], 'the damage table is there and empty');
+  assert.deepEqual(many(upgraded, 'SELECT id FROM car_apk'), [], 'no APK row: not set');
+  assert.ok(fs.existsSync(path.join(backupDir(e.dir), 'pre-migrate-v5.db')), 'the upgrade left its own copy');
+  upgraded.close();
+});
+
+test('a backup of the current version (drafts, fuel, odometer explanations, damage reports, the APK date) restores as it was', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');
+  run(e.db, "INSERT INTO damage_reports (noticed_on, noticed_by, reported_by, description, location, created_at, updated_at) VALUES ('2026-06-10', NULL, 1, 'A dent in the door', 'left', 'now', 'now')");
+  run(e.db, "INSERT INTO car_apk (id, expires_on, updated_by, updated_at) VALUES (1, '2027-03-01', 1, '2026-06-15T09:00:00.000Z')");
   run(e.db, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, status, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:00:00.000Z', '2026-06-15T09:00:00.000Z', 500, 'draft', 1, 'now', 'now')");
   run(e.db, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (1, '2026-06-15T09:30:00.000Z', 40000, 6000, 512, 1, 'now', 'now')");
   run(e.db, "INSERT INTO odometer_explained (item_key, prev_at, note, created_by, created_at, updated_at) VALUES ('k', '2026-06-15T09:00:00.000Z', 'an outsider drove', 1, 'now', 'now')");
@@ -381,6 +408,8 @@ test('a backup of the current version (drafts, fuel, odometer explanations) rest
   run(e.db, 'DELETE FROM fuel');
   run(e.db, 'DELETE FROM usage');
   run(e.db, 'DELETE FROM odometer_explained');
+  run(e.db, 'DELETE FROM damage_reports');
+  run(e.db, 'DELETE FROM car_apk');
   e.db.close();
 
   restoreBackup(e.config, backup.path, e.clock.now());
@@ -389,5 +418,7 @@ test('a backup of the current version (drafts, fuel, odometer explanations) rest
   assert.deepEqual(many(restored, 'SELECT status, odometer_start, odometer_end FROM usage'), [{ status: 'draft', odometer_start: 500, odometer_end: null }]);
   assert.deepEqual(many(restored, 'SELECT total_cents, odometer FROM fuel'), [{ total_cents: 6000, odometer: 512 }], 'the fill-up reading comes back');
   assert.deepEqual(many(restored, 'SELECT item_key, note FROM odometer_explained'), [{ item_key: 'k', note: 'an outsider drove' }], 'the explanation comes back');
+  assert.deepEqual(many(restored, 'SELECT noticed_on, noticed_by, location, status FROM damage_reports'), [{ noticed_on: '2026-06-10', noticed_by: null, location: 'left', status: 'open' }], 'the damage report comes back');
+  assert.deepEqual(many(restored, 'SELECT id, expires_on FROM car_apk'), [{ id: 1, expires_on: '2027-03-01' }], 'the APK date comes back');
   restored.close();
 });

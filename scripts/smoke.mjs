@@ -354,6 +354,62 @@ try {
     const third = await chain();
     expect(third.items.every((i) => i.kind === 'mismatch') && third.items.length === 2, `the gap is gone: ${JSON.stringify(third.items.map((i) => [i.kind, i.km]))}`);
   });
+
+  // The Car tab. These are calendar dates, so "today" is the household's day (what the server calls today, worked out
+  // here with Intl), and the damage is noticed in 2020, long before any drive of this run: the hint is deterministic.
+  await check('the Car tab: a damage report is filed, repaired once and deleted, the APK date is set, impossible dates are refused and everything needs a login', async () => {
+    const json = { 'Content-Type': 'application/json', Cookie: cookie };
+    const send = (method, url, body, headers = json) => fetch(`${base}${url}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam' }).format(new Date());
+    const [year, month, dayOfMonth] = today.split('-').map(Number);
+    const tomorrow = new Date(Date.UTC(year, month - 1, dayOfMonth + 1)).toISOString().slice(0, 10);
+    const fieldsOf = async (res) => (await res.json()).error?.fields ?? {};
+
+    for (const [method, url] of [['GET', '/api/damage'], ['POST', '/api/damage'], ['PATCH', '/api/damage/1'], ['DELETE', '/api/damage/1'], ['POST', '/api/damage/1/repair'], ['GET', '/api/car/apk'], ['PATCH', '/api/car/apk']]) {
+      const res = await fetch(`${base}${url}`, { method, headers: { 'Content-Type': 'application/json' }, body: method === 'GET' || method === 'DELETE' ? undefined : '{}' });
+      expect(res.status === 401, `${method} ${url} without a login gave ${res.status}`);
+    }
+
+    // The APK: not set to begin with, a leap day is a day, a day that does not exist and a typo of years are refused.
+    const fresh = (await (await send('GET', '/api/car/apk')).json()).apk;
+    expect(fresh.expiresOn === null && fresh.updatedBy === null && fresh.daysLeft === null, `the APK starts as not set: ${JSON.stringify(fresh)}`);
+    const leap = await send('PATCH', '/api/car/apk', { expiresOn: '2028-02-29' });
+    const leapApk = (await leap.json()).apk;
+    expect(leap.status === 200 && leapApk.expiresOn === '2028-02-29' && leapApk.updatedBy?.name && typeof leapApk.daysLeft === 'number', `29 February 2028 is accepted: ${leap.status} ${JSON.stringify(leapApk)}`);
+    const noLeap = await send('PATCH', '/api/car/apk', { expiresOn: '2027-02-29' });
+    expect(noLeap.status === 422 && (await fieldsOf(noLeap)).expiresOn === 'invalid_date', `29 February 2027 gave ${noLeap.status}`);
+    const tooFar = await send('PATCH', '/api/car/apk', { expiresOn: `${year + 6}-01-15` });
+    expect(tooFar.status === 422 && (await fieldsOf(tooFar)).expiresOn === 'too_far_ahead', `six years ahead gave ${tooFar.status}`);
+    expect((await (await send('GET', '/api/car/apk')).json()).apk.expiresOn === '2028-02-29', 'a refused date changes nothing');
+
+    // A damage report: the day must exist and not be in the future, anybody sees it, the hint rests on nothing in 2020.
+    const bad = await send('POST', '/api/damage', { noticedOn: '2026-02-30', location: 'front', description: 'x' });
+    expect(bad.status === 422 && (await fieldsOf(bad)).noticedOn === 'invalid_date', `30 February gave ${bad.status}`);
+    const future = await send('POST', '/api/damage', { noticedOn: tomorrow, location: 'front', description: 'x' });
+    expect(future.status === 422 && (await fieldsOf(future)).noticedOn === 'in_future', `tomorrow gave ${future.status}`);
+    const made = await send('POST', '/api/damage', { noticedOn: '2020-03-14', location: 'front', description: 'Old scratch on the bumper' });
+    const report = (await made.json()).report;
+    expect(made.status === 201 && report.status === 'open' && report.noticedBy?.name === report.reportedBy.name, `a report is filed: ${made.status}`);
+    expect(report.hint.basis === 'none' && report.hint.driver === null, `nobody was on record in 2020: ${JSON.stringify(report.hint)}`);
+    const listed = (await (await send('GET', '/api/damage')).json()).items;
+    expect(listed.some((r) => r.id === report.id && r.can.repair), 'the report is in the list');
+
+    // Repaired once: the second time is a 409 and the date stays.
+    const fixed = await send('POST', `/api/damage/${report.id}/repair`, { repairedOn: today, repairNote: 'Polished' });
+    const fixedReport = (await fixed.json()).report;
+    expect(fixed.status === 200 && fixedReport.status === 'repaired' && fixedReport.repairedOn === today, `marked repaired: ${fixed.status}`);
+    const again = await send('POST', `/api/damage/${report.id}/repair`, { repairedOn: today });
+    expect(again.status === 409, `repairing twice gave ${again.status}`);
+
+    // Somebody else can see it, repair nothing twice, and cannot delete what is not theirs; the person who filed it can.
+    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'smokeben', password: 'smoke-ben-password-1' }) });
+    const ben = { 'Content-Type': 'application/json', Cookie: (login.headers.getSetCookie()[0] ?? '').split(';')[0] };
+    expect(login.status === 200, `Ben signs in ${login.status}`);
+    expect(((await (await send('GET', '/api/damage', undefined, ben)).json()).items).some((r) => r.id === report.id), 'everybody sees every report');
+    expect((await send('DELETE', `/api/damage/${report.id}`, undefined, ben)).status === 403, 'a report of somebody else cannot be deleted');
+    expect((await send('DELETE', `/api/damage/${report.id}`)).status === 204, 'the person who filed it can delete it');
+    expect(!((await (await send('GET', '/api/damage')).json()).items).some((r) => r.id === report.id), 'and it is gone');
+  });
 } catch (err) {
   failures.push('startup');
   console.log(`  FAIL startup: ${err instanceof Error ? err.message : err}`);

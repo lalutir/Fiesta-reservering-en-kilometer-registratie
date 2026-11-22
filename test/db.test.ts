@@ -728,9 +728,9 @@ test('a v4 file with rows upgrades to v5 without losing anything, and leaves one
   const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v4.db');
   assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
 
-  const v5 = openDb(file);
+  const v5 = openDb(file, MIGRATIONS.slice(0, 5));
   assert.equal(schemaVersion(v5), 5);
-  assert.equal(schemaVersion(v5), SCHEMA_VERSION);
+  assert.ok(SCHEMA_VERSION >= 5, 'the app is at v5 or later');
   assert.deepEqual(many(v5, 'SELECT id FROM odometer_explained'), [], 'the new table starts empty: nothing is auto-dismissed');
   assert.deepEqual(many(v5, 'SELECT id, odometer FROM fuel'), [{ id: fuel, odometer: null }], 'existing fill-ups get no reading: nothing is back-filled');
   assert.deepEqual(
@@ -762,7 +762,7 @@ test('a v4 file with rows upgrades to v5 without losing anything, and leaves one
 
   // Opening again changes nothing and does not touch the copy.
   const mtime = fs.statSync(copy).mtimeMs;
-  openDb(file).close();
+  openDb(file, MIGRATIONS.slice(0, 5)).close();
   assert.equal(fs.statSync(copy).mtimeMs, mtime);
 });
 
@@ -772,7 +772,7 @@ test('a v1 file goes straight to v5 in one open, with the odometer column and ta
   addUser(v1);
   v1.close();
 
-  const db = openDb(file);
+  const db = openDb(file, MIGRATIONS.slice(0, 5));
   assert.equal(schemaVersion(db), 5);
   assert.ok(tablesOf(db).includes('odometer_explained'));
   assert.ok(columnsOf(db, 'fuel').includes('odometer'));
@@ -791,7 +791,7 @@ test('the real v5 upgrade is all or nothing: a table already in the way leaves t
   v4.exec('CREATE TABLE odometer_explained (stranger INTEGER)');
   v4.close();
 
-  assert.throws(() => openDb(file), /table odometer_explained already exists/);
+  assert.throws(() => openDb(file, MIGRATIONS.slice(0, 5)), /table odometer_explained already exists/);
 
   const after = openDb(file, MIGRATIONS.slice(0, 4));
   assert.equal(schemaVersion(after), 4, 'the version was not bumped');
@@ -801,7 +801,7 @@ test('the real v5 upgrade is all or nothing: a table already in the way leaves t
   // The way out is to clear the obstacle: the same upgrade then runs from the top.
   after.exec('DROP TABLE odometer_explained');
   after.close();
-  const v5 = openDb(file);
+  const v5 = openDb(file, MIGRATIONS.slice(0, 5));
   assert.equal(schemaVersion(v5), 5);
   assert.ok(columnsOf(v5, 'fuel').includes('odometer'));
   v5.close();
@@ -835,5 +835,211 @@ test('an odometer explanation needs a note of 1 to 500 characters, a UTC time, a
     'one explanation per key',
   );
   assert.throws(() => insert('k5', GOOD, 'ok', 999), /FOREIGN KEY constraint failed/, 'the creator must exist');
+  db.close();
+});
+
+// ------------------------------------------ schema v6 (the Car tab: damage reports and the APK date)
+
+test('a v5 file with rows upgrades to v6 without losing anything, and leaves one pre-migrate-v5 copy that has neither new table', (tctx) => {
+  const file = tempFile(tctx);
+  const v5 = openDb(file, MIGRATIONS.slice(0, 5));
+  assert.equal(schemaVersion(v5), 5);
+  const anna = addUser(v5, 'anna');
+  const ben = addUser(v5, 'ben');
+  const drive = run(
+    v5,
+    "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, km_for, km_user_id, note, created_by, created_at, updated_at) VALUES (?, ?, ?, 100, 160, 'person', ?, 'for ben', ?, ?, ?)",
+    anna,
+    GOOD,
+    LATER,
+    ben,
+    anna,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+  const fuel = run(v5, 'INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (?, ?, 40000, 6000, 20000, ?, ?, ?)', anna, LATER, anna, GOOD, GOOD).lastInsertRowid;
+  const ticket = run(v5, 'INSERT INTO tickets (at_utc, created_by, created_at, updated_at) VALUES (?, ?, ?, ?)', GOOD, anna, GOOD, GOOD).lastInsertRowid;
+  const explained = run(v5, "INSERT INTO odometer_explained (item_key, prev_at, note, created_by, created_at, updated_at) VALUES ('k', ?, 'n', ?, ?, ?)", GOOD, anna, GOOD, GOOD).lastInsertRowid;
+  v5.close();
+
+  const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v5.db');
+  assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
+
+  const v6 = openDb(file);
+  assert.equal(schemaVersion(v6), 6);
+  assert.equal(schemaVersion(v6), SCHEMA_VERSION);
+  assert.deepEqual(many(v6, 'SELECT id FROM damage_reports'), [], 'the new tables start empty');
+  assert.deepEqual(many(v6, 'SELECT id FROM car_apk'), [], 'no APK row: "not set"');
+  assert.deepEqual(many(v6, 'SELECT id, user_id, odometer_end FROM usage'), [{ id: drive, user_id: anna, odometer_end: 160 }], 'drives are untouched');
+  assert.deepEqual(many(v6, 'SELECT id, odometer FROM fuel'), [{ id: fuel, odometer: 20_000 }]);
+  assert.deepEqual(many(v6, 'SELECT id FROM tickets'), [{ id: ticket }]);
+  assert.deepEqual(many(v6, 'SELECT id FROM odometer_explained'), [{ id: explained }]);
+  assert.equal(many(v6, 'SELECT id FROM users').length, 2);
+  assert.deepEqual(columnsOf(v6, 'damage_reports'), [
+    'id', 'noticed_on', 'noticed_by', 'reported_by', 'description', 'location', 'status', 'repaired_on', 'repair_note', 'created_at', 'updated_at',
+  ], 'no driver column: who drove is derived on every read');
+  assert.deepEqual(columnsOf(v6, 'car_apk'), ['id', 'expires_on', 'updated_by', 'updated_at']);
+  v6.close();
+
+  // The copy is a readable v5 database without the new tables, holding the data as it was.
+  assert.ok(fs.existsSync(copy), 'backups/pre-migrate-v5.db was written');
+  const old = openDb(copy, MIGRATIONS.slice(0, 5));
+  assert.equal(schemaVersion(old), 5);
+  assert.ok(!tablesOf(old).includes('damage_reports') && !tablesOf(old).includes('car_apk'));
+  assert.equal(many(old, 'SELECT id FROM usage').length, 1);
+  assert.equal(many(old, 'SELECT id FROM fuel').length, 1);
+  old.close();
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(copy)).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v5.db'],
+    'no temporary file is left behind',
+  );
+
+  // Opening again changes nothing and does not touch the copy.
+  const mtime = fs.statSync(copy).mtimeMs;
+  openDb(file).close();
+  assert.equal(fs.statSync(copy).mtimeMs, mtime);
+});
+
+test('migration 6 is purely additive: every table and index of a v5 file is exactly as it was, and the only new objects are the two tables and their two indexes', (tctx) => {
+  const file = tempFile(tctx);
+  const v5 = openDb(file, MIGRATIONS.slice(0, 5));
+  const objects = (db: Db): Array<{ type: string; name: string; tbl_name: string; sql: string | null }> =>
+    many(db, "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name");
+  const before = objects(v5);
+  v5.close();
+
+  const v6 = openDb(file);
+  const after = objects(v6);
+  v6.close();
+
+  for (const object of before) {
+    assert.deepEqual(after.find((o) => o.type === object.type && o.name === object.name), object, `${object.type} ${object.name} is untouched (same definition, nothing altered or rebuilt)`);
+  }
+  const known = new Set(before.map((o) => `${o.type}:${o.name}`));
+  const added = after.filter((o) => !known.has(`${o.type}:${o.name}`)).map((o) => `${o.type}:${o.name} on ${o.tbl_name}`);
+  assert.deepEqual(added, ['index:damage_noticed on damage_reports', 'index:damage_repaired on damage_reports', 'table:car_apk on car_apk', 'table:damage_reports on damage_reports']);
+  assert.equal(after.length, before.length + 4);
+});
+
+test('a v4 file goes straight to v6 in one open, with the one copy of what it was', (tctx) => {
+  const file = tempFile(tctx);
+  const v4 = openDb(file, MIGRATIONS.slice(0, 4));
+  addUser(v4);
+  v4.close();
+
+  const db = openDb(file);
+  assert.equal(schemaVersion(db), 6);
+  assert.ok(tablesOf(db).includes('damage_reports') && tablesOf(db).includes('car_apk'));
+  assert.ok(tablesOf(db).includes('odometer_explained'), 'the v5 step ran first');
+  db.close();
+  assert.deepEqual(
+    fs.readdirSync(path.join(path.dirname(file), 'backups')).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v4.db'],
+    'one copy, of the version the file was at, before the first step',
+  );
+});
+
+test('the real v6 upgrade is all or nothing: a table already in the way leaves the v5 file as it was, with neither new table, and a retry works', (tctx) => {
+  const file = tempFile(tctx);
+  const v5 = openDb(file, MIGRATIONS.slice(0, 5));
+  const anna = addUser(v5);
+  const drive = addUsage(v5, anna);
+  // The second table of the step is the one in the way: the first one was already created when it fails.
+  v5.exec('CREATE TABLE car_apk (stranger INTEGER)');
+  v5.close();
+
+  assert.throws(() => openDb(file), /table car_apk already exists/);
+
+  const after = openDb(file, MIGRATIONS.slice(0, 5));
+  assert.equal(schemaVersion(after), 5, 'the version was not bumped');
+  assert.ok(!tablesOf(after).includes('damage_reports'), 'the first CREATE TABLE was rolled back with the rest of the step');
+  assert.deepEqual(columnsOf(after, 'car_apk'), ['stranger'], 'the stranger table is untouched');
+  assert.deepEqual(many(after, 'SELECT id, user_id FROM usage'), [{ id: drive, user_id: anna }], 'the data is untouched');
+  // The way out is to clear the obstacle: the same upgrade then runs from the top.
+  after.exec('DROP TABLE car_apk');
+  after.close();
+  const v6 = openDb(file);
+  assert.equal(schemaVersion(v6), 6);
+  assert.deepEqual(columnsOf(v6, 'car_apk'), ['id', 'expires_on', 'updated_by', 'updated_at']);
+  assert.ok(tablesOf(v6).includes('damage_reports'));
+  v6.close();
+});
+
+const INSERT_DAMAGE =
+  'INSERT INTO damage_reports (noticed_on, noticed_by, reported_by, description, location, status, repaired_on, repair_note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+/** One damage row with sensible defaults; `over` replaces fields by name. */
+function addDamage(db: Db, by: number, over: Partial<{ noticedOn: string; noticedBy: number | null; description: string; location: string; status: string; repairedOn: string | null; repairNote: string }> = {}): number {
+  const v = { noticedOn: '2026-06-10', noticedBy: null, description: 'A dent', location: 'front', status: 'open', repairedOn: null, repairNote: '', ...over };
+  return run(db, INSERT_DAMAGE, v.noticedOn, v.noticedBy, by, v.description, v.location, v.status, v.repairedOn, v.repairNote, GOOD, GOOD).lastInsertRowid;
+}
+
+test('damage dates are real calendar days in 2000 to 2100: the database refuses 2026-02-30 and 2026-13-01 too, not only the API', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  for (const good of ['2026-06-10', '2028-02-29', '2000-01-01', '2100-12-31', '2026-12-31']) {
+    assert.ok(addDamage(db, anna, { noticedOn: good }) > 0, `noticed ${good} is accepted`);
+  }
+  // `date(x) = x` would let the NULL ones through (a CHECK that evaluates to NULL passes): these must all fail.
+  for (const bad of ['2026-02-30', '2027-02-29', '2026-13-01', '2026-00-10', '2026-01-00', '2026-04-31', '2026-1-5', '1999-12-31', '2101-01-01', '2026-06-10T10:00:00Z', '2026-06-10 ', '20260610', '']) {
+    assert.throws(() => addDamage(db, anna, { noticedOn: bad }), /CHECK constraint failed/, `noticed ${JSON.stringify(bad)}`);
+  }
+  // Noticed on the first possible day, so that "not before it was noticed" cannot be what refuses these: only the date CHECK can.
+  for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10', '2026-06-10T10:00:00Z', '2027-02-29']) {
+    assert.throws(() => addDamage(db, anna, { noticedOn: '2000-01-01', status: 'repaired', repairedOn: bad }), /CHECK constraint failed/, `repaired ${JSON.stringify(bad)}`);
+  }
+  assert.ok(addDamage(db, anna, { noticedOn: '2000-01-01', status: 'repaired', repairedOn: '2028-02-29' }) > 0);
+  assert.throws(() => addDamage(db, anna, { noticedOn: null as unknown as string }), /NOT NULL constraint failed/, 'the noticed date is required');
+  db.close();
+});
+
+test('a damage report has a description of 1 to 1000 characters, a location from the list, a status, and repaired_on exactly when it is repaired', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  const ben = addUser(db, 'ben');
+  assert.ok(addDamage(db, anna, { description: 'x'.repeat(1000) }) > 0);
+  for (const bad of ['', '   ', 'x'.repeat(1001)]) {
+    assert.throws(() => addDamage(db, anna, { description: bad }), /CHECK constraint failed/, `description of ${bad.length} characters`);
+  }
+  for (const location of ['front', 'rear', 'left', 'right', 'roof', 'interior', 'wheels_tyres', 'windows', 'mechanical', 'other']) {
+    assert.ok(addDamage(db, anna, { location }) > 0, location);
+  }
+  for (const bad of ['', 'FRONT', 'bonnet', 'front ']) assert.throws(() => addDamage(db, anna, { location: bad }), /CHECK constraint failed/, JSON.stringify(bad));
+  assert.throws(() => addDamage(db, anna, { status: 'fixed' }), /CHECK constraint failed/, 'status is open or repaired');
+
+  // The pairing, in both directions.
+  assert.throws(() => addDamage(db, anna, { status: 'repaired', repairedOn: null }), /CHECK constraint failed/, 'repaired needs its date');
+  assert.throws(() => addDamage(db, anna, { status: 'open', repairedOn: '2026-06-12' }), /CHECK constraint failed/, 'open has no repaired date');
+  assert.ok(addDamage(db, anna, { status: 'repaired', repairedOn: '2026-06-12', repairNote: 'Fixed at the garage' }) > 0);
+  assert.ok(addDamage(db, anna, { status: 'repaired', repairedOn: '2026-06-10' }) > 0, 'repaired on the day it was noticed');
+  assert.throws(() => addDamage(db, anna, { status: 'repaired', repairedOn: '2026-06-09' }), /CHECK constraint failed/, 'not before it was noticed');
+  assert.throws(() => addDamage(db, anna, { status: 'open', repairNote: 'a note on an open report' }), /CHECK constraint failed/, 'an open report has no repair note');
+  assert.throws(() => addDamage(db, anna, { status: 'repaired', repairedOn: '2026-06-12', repairNote: 'x'.repeat(501) }), /CHECK constraint failed/, 'a repair note over 500 characters');
+
+  // Who noticed it: nobody (unknown) or a real person; who reported it: a real person.
+  assert.ok(addDamage(db, anna, { noticedBy: null }) > 0, 'unknown is NULL');
+  assert.ok(addDamage(db, anna, { noticedBy: ben }) > 0);
+  assert.throws(() => addDamage(db, anna, { noticedBy: 999 }), /FOREIGN KEY constraint failed/);
+  assert.throws(() => addDamage(db, 999), /FOREIGN KEY constraint failed/, 'the reporter must exist');
+  assert.equal(one<{ status: string; repair_note: string }>(db, 'SELECT status, repair_note FROM damage_reports WHERE id = 1')?.status, 'open', 'new rows are open');
+  db.close();
+});
+
+test('the APK record is one row (id 1) with a real calendar date, a UTC update time and a real updater', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  const insert = (id: number, expiresOn: string, at = GOOD, by = anna): number =>
+    run(db, 'INSERT INTO car_apk (id, expires_on, updated_by, updated_at) VALUES (?, ?, ?, ?)', id, expiresOn, by, at).lastInsertRowid;
+  assert.deepEqual(many(db, 'SELECT id FROM car_apk'), [], 'a fresh database has no row: "not set"');
+  assert.throws(() => insert(2, '2027-06-10'), /CHECK constraint failed/, 'only id 1');
+  assert.throws(() => insert(0, '2027-06-10'), /CHECK constraint failed/);
+  for (const bad of ['2027-02-29', '2026-02-30', '2026-13-01', '2026-00-10', '1999-12-31', '2101-01-01', '2027-6-1', '2027-06-10T00:00:00Z', '']) {
+    assert.throws(() => insert(1, bad), /CHECK constraint failed/, `expires ${JSON.stringify(bad)}`);
+  }
+  assert.throws(() => insert(1, '2027-06-10', '2026-06-15 10:00:00'), /CHECK constraint failed/, 'the update time has the UTC shape');
+  assert.throws(() => insert(1, '2027-06-10', GOOD, 999), /FOREIGN KEY constraint failed/, 'the updater must exist');
+  assert.ok(insert(1, '2028-02-29') > 0, 'a leap day');
+  assert.throws(() => insert(1, '2029-01-01'), (err: unknown) => isUniqueViolation(err), 'a second row with id 1 is refused');
   db.close();
 });

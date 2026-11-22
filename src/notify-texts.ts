@@ -8,7 +8,8 @@
 //     message may hold about a kilobyte, so names are shortened here and bodies stay a sentence or two.
 //   * Never a note, a reason or a price that was not already the point of the message. A lock screen
 //     is not the place for them; the notification opens the screen that has them. A traffic ticket
-//     message has neither its price nor its reason.
+//     message has neither its price nor its reason. A damage report is the exception that proves the
+//     rule: its description is the point of the message, so a clipped line of it is shown.
 //   * Times are written for the household time zone, like everywhere else in the app.
 import { formatLocal } from '../shared/time.js';
 import { formatCents } from './payments.ts';
@@ -20,11 +21,12 @@ export interface Text {
 
 /** Names come from users and end up in a notification: keep them short. */
 const MAX_NAME = 40;
-export const short = (name: string): string => {
-  // By code point, so a name is never cut in the middle of an emoji.
-  const chars = [...name];
-  return chars.length > MAX_NAME ? `${chars.slice(0, MAX_NAME - 1).join('')}…` : name;
+/** Cut a text to `max` characters, ending in an ellipsis when it was cut. By code point, so it is never cut in the middle of an emoji. */
+const clip = (text: string, max: number): string => {
+  const chars = [...text];
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
 };
+export const short = (name: string): string => clip(name, MAX_NAME);
 
 const when = (instant: string, tz: string): string => formatLocal(instant, tz, 'datetime');
 const range = (start: string, end: string, tz: string): string => `${when(start, tz)} – ${when(end, tz)}`;
@@ -229,4 +231,33 @@ export function ticket(p: { actor: string; variant: 'added' | 'changed' | 'remov
   return p.deleted
     ? { title: `${who} deleted a traffic ticket`, body: `The ticket dated ${at}, which was linked to you, is gone.` }
     : { title: `${who} changed a traffic ticket`, body: `The ticket dated ${at} is no longer linked to you.` };
+}
+
+// ---------------------------------------------------------------------- damage reports
+
+/**
+ * Where on the car, as a message says it. The keys are the locations of src/car.ts and the words are those of
+ * S.car.location in public/strings.js; test/car.test.ts keeps the three lists equal.
+ */
+export const LOCATION_LABEL: Readonly<Record<string, string>> = {
+  front: 'Front',
+  rear: 'Rear',
+  left: 'Left side',
+  right: 'Right side',
+  roof: 'Roof',
+  interior: 'Interior',
+  wheels_tyres: 'Wheels and tyres',
+  windows: 'Windows',
+  mechanical: 'Mechanical',
+  other: 'Other',
+};
+
+/** How much of a damage description goes on a lock screen. */
+const MAX_DESCRIPTION = 120;
+
+/** Somebody reported damage to the car: who, where on it and the start of what they wrote (one line, cut by code point). */
+export function damageReported(p: { actor: string; location: string; description: string }): Text {
+  const where = LOCATION_LABEL[p.location] ?? 'Other';
+  const what = clip(p.description.replace(/\s+/g, ' ').trim(), MAX_DESCRIPTION);
+  return { title: `${short(p.actor)} reported damage to the car`, body: `${where}: ${what} Open Car to see it.` };
 }

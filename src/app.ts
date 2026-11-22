@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { LoginLimiter, authenticate } from './auth.ts';
 import type { Clock, Config } from './config.ts';
+import { registerCarRoutes } from './car.ts';
 import type { Db } from './db.ts';
 import {
   HttpError,
@@ -74,6 +75,7 @@ export function createApp(deps: AppDeps): App {
   registerUsageRoutes(router, ctx, notifier);
   registerFuelRoutes(router, ctx, notifier);
   registerTicketRoutes(router, ctx, notifier);
+  registerCarRoutes(router, ctx, notifier);
   registerOdometerRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
