@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import { getMeta, many, one, run, setMeta, tx, type Db, type PushSubscriptionRow } from './db.ts';
 import { HttpError, me, noContent, ok, type Ctx, type Router } from './http.ts';
+import { testNotification } from './notify-texts.ts';
 import { Fields, ValidationError } from './validate.ts';
 import { encryptPayload, fromB64u, generateVapidKeys, publicKeyOf, vapidAuthorization, type VapidKeys } from './webpush.ts';
 
@@ -231,7 +232,7 @@ export function registerPushRoutes(router: Router, ctx: Ctx, push: PushService):
     lastTest.set(actor.id, nowMs);
     let sent = 0;
     for (const sub of subs) {
-      const outcome = await push.send(sub, { title: 'Test notification', body: 'Reminders work on this device.', url: '/#/account', tag: 'test' });
+      const outcome = await push.send(sub, { ...testNotification(), url: '/#/account', tag: 'test' });
       if (outcome === 'ok') sent++;
     }
     return ok({ sent, devices: subs.length });

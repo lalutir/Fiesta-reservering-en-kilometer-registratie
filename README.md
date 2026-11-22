@@ -38,6 +38,20 @@ plus an admin page for the person who manages it.
 - **Reminders.** A phone notification (Web Push) 30 minutes before a reservation starts, when
   it ends, and once more an hour later if the kilometres are still missing. Each person turns it
   on per device on the Account page. On an iPhone the app must be on the Home Screen (iOS 16.4+).
+- **Notifications for what somebody else does on your behalf.** When person A creates, changes or
+  deletes something that is B's, B gets a push (one per device, and never A): a reservation
+  suggested for you (and its change or withdrawal), your suggestion approved or declined, your
+  reservation edited or cancelled by someone else such as an admin, a drive logged, changed or
+  deleted in your name or on your reservation ("I drove this"), kilometres registered as yours by
+  another driver (and changes or removals), a fill-up edited or deleted that changes your share, a
+  fill-up entered in your name, your share marked paid or unpaid, the fueler hearing that a debtor
+  pressed **I have paid**, and a traffic ticket entered, changed or deleted for a moment the app has
+  you down as the driver (no price or reason in the text). The Account page lists them. There are
+  no per-category settings: the one switch is Reminders on or off for the device, and without a
+  device signed up the Inbox, the banners and the History screen carry the news as before.
+  **This reverses two earlier defaults:** attributing kilometres to someone used to send them no
+  push, and the fueler used to get no push when a debtor pressed "I have paid". Who may do what
+  has not changed.
 - **Fuel and costs.** Record who fuelled, when, the odometer reading, litres and price. The cost is split by the
   kilometres that count for each person since the previous fill-up, exact to the cent, with a
   running "who owes whom" and paid status. **Admins do not pay for fuel**: their own kilometres are
@@ -123,6 +137,12 @@ plus an admin page for the person who manages it.
 - **Web Push without a library.** VAPID signing and message encryption use `node:crypto` and
   `fetch` (checked against the RFC 8291 test vector), so there is still no runtime dependency.
   Subscription addresses are only accepted for the four push services the browsers use.
+- **One notifier, one table, one texts file.** Routes call `notifier.emit(kind, () => payload)` after
+  saving; `src/notify.ts` then (after the response is written) asks the event's row in its table who
+  is told, drops the actor and anybody inactive, and sends one push per device, tagged per record so
+  a later change replaces the earlier notification. Failures are logged by name and never reach the
+  request. A new event (the damage report for everybody is next) is one payload type, one table row
+  and one `emit` call. All wording is in `src/notify-texts.ts`.
 - **Upgrades keep a copy.** Before the first migration that changes an existing database the app
   writes `backups/pre-migrate-v<old>.db`.
 - The Inbox tab and its badge show suggestions waiting for your answer; the Drives tab and its
@@ -165,7 +185,7 @@ Data lives in `data/` (git-ignored).
 | `npm run typecheck` | Type-check the server and tests, and the browser code (`checkJs`) |
 | `npm run lint` | ESLint (also bans `innerHTML` in browser code) |
 | `npm run build` | Compile `src/` and `shared/` to `dist/` |
-| `npm run smoke` | Build, start the built server on a free port and check it over HTTP |
+| `npm run smoke` | Build, start the built server on a free port and check it over HTTP; a second built server with push on and `fetch` stubbed checks who is notified (nothing leaves the machine) |
 | `npm run check` | typecheck, lint, test, build and smoke in one go |
 | `npm run e2e` | Browser suite (Playwright) at 390 and 320 px; run `npx playwright install chromium` once first |
 | `npm run cli -- <command>` | Operator commands: `create-admin`, `reset-password`, `backup`, `restore`, `purge` |
@@ -179,7 +199,8 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   auth.ts     passwords, sessions, login throttle                  users.ts    login and user admin
   reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
   fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
-  fuel-carry.ts  carried-over amounts and settlement (pure)        fuel-notify.ts  the push for a new fill-up
+  fuel-carry.ts  carried-over amounts and settlement (pure)        notify.ts   the one notifier and its event table
+  notify-texts.ts  every word of every notification (translate here)
   tickets.ts  traffic tickets and who was driving at the time       odometer.ts  the odometer chain, its gaps and explanations
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
@@ -189,7 +210,7 @@ shared/     time.js: time zone, DST and calendar-month maths, used by the server
 public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views,
             kmcheck.js the Kilometre check: prefill, warnings, the findings list) and public/admin/ (admin page)
 test/       tests (API integration tests plus unit tests)
-scripts/    icon generator, the built-output smoke test and the container check CI runs
+scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
 .github/    the CI workflow and Dependabot config (`.nvmrc` is the Node version CI uses)
 docs/       DEPLOYMENT.md
@@ -381,8 +402,12 @@ backups, updates and a monthly cost estimate (about $4-6).
   are simply not in the chain. A phone that still runs an old copy of the app needs one reload before
   it can save a fill-up (the old form does not send the reading). The odometer of a fill-up that a
   payment depends on can still be corrected, since no money moves; its other fields stay locked.
-- The fill-up push is sent once, after saving, and not retried; a person without a device signed up
-  for reminders hears nothing and finds the amount on the History screen.
+- **Notifications are sent once**, after the change is saved, and not retried; a person without a
+  device signed up hears nothing and finds it in the Inbox, on the Drives tab or on the History
+  screen. There is no per-category mute (the switch is per device), a suggestion that nobody
+  answers still lapses without a reminder, and a drive that only overlaps somebody's reservation in
+  time (without being linked to it) does not notify the reservation's owner. Real delivery to
+  phones has never been tried by the authors.
 - Km are obliged by validation and nagging, not by blocking new reservations. After the upgrade,
   older reservations without a drive show up as "km to register" until they are cancelled or
   registered.

@@ -18,6 +18,7 @@
 // instant) the one that started later wins. A deactivated driver is still named.
 import { many, one, run, type Db, type TicketRow } from './db.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
+import type { Notifier, Person } from './notify.ts';
 import { Fields, assertPastInsideWindow } from './validate.ts';
 
 /** The most a ticket can cost, in cents (10,000.00 EUR): the same cap as a fill-up. */
@@ -125,13 +126,16 @@ function toDto(db: Db, row: TicketJoin, actor: Principal): TicketDto {
   };
 }
 
+/** The driver as the notifier names a person. */
+const personOf = (driver: Driver | null): Person | null => (driver ? { id: driver.id, name: driver.name } : null);
+
 function loadTicket(db: Db, id: number): TicketJoin {
   const row = one<TicketJoin>(db, `${SELECT_TICKET} WHERE t.id = ?`, id);
   if (!row) throw new HttpError(404, 'not_found', 'Ticket not found');
   return row;
 }
 
-export function registerTicketRoutes(router: Router, ctx: Ctx): void {
+export function registerTicketRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {
   const { db, config } = ctx;
 
   const view = (actor: Principal, id: number): TicketDto => toDto(db, loadTicket(db, id), actor);
@@ -167,6 +171,14 @@ export function registerTicketRoutes(router: Router, ctx: Ctx): void {
     const created = view(actor, id);
     // Never the reason or the price: a log line is not the place for them.
     ctx.log({ event: 'ticket.created', id, by: actor.id, basis: created.basis });
+    // The person the app has down as the driver at that moment hears of it (never the price or the reason).
+    notifier?.emit('ticket.changed', () => ({
+      actor,
+      change: 'created',
+      ticket: { id, at: created.at, atBefore: created.at },
+      driverBefore: null,
+      driverAfter: personOf(created.driver),
+    }));
     return ok({ ticket: created }, 201);
   });
 
@@ -189,6 +201,8 @@ export function registerTicketRoutes(router: Router, ctx: Ctx): void {
     // Only a time that is being changed is checked: a ticket that has aged toward the edge of the
     // window must still be able to get its price or reason corrected.
     if (at !== undefined && at !== existing.at_utc) assertPastInsideWindow(at, now, config.tz, config.windowMonths);
+    // Who the ticket named before this change: moving its time can move it to somebody else.
+    const was = notifier?.capture(() => ({ driver: personOf(whoDrove(db, existing.at_utc).driver) }));
     run(
       db,
       'UPDATE tickets SET at_utc = ?, amount_cents = ?, reason = ?, updated_at = ? WHERE id = ?',
@@ -200,6 +214,10 @@ export function registerTicketRoutes(router: Router, ctx: Ctx): void {
     );
     const updated = view(actor, id);
     ctx.log({ event: 'ticket.updated', id, by: actor.id, basis: updated.basis });
+    notifier?.emit('ticket.changed', () => {
+      if (!was) throw new Error('no snapshot of the ticket driver before the change');
+      return { actor, change: 'updated', ticket: { id, at: updated.at, atBefore: existing.at_utc }, driverBefore: was.driver, driverAfter: personOf(updated.driver) };
+    });
     return ok({ ticket: updated });
   });
 
@@ -208,9 +226,16 @@ export function registerTicketRoutes(router: Router, ctx: Ctx): void {
     const id = idParam(req.params['id']);
     const existing = loadTicket(db, id);
     if (!mayManage(actor, existing)) throw new HttpError(403, 'forbidden', 'Only the person who entered a ticket or an admin can delete it');
-    const { basis } = whoDrove(db, existing.at_utc);
+    const { driver, basis } = whoDrove(db, existing.at_utc);
     run(db, 'DELETE FROM tickets WHERE id = ?', id);
     ctx.log({ event: 'ticket.deleted', id, by: actor.id, basis });
+    notifier?.emit('ticket.changed', () => ({
+      actor,
+      change: 'deleted',
+      ticket: { id, at: existing.at_utc, atBefore: existing.at_utc },
+      driverBefore: personOf(driver),
+      driverAfter: null,
+    }));
     return noContent();
   });
 }

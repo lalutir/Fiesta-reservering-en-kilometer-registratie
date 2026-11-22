@@ -1340,6 +1340,34 @@ test('reminders: where push cannot work the card says why (iPhone in a Safari ta
   }
 });
 
+test('the Account page lists what you get notified about, next to the reminders, and only where the server has notifications on', async () => {
+  const N = S.account.notifications;
+  const heading = (page: unknown) => all(page, 'h3').find((h3) => h3.textContent === N.title);
+  const browser = installFakeBrowser();
+  try {
+    await withClient({ now: NOW, routes: accountRoutes() }, async ({ dom }) => {
+      const page = view(dom, await accountPage(makeApp(ANNA)));
+      const card = heading(page)?.parent;
+      assert.ok(card, 'the list is on the page');
+      assert.deepEqual(
+        all(card, 'li').map((li) => li.textContent),
+        N.items,
+        'one line per kind of notification, in the order of the strings file',
+      );
+      assert.ok(all(card, 'p').some((p) => p.textContent === N.intro), 'it says that you never hear about your own actions');
+      assert.ok(all(card, 'p.hint').some((p) => p.textContent === N.fallback), 'and that the Inbox and the banners still carry everything');
+      assert.equal(all(card, 'button').length + all(card, 'input').length + all(card, 'select').length, 0, 'there is nothing to switch per category: the one switch is the Reminders card');
+      const order = all(page, 'h3').map((h3) => h3.textContent);
+      assert.ok(order.indexOf(S.account.reminders.title) < order.indexOf(N.title), 'the list follows the Reminders card');
+    });
+    await withClient({ now: NOW, routes: accountRoutes({ 'GET /api/push/key': () => ({ enabled: false }) }) }, async ({ dom }) => {
+      assert.equal(heading(view(dom, await accountPage(makeApp(ANNA)))), undefined, 'nothing is promised when the server cannot send');
+    });
+  } finally {
+    browser.uninstall();
+  }
+});
+
 test("sign out: this device stops getting the signed-out person's reminders first, and signing out works whatever happens to that", async () => {
   for (const [name, unsubscribeAnswer, expectedUnsubscribed] of [
     ['clean-up works', new Reply(null, 204), 1],

@@ -1,6 +1,7 @@
 import { isUniqueViolation, many, one, run, tx, type Db, type KmFor, type UsageRow, type UsageStatus } from './db.ts';
 import { requestedPeriods } from './fuel.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
+import type { Notifier, UsageSnap } from './notify.ts';
 import { listConfirmed, listUnregistered } from './reservations.ts';
 import { Fields, MAX_ODOMETER, ValidationError, assertInsideWindow, failIfAny, queryRange, queryUserId, windowBounds } from './validate.ts';
 
@@ -47,6 +48,29 @@ export interface UsageDto {
 
 const SELECT = `SELECT g.*, u.display_name AS user_name, ku.display_name AS km_user_name
   FROM usage g JOIN users u ON u.id = g.user_id LEFT JOIN users ku ON ku.id = g.km_user_id`;
+
+/**
+ * The drive as the notifier needs it, taken at one moment: who drove, whose kilometres they are, and
+ * whose reservation it is on (a drive that is linked to somebody else's reservation concerns its owner too).
+ */
+function snapOf(db: Db, row: UsageJoin): UsageSnap {
+  const reservation = row.reservation_id === null ? undefined : one<{ user_id: number; start_utc: string }>(db, 'SELECT user_id, start_utc FROM reservations WHERE id = ?', row.reservation_id);
+  const both = row.odometer_start !== null && row.odometer_end !== null;
+  return {
+    id: row.id,
+    driverId: row.user_id,
+    driverName: row.user_name,
+    status: row.status,
+    start: row.start_utc,
+    km: both ? (row.odometer_end as number) - (row.odometer_start as number) : null,
+    kmFor: row.km_for,
+    kmUserId: row.km_user_id,
+    note: row.note,
+    reservationId: row.reservation_id,
+    reservationOwnerId: reservation?.user_id ?? null,
+    reservationStart: reservation?.start_utc ?? null,
+  };
+}
 
 function mayChange(actor: Principal, row: UsageRow): boolean {
   return actor.role === 'admin' || actor.id === row.user_id;
@@ -267,7 +291,7 @@ function readDays(query: URLSearchParams): number {
   return n;
 }
 
-export function registerUsageRoutes(router: Router, ctx: Ctx): void {
+export function registerUsageRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {
   const { db, config } = ctx;
 
   router.add('GET', '/api/usage', 'user', (req) => {
@@ -466,6 +490,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
       return mapDraftRace(db, userId, err);
     }
     ctx.log({ event: 'usage.created', id: created.id, by: actor.id, userId, status: created.status });
+    // In somebody else's name (an admin), as their kilometres (another driver) or on their reservation ("I drove this"): they hear of it.
+    notifier?.emit('usage.changed', () => ({ actor, change: 'created', before: null, after: snapOf(db, created) }));
     return ok({ usage: toDto(created, actor, lockedFor(db, actor)(created)) }, 201);
   });
 
@@ -475,6 +501,8 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     const body = await req.json();
     const existing = load(db, id);
     if (!mayChange(actor, existing)) throw new HttpError(403, 'forbidden', 'You are not allowed to change that record');
+    // What the drive was before this change, for the people it concerned (taken before anything is written).
+    const was = notifier?.capture(() => snapOf(db, existing));
     const f = new Fields(body);
     const status = f.oneOf('status', STATUSES, { optional: true }) ?? existing.status;
     const userId = f.int('userId', { optional: true, min: 1 }) ?? existing.user_id;
@@ -543,6 +571,10 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
       return mapDraftRace(db, input.userId, err);
     }
     ctx.log({ event: 'usage.updated', id, by: actor.id, status: updated.status });
+    notifier?.emit('usage.changed', () => {
+      if (!was) throw new Error('no snapshot of the drive before the change');
+      return { actor, change: 'updated', before: was, after: snapOf(db, updated) };
+    });
     return ok({ usage: toDto(updated, actor, lockedFor(db, actor)(updated)) });
   });
 
@@ -554,6 +586,7 @@ export function registerUsageRoutes(router: Router, ctx: Ctx): void {
     assertNotFuelLocked(db, actor, row, null);
     run(db, 'DELETE FROM usage WHERE id = ?', id);
     ctx.log({ event: 'usage.deleted', id, by: actor.id, userId: row.user_id });
+    notifier?.emit('usage.changed', () => ({ actor, change: 'deleted', before: snapOf(db, row), after: null }));
     return noContent();
   });
 }

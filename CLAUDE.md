@@ -803,6 +803,97 @@ Defaults taken (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/odometer-continuity-gap-check` (git-excluded). Base commit `c7be287ebad32b80dc885f260b64276df9ca218a`.
 <!-- implement:run:odometer-continuity-gap-check:end -->
 
+<!-- implement:run:push-notifications-on-behalf:start -->
+### Push notifications for everything somebody else enters, changes or removes on a person's behalf (push-notifications-on-behalf)
+
+Date 2026-11-22. Branch `implement/push-notifications-on-behalf`, created from `origin/main` at `a3953c1b445e3526e377ea9394d3f99c28559df6` (the checkout was on a stale branch that lacked the CI and odometer work, so it was fetched and branched first). Nothing is committed.
+
+### Request
+
+> Send a push notification for everything that somebody else enters, changes or removes on a person's behalf. Today push exists only for the km reminders and for a new fill-up. A suggestion for you is only visible after you open the app, and unanswered suggestions lapse silently. General rule: when person A creates, changes or deletes something whose owner or subject is person B (B different from A), B gets a push. Never notify someone about their own action. Build it as ONE central notifier, following the existing fuel-notify.ts pattern, with an event table and not scattered calls. It runs after the response is sent, never fails or delays the request, is awaited by App.idle() and close(), and sends one push per device. Use a tag per record so later changes replace earlier ones. Put ALL notification texts in one module so the later Dutch translation is a single edit. Deep-link every notification to the right screen. Events: (1) a reservation suggestion made for you; (2) your suggestion approved or declined, and the suggester withdrawing one that was in your inbox; (3) a reservation of yours edited or cancelled by someone else; (4) a drive logged, edited or deleted in your name by someone else, including an admin and another member's "I drove this" on your reservation; (5) kilometres attributed to you by another driver, and edits or removals of that; (6) fuel: an edited or deleted fill-up that changes your share, the fueler or an admin marking your share paid or unpaid, the fueler getting a push when a debtor presses "I have paid"; (7) a traffic ticket entered or edited whose derived driver is you, text free of price and reason; (8) design the notifier so the damage-report push (all other users) plugs in without refactoring. Points 5 and 6 reverse two earlier defaults recorded in CLAUDE.md; say so in the docs. Do not change who is allowed to do what, and do not add per-category settings: list on the Account page what you get notified about and mention per-category mute as a follow-up. The existing fallback (Inbox and banners) must keep working. Add tests per event (fires, not to yourself, not without a subscription or with push disabled, a push failure does not affect the response). Update README and DEPLOYMENT, extend the smoke test, state what could not be verified.
+
+### What was built
+
+`src/notify.ts` is the one notifier. A route saves its change and calls `notifier.emit(kind, () => payload)` just before it answers; after the response is written the notifier asks the event's row in a table (`EVENTS`) who is told, drops the actor, the deactivated and anybody without a device, composes the text, and sends one push per device with a tag per record. `src/notify-texts.ts` holds every word of every notification, including the reminders, the existing new-fill-up push and the test notification, which moved there. The old `src/fuel-notify.ts` is gone: the new-fill-up push is now one row of the table. Nine events are covered (reservation suggested, answered, changed, deleted; drive changed; fill-up created, changed; share paid or unpaid; ticket changed). The Account page lists what you get notified about. The damage-report push needs one payload type, one table row and one `emit` call (a test plugs a made-up broadcast event in exactly like that).
+
+### Why this approach
+
+- Chosen: one engine plus a typed event table. A row is `who / text / link / tag`; the engine owns the rules that must never be forgotten (drop the actor, drop the inactive, first entry per person wins, per-device sends, fit to what the service worker shows, errors logged by name only). Events carry plain snapshots taken by the route, so nothing depends on database state after the response.
+- Rejected: calls scattered in the routes with their own recipient logic (this is what the request forbids), and one notifier class per module like the old fuel one (would duplicate the engine nine times).
+- Rejected: per-category settings (explicitly out of scope).
+
+### How it works
+
+Start with `src/notify.ts` (the header comment, then `EVENTS`, then `createNotifier`), then `src/notify-texts.ts`.
+
+- Audience per event. Reservation: the person it is for (confirmed) or the person it is for and the suggester (pending); declined and lapsed suggestions tell nobody. Drive: the driver, the person whose kilometres they are, and the owner of the linked reservation, first reason wins per person; an edit that changes nothing tells nobody; a person a drive moved away from hears "taken off your name". Fill-up: debtors with a share above zero (as before) and the fueler when somebody else registered it; edited or deleted: the fueler when somebody else did it, and each debtor whose share of any fill-up moved (compared with snapshots taken before and after). Paid: the debtor when the fueler or an admin marks it, the fueler when the debtor says "I have paid"; a repeated press changed nothing and tells nobody. Ticket: the derived driver, and the previous driver when the ticket's time moved to somebody else.
+- Never the actor: `notify.ts` puts the actor in the "already told" set, so no row can forget it. Without push (`PUSH_ENABLED=false` or no https address) `emit` returns before building anything.
+- After the response: `emit` builds the payload at once, then schedules the work with `setImmediate` and tracks it, so `App.idle()` and `close()` wait for it. Everything inside is caught; log lines are `notify.sent` (kind, person, devices reached) and `notify.error` (kind, error name only). These replace `fuel.push` and `fuel.push_error`.
+- Tags: `reservation-<id>`, `usage-<id>`, `fuel-<id>`, `ticket-<id>`; the fueler's "debtor paid" push uses `fuel-<id>-paid-<debtor>` so two debtors do not replace each other. The service worker already re-alerts on a replaced tag.
+- Deep links: `/#/inbox`, `/#/?view=day&date=<local day>` (approved or edited reservation), `/#/`, `/#/usage`, `/#/history`, `/#/fuel`, `/#/tickets`; a test checks each is a route the app has.
+- Texts: names are shortened to 40 code points; `fit()` cuts titles to 100, bodies to 300, tags to 64 and the whole message to 900 bytes. A ticket text has neither price nor reason; no note appears in any text.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/notify.ts`, `src/notify-texts.ts` | added | The notifier with its event table; every notification text |
+| `src/fuel-notify.ts` | deleted | Replaced by the `fuel.created` row of the table |
+| `src/app.ts` | modified | One notifier, passed to the reservation, usage, fuel and ticket routes; `idle()` and `close()` wait for it |
+| `src/reservations.ts`, `usage.ts`, `fuel.ts`, `tickets.ts` | modified | Snapshots and `emit` calls after the change is saved; `shareSnapshot()` in `fuel.ts`; behaviour of the routes is unchanged |
+| `src/reminders.ts`, `src/push.ts` | modified | Their texts now come from `notify-texts.ts` |
+| `public/views/account.js`, `strings.js`, `style.css` | modified | The "What you get notified about" card |
+| `scripts/smoke.mjs`, `scripts/smoke-push-stub.mjs` | modified, added | A second built server with push on and `fetch` replaced by a recording stub; 6 new checks |
+| `test/notify.test.ts` | added | 194 tests (below) |
+| `test/fuel-carry.test.ts`, `test/pwa.test.ts`, `test/forms.test.ts` | modified | Moved to the new notifier API; edit and delete now notify; the Account list |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Feature, design, known limits, the reversals, checklist, troubleshooting; this entry |
+
+`package.json`, the lockfile, `Dockerfile`, compose, `Caddyfile`, `.env.example` and the database schema are unchanged.
+
+### How to run and test
+
+Node 22.23, Windows. All run on the final tree:
+
+- `npx tsc --noEmit` (server, tests, scripts) and `npx tsc -p tsconfig.client.json --noEmit`: clean apart from `e2e/`, whose `@playwright/test` is not installed in this checkout, so `npm run typecheck` itself fails here for that reason alone (it did before this change). `npx eslint .`: no findings. `npm test`: 911 of 911 (716 on `origin/main`). `npm run build`: clean. `npm run smoke`: 20 of 20 (14 before).
+- `test/notify.test.ts`: a table of 42 scenarios covering every event, each run up to five ways (12 have a "done by the person it concerns" variant): it fires (exactly the right devices, title, body pattern, deep link and tag, one push per device), it does not fire to yourself (where the same thing can be done by the person it concerns), without a device, with push switched off (devices on file), and with a push service that throws (same status, no server error). Then: a push service that never answers neither delays nor fails and shutdown waits; the work starts only after the route returned; the engine drops the actor, the inactive and duplicates; a new event plugs in with one row; one broken recipient does not stop the others; tags per record; the Inbox and km banner still work without a device; worst-case names (60 characters, emoji); `fit()`; a source scan that no other file composes a title or body; the Account list mentions every event of the table.
+- Mutation checks on `src/notify.ts`: 12 breaks (actor not dropped, inactive told, same person twice, wrong variant, no fitting, work inside the call, wrong audience for "I have paid", previous ticket driver not told, shared tag, lapsed suggestions notified, debtors not told on a delete, no push-off guard). 11 were killed at once; the survivor (no fitting) led to a new test that kills it. Files restored and compared. One more break (emit does nothing) fails 5 of the 20 smoke checks.
+
+### Specialist passes
+
+None ran (the `implement` skill and its stages were not available in this session). The work was done inline: no UI, backend, data, security or simplify specialist and no multi-lens review round. The self-checks are the mutation runs above and a read-through of every diff.
+
+### Verification
+
+Verified (ran and saw pass): the commands above, including real HTTP against the built server with push on and `fetch` stubbed.
+
+NOT verified:
+- Real push delivery on real phones (Google, Apple, Mozilla), an installed PWA, the notification look, tap-through to the screens on a phone, iOS behaviour.
+- The Account card in a real browser (only the fake-DOM test and the served strings), the e2e Playwright suite (not installed here), GitHub Actions, Docker.
+- The decrypted text content is only checked in `test/notify.test.ts`; the smoke test checks who is called, not what they read.
+- Behaviour over weeks of real use: how chatty it is for a household of 2 to 10.
+
+### Assumptions and open questions
+
+Defaults taken (none scope-changing; no one was asked):
+- **Reverses two earlier defaults** (km-for-others entry): "Attributing kilometres needs no approval and sends no push to the target" and "the fueler gets no push when it is pressed". Both now push. Approval is still not needed, and who may do what is unchanged.
+- The general rule was applied to a few cases the numbered list does not name: a fill-up registered, edited or deleted in the fueler's name by somebody else; a suggestion edited by its suggester (told to the person it is for) or cancelled by an admin (told to both); a ticket deleted (told to the driver it named); the driver a ticket moved away from. Remove a row to drop any of them.
+- Not notified: a suggestion that lapses unanswered (a timer, not somebody's change); a drive that only overlaps a reservation in time without being linked to it; creating a payment request (the fueler sends it); an admin marking a share paid (the fueler is not told).
+- Fuel messages carry amounts (as the new-fill-up push always did); no message carries a note or a reservation note; ticket messages carry neither price nor reason.
+- One switch per device (Reminders on or off); per-category mute is the obvious follow-up, together with a reminder before an unanswered suggestion lapses.
+
+### Honesty flags
+
+- No restart, no degraded stage; there was no pipeline ledger, so this entry is written from the session itself.
+- Existing tests were changed: `test/fuel-carry.test.ts` (notifier unit tests moved to `createNotifier`/`emit`, log names `notify.sent` and `notify.error`, the "only registering a fill-up sends something" test now says that a share-moving edit and a delete notify, the admin-registers-for-someone test now expects the fueler to hear too), `test/pwa.test.ts` (builds the message from the texts module and `fit`), `test/forms.test.ts` (one new test). No assertion was loosened.
+- Operational change: the log lines `fuel.push` and `fuel.push_error` no longer exist; grep for `notify` instead.
+- The notifier reads the share overview twice more for a fill-up edit or delete (before and after) and only when push is on; fine at household size, not measured.
+- `package.json` and the lockfile are unchanged; `npm ci` was not run, so `node_modules` still lacks `@playwright/test`.
+
+### Reproduce
+
+- Invocation: the request above, typed as `/implement ...`; the `implement` skill was not installed in this session, so it was carried out directly. Base commit `a3953c1b445e3526e377ea9394d3f99c28559df6`.
+<!-- implement:run:push-notifications-on-behalf:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)
