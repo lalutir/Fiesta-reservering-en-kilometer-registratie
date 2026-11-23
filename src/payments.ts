@@ -13,6 +13,7 @@
 // never changes the outcome of a request: on any problem (no network, a non-2xx
 // answer, an unexpected body, a link that is not on tikkie.me) it falls back to
 // the manual text. It never logs or returns the API key or the token.
+import { formatEuro, formatKm } from '../shared/format.js';
 import type { TikkieConfig } from './config.ts';
 import type { Logger } from './http.ts';
 
@@ -28,9 +29,9 @@ export interface PaymentInput {
   carriedCents?: number;
   creditorName: string;
   debtorName: string;
-  /** Litres as shown to people, for example "40.0". */
+  /** Litres as shown to people, for example "40,50". */
   litres: string;
-  /** The fill-up date as shown to people, for example "Sat 14 Nov". */
+  /** The fill-up date as shown to people, for example "zaterdag 14 november". */
   date: string;
   /** Kilometres the debtor drove in the period and kilometres everyone drove. */
   km: number;
@@ -55,14 +56,10 @@ export interface PaymentProvider {
   create(input: PaymentInput): Promise<PaymentResult>;
 }
 
-/** 1234 -> "12.34" (money is integer cents everywhere; no floats). */
-export function formatCents(cents: number): string {
-  const sign = cents < 0 ? '-' : '';
-  const abs = Math.abs(cents);
-  return `${sign}${Math.floor(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
-}
-
-/** The text of the request, in English like the rest of the interface. */
+/**
+ * The text of the request, in Dutch like the rest of the interface (see docs/GLOSSARY.md). It is stored with the
+ * request when it is made, so a request made before the translation stays in the language it was written in.
+ */
 export function requestMessage(input: PaymentInput): string {
   const together = input.togetherKm ?? 0;
   const carried = input.carriedCents ?? 0;
@@ -70,22 +67,27 @@ export function requestMessage(input: PaymentInput): string {
   // The pool is split in the same ratio as the personal kilometres, so the ratio is told against the personal total.
   const why = input.equalSplit
     ? together > 0
-      ? `only ${together} km were driven together in that period, so the cost is split equally`
-      : 'no kilometres count in that period, so the cost is split equally'
+      ? `in die periode zijn maar ${formatKm(together)} km samen gereden, dus de kosten zijn gelijk verdeeld`
+      : 'in die periode zijn geen kilometers geteld, dus de kosten zijn gelijk verdeeld'
     : together > 0
-      ? `${input.km} of ${input.kmTotal - together} km driven; the ${together} km driven together are split in the same ratio`
-      : `${input.km} of ${input.kmTotal} km driven`;
-  // Without anything carried the text is exactly what it always was.
+      ? `${formatKm(input.km)} van ${formatKm(input.kmTotal - together)} km gereden; de ${formatKm(together)} km die samen zijn gereden, worden in dezelfde verhouding verdeeld`
+      : `${formatKm(input.km)} van ${formatKm(input.kmTotal)} km gereden`;
+  // Without anything carried the text has no extra sentence.
   const earlier =
     carried > 0
-      ? ` EUR ${formatCents(carried)} from earlier fill-ups is still open, so the total is EUR ${formatCents(input.amountCents)}.`
+      ? ` ${formatEuro(carried)} van eerdere tankbeurten staat nog open, dus het totaal is ${formatEuro(input.amountCents)}.`
       : carried < 0
-        ? ` EUR ${formatCents(-carried)} that ${input.creditorName} still owes you from earlier is taken off, so the total is EUR ${formatCents(input.amountCents)}.`
+        ? ` ${formatEuro(-carried)} die ${input.creditorName} je van eerder nog schuldig is, gaat eraf, dus het totaal is ${formatEuro(input.amountCents)}.`
         : '';
   return (
-    `Hi ${input.debtorName}, ${input.creditorName} fuelled the shared car on ${input.date} (${input.litres} L). ` +
-    `Your share is EUR ${formatCents(share)} (${why}).${earlier} Please pay ${input.creditorName}.`
+    `Hoi ${input.debtorName}, ${input.creditorName} heeft op ${input.date} de gedeelde auto getankt (${input.litres} L). ` +
+    `Jouw aandeel is ${formatEuro(share)} (${why}).${earlier} Wil je dit aan ${input.creditorName} betalen?`
   );
+}
+
+/** The request text with the payment link after it: the one place that says where to pay. */
+export function withLink(message: string, link: string): string {
+  return link ? `${message} Betaal hier: ${link}` : message;
 }
 
 export const manualProvider: PaymentProvider = {
@@ -123,7 +125,8 @@ export function tikkieProvider(config: TikkieConfig, fetchFn: typeof fetch, log:
           body: JSON.stringify({
             amountInCents: input.amountCents,
             currency: 'EUR',
-            description: `Fuel ${input.date}`,
+            // Shown to the person who pays, on the Tikkie page. Short: test/dutch.test.ts keeps it within 35 characters.
+            description: `Tankbeurt ${input.date}`,
             referenceId: input.reference,
           }),
           redirect: 'manual',

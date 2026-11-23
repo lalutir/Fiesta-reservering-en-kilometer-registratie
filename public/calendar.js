@@ -7,7 +7,7 @@
 // so a day with 23 or 25 hours (the DST changes) is still one day. Only the step from an instant
 // to the key of its local day (localDateKey) needs the household time zone, and that comes from
 // shared/time.js, the same file the server uses. Keys compare correctly as strings.
-import { addCalendarMonths, daysInMonth, formatLocal, localDateKey } from '../shared/time.js';
+import { DISPLAY_LOCALE, addCalendarMonths, daysInMonth, formatLocal, localDateKey } from '../shared/time.js';
 
 /** @typedef {'list' | 'day' | '3days' | 'week' | 'month'} ViewName */
 /** @typedef {{ min: string, max: string }} KeyWindow first and last day that can be shown (inclusive) */
@@ -235,7 +235,7 @@ function noon(key) {
 }
 
 /**
- * A date key as text: 'day' is "Monday 16 November", 'date' is "16 Nov 2026".
+ * A date key as text: 'day' is "maandag 16 november", 'date' is "16 nov 2026".
  * @param {string} key
  * @param {'day' | 'date'} kind
  */
@@ -243,9 +243,9 @@ export function keyLabel(key, kind) {
   return formatLocal(noon(key), 'UTC', kind);
 }
 
-const monthFormatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+const monthFormatter = new Intl.DateTimeFormat(DISPLAY_LOCALE, { timeZone: 'UTC', month: 'long', year: 'numeric' });
 
-/** "November 2026" for the month that holds the key. @param {string} key */
+/** "november 2026" for the month that holds the key. @param {string} key */
 export function monthLabel(key) {
   return monthFormatter.format(new Date(noon(key)));
 }

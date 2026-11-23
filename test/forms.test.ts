@@ -10,11 +10,11 @@
 // with the headless browser pass and the notes on what was not verified.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtRange, fmtWhen } from '../public/dom.js';
+import { fmtRange, fmtWhen, formatEuro, formatLitres, formatPrice } from '../public/dom.js';
 import { S } from '../public/strings.js';
 import { render as renderAccount } from '../public/views/account.js';
 import { reservationCard } from '../public/views/agenda.js';
-import { fmtCents, fmtLitres, fmtPrice, render as renderFuel, shareLinks } from '../public/views/fuel.js';
+import { render as renderFuel, shareLinks } from '../public/views/fuel.js';
 import { render as renderHistory } from '../public/views/history.js';
 import { render as renderReserve } from '../public/views/reserve.js';
 import { pendingBanner, render as renderUsage } from '../public/views/usage.js';
@@ -74,7 +74,7 @@ test('reservation form: the note is recommended, never required, and an empty on
   await withClient({ now: NOW, routes: reserveRoutes() }, async ({ dom, api }) => {
     const form = view(dom, await newReservation(me));
     const row = fieldRow(form, S.reserve.note);
-    assert.match(S.reserve.note, /recommended/i);
+    assert.match(S.reserve.note, /aanbevolen/i);
     assert.equal(hintOf(row), S.noteHint);
     assert.equal(control(row).required, false);
     assert.equal(control(row).hasAttribute('required'), false);
@@ -636,10 +636,10 @@ test('history: "Fuel you owe" lists what I have to pay with the amount due and c
     const [row] = all(section, 'li.share') as [FakeElement];
     assert.equal(one(row, 'strong').textContent, S.history.fuelOwedHeader('Anna', fmtWhen(at(-1440), TZ)));
     // The rows add up in order and the total is said once, as the last (emphasised) line.
-    const order = [S.history.fuelOwedShare('40.00'), S.fuel.carried('15.00'), S.fuel.due('55.00')].map((line) => row.textContent.indexOf(line));
+    const order = [S.history.fuelOwedShare(formatEuro(4000)), S.fuel.carried(formatEuro(1500)), S.fuel.due(formatEuro(5500))].map((line) => row.textContent.indexOf(line));
     assert.ok(order[0]! >= 0 && order[0]! < order[1]! && order[1]! < order[2]!, `this fill-up, what is carried, then the amount due: ${order.join(',')}`);
     assert.equal(all(row, 'div.sub.due').length, 1, 'only the total is emphasised');
-    assert.equal(row.textContent.includes(S.history.fuelOwedDue('55.00')), false, 'the total is not repeated above its breakdown');
+    assert.equal(row.textContent.includes(S.history.fuelOwedDue(formatEuro(5500))), false, 'the total is not repeated above its breakdown');
     assert.equal(all(row, '.chip').length, 0, 'still open: no paid state yet');
 
     await byText(row, 'button', S.fuel.iPaid).fire('click');
@@ -653,7 +653,7 @@ test('history: "Fuel you owe" lists what I have to pay with the amount due and c
     const again = owedSection(view(dom, await renderHistory(me.app)));
     const [done] = all(again, 'li.share') as [FakeElement];
     assert.equal(one(done, '.chip').textContent, S.fuel.status.paid);
-    assert.ok(done.textContent.includes(S.history.fuelOwedPaid('55.00')));
+    assert.ok(done.textContent.includes(S.history.fuelOwedPaid(formatEuro(5500))));
     assert.equal(all(done, 'button').length, 0);
     assert.equal(all(again, 'p.hint').filter((p) => p.textContent === S.history.fuelOwedIntro).length, 0, 'nothing left to press, so no instruction');
   });
@@ -668,7 +668,7 @@ test('history: open shares come before paid and settled ones, other people\'s sh
   await withClient({ now: NOW, routes: historyRoutes([settled, open, others, mine]) }, async ({ dom }) => {
     const rows = all(owedSection(view(dom, await renderHistory(me.app))), 'li.share');
     assert.equal(rows.length, 2, 'Carla\'s share and my own fill-up are not mine to pay');
-    assert.ok((rows[0] as FakeElement).textContent.includes(S.history.fuelOwedDue('40.00')), 'the open one first');
+    assert.ok((rows[0] as FakeElement).textContent.includes(S.history.fuelOwedDue(formatEuro(4000))), 'the open one first');
     assert.equal(one(rows[1], '.chip').textContent, S.fuel.status.settled);
     assert.ok((rows[1] as FakeElement).textContent.includes(S.fuel.settledBy(fmtWhen(at(-100), TZ))));
     assert.equal(all(rows[1], 'button').length, 0, 'nothing to press on a settled share');
@@ -848,7 +848,7 @@ test('drive form: editing a drive that is somebody else\'s keeps the choice, and
     const who = control(fieldRow(form, S.usage.driver));
     who.value = String(BEN.id);
     await who.fire('change');
-    assert.deepEqual(optionsOf(ownerSelect(form)), [S.usage.kmPersonNone, S.usage.kmChooseTogether, 'Anna', `Root (${S.me})`], 'Ben is the driver now, so he is not offered and the choice of him is dropped');
+    assert.deepEqual(optionsOf(ownerSelect(form)), [S.usage.kmPersonNone, S.usage.kmChooseTogether, 'Anna', `Root (${S.meLabel})`], 'Ben is the driver now, so he is not offered and the choice of him is dropped');
     assert.equal(ownerSelect(form).value, '');
   });
 });
@@ -879,7 +879,7 @@ test('drive form: a server refusal about whose kilometres shows on the choice, a
     assert.equal(one(cards[0], '.km-owner-line').textContent, S.usage.kmOwnerPerson('Ben'));
     assert.equal(one(cards[1], '.km-owner-line').textContent, S.usage.kmOwnerTogether);
     const totals = all(one(page, 'ul.totals'), 'li').map((li) => li.textContent);
-    assert.deepEqual(totals, [`Ben${S.usage.km(120)} · ${S.usage.trips(0)}`, `${S.me}${S.usage.km(40)} · ${S.usage.trips(2)}`, `${S.usage.kmTogetherTotal}${S.usage.km(30)} · ${S.usage.trips(1)}`]);
+    assert.deepEqual(totals, [`Ben${S.usage.km(120)} · ${S.usage.trips(0)}`, `${S.meHead}${S.usage.km(40)} · ${S.usage.trips(2)}`, `${S.usage.kmTogetherTotal}${S.usage.km(30)} · ${S.usage.trips(1)}`]);
     assert.ok(all(page, 'p.hint').some((p) => p.textContent === S.usage.kmTogetherNote), 'it explains what together means');
   });
 });
@@ -923,12 +923,12 @@ test('fuel form: two of litres, total and price are enough; the app works out th
   const me = makeApp(ANNA);
   await withClient({ now: NOW, routes: fuelRoutes() }, async ({ dom, api }) => {
     const form = view(dom, await fuelForm(me));
-    assert.match(S.reserve.note, /recommended/i, 'the same recommended note as the other forms');
+    assert.match(S.reserve.note, /aanbevolen/i, 'the same recommended note as the other forms');
     assert.equal(hintOf(fieldRow(form, S.reserve.note)), S.noteHint);
     await typeInto(control(fieldRow(form, S.fuel.litres)), '40,5');
     await typeInto(control(fieldRow(form, S.fuel.total)), '81');
     await typeInto(control(fieldRow(form, S.fuel.odometer)), '41200');
-    assert.equal(one(form, 'p.hint[aria-live="polite"]').textContent, S.fuel.worked(fmtLitres(40500), fmtCents(8100), fmtPrice(2000)), 'the figures worked out are shown before saving');
+    assert.equal(one(form, 'p.hint[aria-live="polite"]').textContent, S.fuel.worked(formatLitres(40500), formatEuro(8100), formatPrice(2000)), 'the figures worked out are shown before saving');
 
     await submitForm(form);
     const sent = onlyWrite(api);
@@ -937,6 +937,25 @@ test('fuel form: two of litres, total and price are enough; the app works out th
     assert.deepEqual(me.toasts, [{ message: `${S.fuel.saved} ${S.noteTip}`, isError: false }]);
     assert.deepEqual(me.navigated, ['#/fuel']);
   });
+});
+
+test('fuel edit form: the figures are prefilled with a comma and no grouping, and saving again keeps every number', async () => {
+  const me = makeApp(ANNA);
+  // The largest total a fill-up can have: a card writes it with a grouping dot, a field never does (it would not parse back).
+  const big = fuelRow({ millilitres: 123_456, totalCents: 1_000_000, odometer: 41200, canOdometer: true });
+  await withClient({ now: NOW, routes: fuelRoutes([big], { 'PATCH /api/fuel/5': () => ({ fuel: {} }) }) }, async ({ dom, api }) => {
+    const form = view(dom, await fuelForm(me, 'edit=5'));
+    assert.equal(control(fieldRow(form, S.fuel.litres)).value, '123,456');
+    assert.equal(control(fieldRow(form, S.fuel.total)).value, '10000,00');
+    await submitForm(form);
+    const sent = onlyWrite(api);
+    assert.equal(`${sent.method} ${sent.path}`, 'PATCH /api/fuel/5');
+    assert.equal(sent.body['millilitres'], 123_456, 'the litres are the same number again');
+    assert.equal(sent.body['totalCents'], 1_000_000, 'and so is the total');
+  });
+  // Comma or dot is accepted, the examples and the line that shows the figures worked out use the comma.
+  assert.match(S.fieldErrors.invalid_amount, /40,5/);
+  assert.equal(S.fuel.worked('40,50', '€\u00a081,00', '2,000'), '40,50 L voor €\u00a081,00 (€\u00a02,000 per liter)');
 });
 
 test('fuel form: one figure is not enough, and nothing is sent until the figures make sense', async () => {
@@ -1060,7 +1079,7 @@ test('fill-up card: a request stays on the card when the share changed or droppe
     const row = all(page, 'li.share')[1] as FakeElement;
     assert.equal(one(row, '.chip').textContent, S.fuel.status.paidChanged);
     assert.ok(one(row, '.chip').classList.contains('changed'), 'it is drawn like the other changed shares');
-    assert.equal(one(row, '.sub').textContent, S.fuel.changedPaid('40.00', '0.00', false, '40.00'), 'it says by how much');
+    assert.equal(one(row, '.sub').textContent, S.fuel.changedPaid(formatEuro(4000), formatEuro(0), false, formatEuro(4000)), 'it says by how much');
     assert.equal(all(row, 'button').filter((b) => b.textContent === S.fuel.request || b.textContent === S.fuel.shareRequest).length, 0, 'nothing to ask for when the share is 0.00');
     dom.answer = true;
     await byText(row, 'button', S.fuel.markUnpaid).fire('click');
@@ -1073,7 +1092,7 @@ test('fill-up card: a request stays on the card when the share changed or droppe
   await withClient({ now: NOW, routes: open }, async ({ dom }) => {
     const row = all(view(dom, await fuelForm(me)), 'li.share')[1] as FakeElement;
     assert.equal(one(row, '.chip').textContent, S.fuel.status.changed);
-    assert.equal(one(row, '.sub').textContent, S.fuel.changedAsked('40.00', '60.00', true, '20.00'));
+    assert.equal(one(row, '.sub').textContent, S.fuel.changedAsked(formatEuro(4000), formatEuro(6000), true, formatEuro(2000)));
     assert.ok(byText(row, 'button', S.fuel.shareRequest), 'it can be redone for the new amount');
   });
 });
@@ -1084,7 +1103,7 @@ test('fill-up card: shows who fuelled, the note and each share; delete asks firs
   await withClient({ now: NOW, routes }, async ({ dom, api }) => {
     const page = view(dom, await fuelForm(me));
     const cardEl = one(page, 'article#fuel-5');
-    assert.equal(one(cardEl, 'strong').textContent, S.fuel.header(S.me, fmtLitres(40000), fmtCents(8000)));
+    assert.equal(one(cardEl, 'strong').textContent, S.fuel.header(S.me, formatLitres(40000), formatEuro(8000)));
     assert.equal(one(cardEl, '.note').textContent, 'Shell');
     assert.equal(all(cardEl, 'li.share').length, 2);
     assert.equal(one(all(cardEl, 'li.share')[0], '.chip').textContent, S.fuel.paidTheBill);
@@ -1132,8 +1151,8 @@ test('fill-up card: carried amounts, together kilometres and settled shares are 
     const card = one(page, 'article#fuel-5');
     assert.ok(all(card, 'div.sub').some((d) => d.textContent === S.fuel.togetherNote(80)), 'together kilometres are explained');
     const [, ben, root] = all(card, 'li.share') as [FakeElement, FakeElement, FakeElement];
-    assert.deepEqual(all(ben, 'div.sub').map((d) => d.textContent), [S.fuel.carried('15.00'), S.fuel.due('55.00')]);
-    assert.deepEqual(all(root, 'div.sub').map((d) => d.textContent), [S.fuel.carriedBack('Anna', S.me, '10.00'), S.fuel.due('10.00')], 'what the fueler owes back is taken off');
+    assert.deepEqual(all(ben, 'div.sub').map((d) => d.textContent), [S.fuel.carried(formatEuro(1500)), S.fuel.due(formatEuro(5500))]);
+    assert.deepEqual(all(root, 'div.sub').map((d) => d.textContent), [S.fuel.carriedBack('Anna', S.me, formatEuro(1000)), S.fuel.due(formatEuro(1000))], 'what the fueler owes back is taken off');
     assert.deepEqual(all(root, 'button').map((b) => b.textContent), [S.fuel.shareRequest, S.fuel.iPaid], 'their own share: I have paid, not Mark paid');
 
     await byText(root, 'button', S.fuel.iPaid).fire('click');

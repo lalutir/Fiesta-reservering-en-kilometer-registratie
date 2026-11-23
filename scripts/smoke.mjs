@@ -125,13 +125,16 @@ try {
     expect(res.status === 200, `status ${res.status}`);
     expect((res.headers.get('content-type') ?? '').startsWith('text/html'), 'content-type');
     const html = await res.text();
-    expect(html.includes('rel="manifest"') && html.includes('/app.js'), 'index.html content');
+    expect(html.includes('rel="manifest"') && html.includes('/app.js') && html.includes('<html lang="nl">'), 'index.html content (Dutch)');
   });
-  await check('GET /shared/time.js serves the shared time module', async () => {
+  await check('GET /shared/time.js and /shared/format.js serve the shared modules', async () => {
     const res = await fetch(`${base}/shared/time.js`);
     expect(res.status === 200, `status ${res.status}`);
     expect((res.headers.get('content-type') ?? '').startsWith('text/javascript'), 'content-type');
     expect((await res.text()).includes('addCalendarMonths'), 'content');
+    const format = await fetch(`${base}/shared/format.js`);
+    expect(format.status === 200 && (format.headers.get('content-type') ?? '').startsWith('text/javascript'), `format.js gave ${format.status}`);
+    expect((await format.text()).includes('formatEuro'), 'format.js content');
   });
   await check('manifest, service worker and icons are served', async () => {
     const manifest = await fetch(`${base}/manifest.webmanifest`);
@@ -569,7 +572,7 @@ try {
       expect(urls.every((u) => /^https:\/\/fcm\.googleapis\.com\/fcm\/send\/smoke-(admin|ann|ben)-\d$/.test(u)), 'only the made-up smoke devices');
       expect(!/"event":"(notify\.error|push\.send_failed|error)"/.test(notifyOut), 'no failure was logged by the notifier, the push sender or the server');
       const strings = await (await fetch(`${nbase}/strings.js`)).text();
-      expect(strings.includes('What you get notified about'), 'the Account page list is in the served strings');
+      expect(strings.includes('Waarover je een melding krijgt'), 'the Account page list is in the served strings');
     });
   } catch (err) {
     failures.push('notification server');

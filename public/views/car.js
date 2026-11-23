@@ -164,7 +164,7 @@ export async function render(app, route) {
   // Me first (that is who noticed it unless they say otherwise), then the others, and "Unknown". A person who
   // has been deactivated since stays selectable while their report is edited, so saving it does not drop them.
   const people = [...app.users].sort((a, b) => Number(b.id === me.id) - Number(a.id === me.id));
-  const noticerOptions = people.map((u) => h('option', { value: String(u.id), text: u.id === me.id ? `${u.displayName} (${S.me})` : u.displayName }));
+  const noticerOptions = people.map((u) => h('option', { value: String(u.id), text: u.id === me.id ? `${u.displayName} (${S.meLabel})` : u.displayName }));
   if (existing?.noticedBy && !people.some((u) => u.id === existing.noticedBy?.id)) {
     noticerOptions.push(h('option', { value: String(existing.noticedBy.id), text: existing.noticedBy.name }));
   }

@@ -1,0 +1,579 @@
+appName
+loading
+retry
+cancel
+delete
+edit
+back
+me
+you
+noteHint
+noteTip
+nav.agenda
+nav.reserve
+nav.inbox
+nav.usage
+nav.history
+nav.car
+nav.account
+nav.admin
+login.title
+login.username
+login.password
+login.submit
+login.hint
+agenda.upcoming
+agenda.nothingUpcoming
+agenda.past
+agenda.windowNote (function 1)
+agenda.suggestedBy (function 1)
+agenda.suggestedFor (function 1)
+agenda.reserveCta
+agenda.registerKm
+agenda.finishDrive
+agenda.iDroveThis
+agenda.kmRegistered (function 2)
+agenda.kmDraft
+agenda.kmDraftBy (function 1)
+agenda.kmMissing
+agenda.approve
+agenda.decline
+agenda.withdraw
+agenda.cancelReservation
+agenda.confirmCancel
+agenda.confirmDecline
+agenda.confirmWithdraw
+agenda.cancelled
+agenda.withdrawn
+agenda.approved
+agenda.declined
+agenda.viewSwitchLabel
+agenda.views.list
+agenda.views.day
+agenda.views.3days
+agenda.views.week
+agenda.views.month
+agenda.prev
+agenda.today
+agenda.next
+agenda.stepLabel.prev.day
+agenda.stepLabel.prev.3days
+agenda.stepLabel.prev.week
+agenda.stepLabel.prev.month
+agenda.stepLabel.next.day
+agenda.stepLabel.next.3days
+agenda.stepLabel.next.week
+agenda.stepLabel.next.month
+agenda.weekdays (array 7)
+agenda.nothingThisDay
+agenda.dayHeading (function 2)
+agenda.range (function 2)
+agenda.cellLabel (function 4)
+agenda.monthHint
+status.confirmed
+status.pending
+status.declined
+status.expired
+reserve.newTitle
+reserve.editTitle
+reserve.driver
+reserve.start
+reserve.end
+reserve.date
+reserve.time
+reserve.note
+reserve.submit
+reserve.submitSuggestion
+reserve.saveChanges
+reserve.suggestionHint
+reserve.created
+reserve.suggested
+reserve.updated
+reserve.tzNote (function 1)
+reserve.overlap (function 2)
+inbox.incoming
+inbox.nothingIncoming
+inbox.outgoing
+inbox.nothingOutgoing
+inbox.tabLabel (function 1)
+usage.logTitle
+usage.finishTitle
+usage.editTitle
+usage.tabLabel (function 1)
+usage.driver
+usage.start
+usage.end
+usage.endHint
+usage.odometerStart
+usage.odometerEnd
+usage.reservation
+usage.noReservation
+usage.resState.registered
+usage.resState.draft
+usage.resState.missing
+usage.note
+usage.submit
+usage.submitDraft
+usage.submitFinish
+usage.saved
+usage.savedDraft
+usage.finished
+usage.deleted
+usage.confirmDelete
+usage.deleteDraft
+usage.confirmDeleteDraft
+usage.openDraft (function 1)
+usage.draftBadge
+usage.started (function 1)
+usage.recent
+usage.none
+usage.kmTotals
+usage.km (function 1)
+usage.trips (function 1)
+usage.kmNote
+usage.kmNotMine
+usage.kmWhose
+usage.kmChooseTogether
+usage.kmPersonNone
+usage.noteRequired
+usage.noteRequiredHint
+usage.kmOwnerPerson (function 1)
+usage.kmOwnerTogether
+usage.kmTogetherTotal
+usage.kmTogetherNote
+usage.fuelLink
+usage.ticketsLink
+usage.fuelLocked
+usage.overlap (function 2)
+usage.pending.title (function 1)
+usage.pending.intro
+usage.pending.reservation (function 1)
+usage.pending.draft (function 2)
+usage.pending.register
+usage.pending.finish
+usage.pending.cancelUnused
+usage.pending.confirmCancelUnused
+usage.pending.cancelled
+history.title
+history.reservedBy (function 1)
+history.drivenBy (function 1)
+history.sameDriver
+history.otherDriver
+history.noReservation
+history.notDriven
+history.notFinished
+history.none
+history.fuelOwed
+history.fuelOwedIntro
+history.fuelOwedHeader (function 2)
+history.fuelOwedDue (function 1)
+history.fuelOwedShare (function 1)
+history.fuelOwedPaid (function 1)
+fuel.title
+fuel.back
+fuel.balances
+fuel.nobodyOwes
+fuel.owes (function 3)
+fuel.addTitle
+fuel.editTitle
+fuel.who
+fuel.when
+fuel.litres
+fuel.total
+fuel.odometer
+fuel.odometerHint
+fuel.odometerLine (function 1)
+fuel.correctOdometer
+fuel.odometerOnlyHint
+fuel.unaccounted (function 1)
+fuel.pricePerLitre
+fuel.enterTwo
+fuel.worked (function 3)
+fuel.save
+fuel.saved
+fuel.deleted
+fuel.confirmDelete
+fuel.list
+fuel.none
+fuel.header (function 3)
+fuel.perLitre (function 1)
+fuel.periodFirst
+fuel.periodBetween (function 2)
+fuel.equalSplit
+fuel.equalSplitTogether
+fuel.togetherNote (function 1)
+fuel.adminNote
+fuel.shareLine (function 2)
+fuel.status.none
+fuel.status.requested
+fuel.status.paid
+fuel.status.changed
+fuel.status.paidChanged
+fuel.status.settled
+fuel.carried (function 1)
+fuel.carriedBack (function 3)
+fuel.due (function 1)
+fuel.settledBy (function 1)
+fuel.iPaid
+fuel.iPaidSaved
+fuel.settledLocked
+fuel.changedAsked (function 4)
+fuel.changedPaid (function 4)
+fuel.paidTheBill
+fuel.request
+fuel.shareRequest
+fuel.markPaid
+fuel.markUnpaid
+fuel.confirmUnpaid
+fuel.paidLocked
+fuel.requestSaved
+fuel.paidSaved
+fuel.unpaidSaved
+fuel.panelTitle (function 1)
+fuel.panelLink
+fuel.panelLinkHint
+fuel.panelCreate
+fuel.panelRedo
+fuel.panelMessage
+fuel.panelShare
+fuel.panelSms
+fuel.panelWhatsapp
+fuel.panelCopy
+fuel.panelCopied
+fuel.panelCopyFailed
+fuel.panelClose
+fuel.providerManual
+fuel.providerTikkie
+kmcheck.title
+kmcheck.intro
+kmcheck.allAddUp
+kmcheck.gap (function 3)
+kmcheck.mismatch (function 3)
+kmcheck.neighbour (function 4)
+kmcheck.source.drive-start
+kmcheck.source.drive-end
+kmcheck.source.draft-start
+kmcheck.source.fuel
+kmcheck.draftHint
+kmcheck.addMissing
+kmcheck.finishDrive
+kmcheck.editEarlier
+kmcheck.editLater
+kmcheck.explainSummary
+kmcheck.explainLabel
+kmcheck.explainHint
+kmcheck.explainSave
+kmcheck.explainSaved
+kmcheck.explainedHeading (function 1)
+kmcheck.explainedBy (function 1)
+kmcheck.removeExplanation
+kmcheck.confirmRemove
+kmcheck.removed
+kmcheck.showMore (function 1)
+kmcheck.stale
+kmcheck.gapForm
+kmcheck.lastKnown (function 3)
+kmcheck.warnLower (function 2)
+kmcheck.warnHigher (function 1)
+kmcheck.warnOutsideDrive (function 2)
+kmcheck.marker.gapBefore (function 1)
+kmcheck.marker.gapAfter (function 1)
+kmcheck.marker.mismatchBefore (function 1)
+kmcheck.marker.mismatchAfter (function 1)
+kmcheck.marker.fuelBelow (function 1)
+kmcheck.marker.fuelAbove (function 1)
+kmcheck.marker.explained (function 1)
+tickets.title
+tickets.back
+tickets.intro
+tickets.followsLog
+tickets.addTitle
+tickets.editTitle
+tickets.when
+tickets.whenHint
+tickets.amount
+tickets.amountHint
+tickets.reason
+tickets.reasonHint
+tickets.save
+tickets.saved
+tickets.deleted
+tickets.confirmDelete
+tickets.list
+tickets.none
+tickets.editLabel (function 1)
+tickets.deleteLabel (function 1)
+tickets.you
+tickets.driver (function 1)
+tickets.noDriver
+tickets.price (function 1)
+tickets.enteredBy (function 1)
+tickets.basis.drive
+tickets.basis.draft
+tickets.basis.reservation
+tickets.basis.none
+car.title
+car.apk.title
+car.apk.notSet
+car.apk.prompt
+car.apk.expiresOn (function 1)
+car.apk.expiredOn (function 1)
+car.apk.badge.ok
+car.apk.badge.soon
+car.apk.badge.today
+car.apk.badge.expired
+car.apk.todayDetail
+car.apk.inDays (function 1)
+car.apk.expiredDays (function 1)
+car.apk.updatedBy (function 2)
+car.apk.label
+car.apk.hint
+car.apk.save
+car.apk.update
+car.apk.saved
+car.damage
+car.intro
+car.addTitle
+car.editTitle
+car.noticedOn
+car.noticedOnHint
+car.noticedBy
+car.unknown
+car.where
+car.wherePick
+car.location.front
+car.location.rear
+car.location.left
+car.location.right
+car.location.roof
+car.location.interior
+car.location.wheels_tyres
+car.location.windows
+car.location.mechanical
+car.location.other
+car.description
+car.descriptionHint
+car.repairedOn
+car.repairNote
+car.repairNoteHint
+car.save
+car.saved
+car.deleted
+car.confirmDelete
+car.open (function 1)
+car.repairedList (function 1)
+car.noneOpen
+car.none
+car.status.open
+car.status.repaired
+car.noticedLine (function 2)
+car.noticedUnknown (function 1)
+car.reportedBy (function 1)
+car.repairedLine (function 1)
+car.hint.drive (function 1)
+car.hint.draft (function 1)
+car.hint.reservation (function 1)
+car.hint.last_drive (function 1)
+car.hint.none
+car.hint.note
+car.markRepaired
+car.confirmRepaired
+car.reopen
+car.reopened
+car.repaired
+car.repairLabel (function 2)
+car.reopenLabel (function 2)
+car.editLabel (function 2)
+car.deleteLabel (function 2)
+account.title
+account.signedInAs (function 1)
+account.role.admin
+account.role.member
+account.timeZone (function 1)
+account.window (function 1)
+account.changePassword
+account.currentPassword
+account.newPassword
+account.savePassword
+account.passwordChanged
+account.signOut
+account.installTitle
+account.installAndroid
+account.installIos
+account.reminders.title
+account.reminders.intro
+account.reminders.enable
+account.reminders.disable
+account.reminders.test
+account.reminders.on
+account.reminders.off
+account.reminders.enabledToast
+account.reminders.disabledToast
+account.reminders.testSent
+account.reminders.testNotDelivered
+account.reminders.denied
+account.reminders.unsupported
+account.reminders.iosInstall
+account.reminders.unsupportedEndpoint
+account.reminders.fallback
+account.notifications.title
+account.notifications.intro
+account.notifications.items (array 10)
+account.notifications.fallback
+admin.title
+admin.backToApp
+admin.refresh
+admin.actions
+admin.tabs.users
+admin.tabs.reservations
+admin.tabs.usage
+admin.tabs.retention
+admin.users.create
+admin.users.username
+admin.users.usernameHint
+admin.users.displayName
+admin.users.role
+admin.users.password
+admin.users.passwordHint
+admin.users.add
+admin.users.name
+admin.users.status
+admin.users.active
+admin.users.inactive
+admin.users.deactivate
+admin.users.reactivate
+admin.users.makeAdmin
+admin.users.makeMember
+admin.users.rename
+admin.users.renamePrompt
+admin.users.resetPassword
+admin.users.confirmReset
+admin.users.confirmDeactivate
+admin.users.created
+admin.users.updated
+admin.users.generated (function 1)
+admin.users.roleLabel.admin
+admin.users.roleLabel.member
+admin.reservations.status
+admin.reservations.user
+admin.reservations.from
+admin.reservations.to
+admin.reservations.all
+admin.reservations.driver
+admin.reservations.createdBy
+admin.reservations.when
+admin.reservations.note
+admin.reservations.none
+admin.reservations.editTitle
+admin.reservations.save
+admin.reservations.cancelReservation
+admin.reservations.confirmCancel
+admin.reservations.saved
+admin.reservations.cancelled
+admin.usage.newRecord
+admin.usage.editTitle
+admin.usage.none
+admin.usage.odometer
+admin.usage.km
+admin.usage.status
+admin.usage.reservation
+admin.usage.save
+admin.usage.saved
+admin.usage.deleted
+admin.usage.confirmDelete
+admin.usage.editHint
+admin.usage.statusLabel.draft
+admin.usage.statusLabel.completed
+admin.usage.pendingTitle
+admin.usage.pendingNone
+admin.usage.pendingScope (function 1)
+admin.usage.pendingFull
+admin.usage.pendingShort
+admin.usage.pendingReservation
+admin.usage.pendingDraft
+admin.usage.pendingUser
+admin.usage.pendingItem
+admin.usage.kmState.registered
+admin.usage.kmState.draft
+admin.usage.kmState.missing
+admin.usage.kmColumn
+admin.retention.title
+admin.retention.window
+admin.retention.cutoff
+admin.retention.lastPurge
+admin.retention.lastPurgeCounts (function 3)
+admin.retention.never
+admin.retention.lastMaintenance
+admin.retention.lastBackup
+admin.retention.keep (function 1)
+admin.retention.backups
+admin.retention.file
+admin.retention.size
+admin.retention.noBackups
+admin.retention.counts
+admin.retention.countsText (function 2)
+admin.retention.oldest
+admin.retention.oldestRepaired
+admin.retention.damageNote
+admin.retention.runNow
+admin.retention.confirmRun
+admin.retention.done (function 2)
+admin.retention.backupNote
+errors.network
+errors.invalid_credentials
+errors.too_many_attempts
+errors.unauthenticated
+errors.forbidden
+errors.not_found
+errors.overlap
+errors.outside_window
+errors.suggestion_expired
+errors.not_pending
+errors.not_editable
+errors.validation_failed
+errors.username_taken
+errors.last_admin
+errors.draft_exists
+errors.has_paid_requests
+errors.fuel_requested
+errors.already_paid
+errors.already_repaired
+errors.push_disabled
+errors.no_subscription
+errors.too_many_subscriptions
+errors.internal
+errors.error
+fieldErrors.required
+fieldErrors.invalid_datetime
+fieldErrors.must_be_after_start
+fieldErrors.must_not_be_before_start
+fieldErrors.must_not_be_below_start
+fieldErrors.must_be_in_future
+fieldErrors.outside_window
+fieldErrors.in_future
+fieldErrors.unknown_user
+fieldErrors.unknown_reservation
+fieldErrors.too_long
+fieldErrors.too_short
+fieldErrors.must_be_integer
+fieldErrors.too_small
+fieldErrors.too_large
+fieldErrors.incorrect
+fieldErrors.immutable
+fieldErrors.invalid_format
+fieldErrors.must_be_empty
+fieldErrors.same_as_driver
+fieldErrors.only_for_person
+fieldErrors.invalid_amount
+fieldErrors.needs_two
+fieldErrors.cannot_reopen
+fieldErrors.invalid_link
+fieldErrors.nothing_owed
+fieldErrors.invalid_value
+fieldErrors.invalid_endpoint
+fieldErrors.unsupported_endpoint
+fieldErrors.invalid_key
+fieldErrors.invalid_date
+fieldErrors.before_noticed
+fieldErrors.too_far_ahead
+fieldErrors.only_when_repaired

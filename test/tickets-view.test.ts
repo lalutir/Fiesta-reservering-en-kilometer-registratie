@@ -100,8 +100,8 @@ test('ticket form: the time defaults to now in the household zone, price and rea
     assert.equal(hintOf(whenRow(page)), S.tickets.whenHint, 'it says this is the time of the offence, not of the letter');
     assert.equal(hintOf(amountRow(page)), S.tickets.amountHint);
     assert.equal(hintOf(reasonRow(page)), S.tickets.reasonHint);
-    assert.match(S.tickets.amount, /optional/i);
-    assert.match(S.tickets.reason, /optional/i);
+    assert.match(S.tickets.amount, /optioneel/i);
+    assert.match(S.tickets.reason, /optioneel/i);
     assert.equal(control(amountRow(page)).value, '');
     assert.equal(control(amountRow(page)).getAttribute('inputmode'), 'decimal');
     assert.equal(control(reasonRow(page)).value, '');
@@ -256,7 +256,7 @@ test('ticket list: who was driving and on what basis, the price, the reason and 
     );
 
     assert.equal(one(card(1), 'strong').textContent, S.tickets.driver('Ben'));
-    assert.equal(one(card(1), '.badge-status').textContent, S.tickets.price('75.00'));
+    assert.equal(one(card(1), '.badge-status').textContent, S.tickets.price('€\u00a075,00'));
     assert.equal(one(card(1), '.when').textContent, fmtWhen(at(-600), TZ));
     assert.equal(one(card(1), '.note').textContent, 'Speeding on the A4');
     assert.ok(all(card(1), '.sub').some((e) => e.textContent === S.tickets.basis.drive));
@@ -269,7 +269,7 @@ test('ticket list: who was driving and on what basis, the price, the reason and 
     assert.equal(all(card(2), '.note').length, 0, 'no reason, no note');
 
     assert.ok(all(card(3), '.sub').some((e) => e.textContent === S.tickets.basis.reservation));
-    assert.equal(one(card(3), '.badge-status').textContent, S.tickets.price('120.00'));
+    assert.equal(one(card(3), '.badge-status').textContent, S.tickets.price('€\u00a0120,00'));
 
     assert.equal(one(card(4), 'strong').textContent, S.tickets.noDriver);
     assert.ok(all(card(4), '.sub').some((e) => e.textContent === S.tickets.basis.none));
@@ -356,7 +356,7 @@ test('editing: the form opens with the ticket, sends the whole picture and goes 
     assert.equal(one(page, 'h3').textContent, S.tickets.editTitle);
     // at(-600) is 00:00 UTC on the 15th, 02:00 in Amsterdam.
     assert.deepEqual([dateTime(whenRow(page)).date.value, dateTime(whenRow(page)).time.value], ['2026-06-15', '02:00']);
-    assert.equal(control(amountRow(page)).value, '75.00');
+    assert.equal(control(amountRow(page)).value, '75,00');
     assert.equal(control(reasonRow(page)).value, 'Speeding');
     assert.equal(one(page, 'a.btn[href="#/tickets"]').textContent, S.cancel, 'there is a way out of editing');
 
@@ -367,6 +367,17 @@ test('editing: the form opens with the ticket, sends the whole picture and goes 
     assert.deepEqual(sent.body, { at: at(-600), amountCents: 8000, reason: 'Speeding' });
     assert.deepEqual(me.toasts, [{ message: S.tickets.saved, isError: false }]);
     assert.deepEqual(me.navigated, ['#/tickets']);
+  });
+});
+
+test('editing: the price is prefilled with a comma and no grouping, also the largest one, and saving again keeps it', async () => {
+  const me = makeApp(ANNA);
+  const items = [ticket({ id: 1, at: at(-600), amountCents: 1_000_000, reason: '' })];
+  await withClient({ now: NOW, routes: ticketRoutes(items, { 'PATCH /api/tickets/1': () => ({ ticket: {} }) }) }, async ({ dom, api }) => {
+    const page = view(dom, await ticketsPage(me, 'edit=1'));
+    assert.equal(control(amountRow(page)).value, '10000,00', 'a field shows no grouping dot: it would not parse back');
+    await submitForm(page);
+    assert.equal(onlyWrite(api).body['amountCents'], 1_000_000);
   });
 });
 
@@ -501,16 +512,16 @@ test('the limits in the browser are the limits on the server', () => {
 
 test('retention texts include tickets, and counts an older stored result does not have default to 0', () => {
   const r = S.admin.retention;
-  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 7 odometer explanations, 8 repaired damage reports, 3 expired sessions');
-  assert.equal(r.lastPurgeCounts(1, 2, 3), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 0 repaired damage reports, 3 expired sessions', 'a result stored before fill-ups and tickets existed');
-  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 0 odometer explanations, 0 repaired damage reports, 3 expired sessions', 'a result stored before the kilometre check existed');
-  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7), '1 reservations, 2 drives, 4 fill-ups, 5 payment requests, 6 tickets, 7 odometer explanations, 0 repaired damage reports, 3 expired sessions', 'a result stored before the Car tab existed');
-  assert.equal(r.countsText(1, 2, 3, 4, 5, 6, 7), '1 reservations, 2 drives, 3 fill-ups, 4 payment requests, 5 tickets, 6 odometer explanations, 7 damage reports (open and repaired)');
-  assert.equal(r.countsText(1, 2), '1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 0 damage reports (open and repaired)');
-  assert.equal(r.done(1, 2, 3, 4, 5, 6), 'Purged 1 reservations, 2 drives, 3 fill-ups, 4 tickets, 5 odometer explanations and 6 repaired damage reports.');
-  assert.equal(r.done(1, 2), 'Purged 1 reservations, 2 drives, 0 fill-ups, 0 tickets, 0 odometer explanations and 0 repaired damage reports.');
-  assert.match(r.cutoff, /damage report only when it is repaired/, 'the cutoff line says that open damage reports are not deleted');
-  assert.match(r.damageNote, /Open damage reports are never deleted/);
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8), '1 reserveringen, 2 ritten, 4 tankbeurten, 5 betaalverzoeken, 6 verkeersboetes, 7 kilometertoelichtingen, 8 gerepareerde schademeldingen, 3 verlopen sessies');
+  assert.equal(r.lastPurgeCounts(1, 2, 3), '1 reserveringen, 2 ritten, 0 tankbeurten, 0 betaalverzoeken, 0 verkeersboetes, 0 kilometertoelichtingen, 0 gerepareerde schademeldingen, 3 verlopen sessies', 'a result stored before tankbeurten and verkeersboetes existed');
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6), '1 reserveringen, 2 ritten, 4 tankbeurten, 5 betaalverzoeken, 6 verkeersboetes, 0 kilometertoelichtingen, 0 gerepareerde schademeldingen, 3 verlopen sessies', 'a result stored before the kilometre check existed');
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7), '1 reserveringen, 2 ritten, 4 tankbeurten, 5 betaalverzoeken, 6 verkeersboetes, 7 kilometertoelichtingen, 0 gerepareerde schademeldingen, 3 verlopen sessies', 'a result stored before the Car tab existed');
+  assert.equal(r.countsText(1, 2, 3, 4, 5, 6, 7), '1 reserveringen, 2 ritten, 3 tankbeurten, 4 betaalverzoeken, 5 verkeersboetes, 6 kilometertoelichtingen, 7 schademeldingen (open en gerepareerd)');
+  assert.equal(r.countsText(1, 2), '1 reserveringen, 2 ritten, 0 tankbeurten, 0 betaalverzoeken, 0 verkeersboetes, 0 kilometertoelichtingen, 0 schademeldingen (open en gerepareerd)');
+  assert.equal(r.done(1, 2, 3, 4, 5, 6), 'Verwijderd: 1 reserveringen, 2 ritten, 3 tankbeurten, 4 verkeersboetes, 5 kilometertoelichtingen en 6 gerepareerde schademeldingen.');
+  assert.equal(r.done(1, 2), 'Verwijderd: 1 reserveringen, 2 ritten, 0 tankbeurten, 0 verkeersboetes, 0 kilometertoelichtingen en 0 gerepareerde schademeldingen.');
+  assert.match(r.cutoff, /schademelding pas als ze is gerepareerd/, 'the cutoff line says that open damage reports are not deleted');
+  assert.match(r.damageNote, /Open schademeldingen worden nooit verwijderd/);
 });
 
 test('admin retention tab: tickets are counted, the oldest one counts for the oldest item, and a purge result stored before tickets existed still renders', async () => {
@@ -568,17 +579,17 @@ test('admin retention tab: tickets are counted, the oldest one counts for the ol
 
     await one(adminRoot, 'button[data-tab="retention"]').fire('click');
     await until(() => all(adminRoot, 'dt').length > 0, 'the retention tab');
-    assert.ok(dd(S.admin.retention.lastPurge).endsWith('1 reservations, 2 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 0 repaired damage reports, 3 expired sessions'), 'an old stored result shows zero tickets, explanations and damage reports');
-    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 0 fill-ups, 0 payment requests, 0 tickets, 0 odometer explanations, 0 damage reports (open and repaired)');
+    assert.ok(dd(S.admin.retention.lastPurge).endsWith('1 reserveringen, 2 ritten, 0 tankbeurten, 0 betaalverzoeken, 0 verkeersboetes, 0 kilometertoelichtingen, 0 gerepareerde schademeldingen, 3 verlopen sessies'), 'an old stored result shows zero verkeersboetes, explanations and schademeldingen');
+    assert.equal(dd(S.admin.retention.counts), '4 reserveringen, 5 ritten, 0 tankbeurten, 0 betaalverzoeken, 0 verkeersboetes, 0 kilometertoelichtingen, 0 schademeldingen (open en gerepareerd)');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-3000), TZ));
     assert.equal(dd(S.admin.retention.oldestRepaired), '–', 'no repaired damage report yet (an old server answer has no such figure at all)');
 
     await byText(adminRoot, 'button', S.admin.retention.runNow).fire('click');
     await until(() => toastEl.textContent === S.admin.retention.done(1, 2, 3, 7, 4, 5), 'the purge to report its tickets, explanations and repaired damage reports');
-    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('3 damage reports (open and repaired)')), 'the tab to reload');
-    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 fill-ups, 0 payment requests, 7 tickets, 4 odometer explanations, 5 repaired damage reports, 3 expired sessions'));
-    assert.equal(dd(S.admin.retention.counts), '4 reservations, 5 drives, 1 fill-ups, 0 payment requests, 2 tickets, 6 odometer explanations, 3 damage reports (open and repaired)');
+    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('3 schademeldingen (open en gerepareerd)')), 'the tab to reload');
+    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 tankbeurten, 0 betaalverzoeken, 7 verkeersboetes, 4 kilometertoelichtingen, 5 gerepareerde schademeldingen, 3 verlopen sessies'));
+    assert.equal(dd(S.admin.retention.counts), '4 reserveringen, 5 ritten, 1 tankbeurten, 0 betaalverzoeken, 2 verkeersboetes, 6 kilometertoelichtingen, 3 schademeldingen (open en gerepareerd)');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-5000), TZ), 'the oldest ticket is the oldest item');
-    assert.equal(dd(S.admin.retention.oldestRepaired), '2 Jan 2026', 'the repaired date is a calendar day with its own row: it is not an instant and is not mixed into the oldest item');
+    assert.equal(dd(S.admin.retention.oldestRepaired), '2 jan 2026', 'the repaired date is a calendar day with its own row: it is not an instant and is not mixed into the oldest item');
   });
 });

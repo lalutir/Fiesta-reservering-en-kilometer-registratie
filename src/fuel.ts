@@ -30,8 +30,9 @@ import { carryKey, carryOver } from './fuel-carry.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
 import type { FuelHead, Notifier, ShareSnapshot } from './notify.ts';
 import { gapsOrEmpty, type OpenGap } from './odometer.ts';
-import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, type PaymentInput, type PaymentProvider } from './payments.ts';
+import { isHttpsLink, manualProvider, requestMessage, tikkieProvider, withLink, type PaymentInput, type PaymentProvider } from './payments.ts';
 import { Fields, MAX_ODOMETER, ValidationError, assertPastInsideWindow, windowBounds } from './validate.ts';
+import { formatLitres } from '../shared/format.js';
 import { formatLocal } from '../shared/time.js';
 
 export const MAX_MILLILITRES = 200_000;
@@ -425,12 +426,6 @@ function balancesOf(items: FuelDto[], names: Map<number, string>): BalanceDto[] 
   return out.sort((a, b) => b.cents - a.cents || a.fromUserId - b.fromUserId || a.toUserId - b.toUserId);
 }
 
-// ------------------------------------------------------------------- input
-
-function litresText(millilitres: number): string {
-  return (millilitres / 1000).toFixed(2);
-}
-
 // ------------------------------------------------------------------ routes
 
 /** What a payment request for one share says; the amount is what is due (the share plus what is carried). */
@@ -441,7 +436,7 @@ function paymentInputOf(fuel: FuelDto, share: FuelShareDto, tz: string): Payment
     carriedCents: share.carriedCents,
     creditorName: fuel.userName,
     debtorName: share.userName,
-    litres: litresText(fuel.millilitres),
+    litres: formatLitres(fuel.millilitres),
     date: formatLocal(fuel.at, tz, 'day'),
     km: share.km,
     kmTotal: fuel.totalKm,
@@ -640,7 +635,7 @@ export function registerFuelRoutes(router: Router, ctx: Ctx, notifier?: Notifier
 
     const made = await provider.create(paymentInputOf(fuel, share, config.tz));
     const link = pasted ?? made.link ?? '';
-    const message = link ? `${made.message} Pay here: ${link}` : made.message;
+    const message = withLink(made.message, link);
     const nowIso = ctx.clock.now().toISOString();
     const created = tx(db, () => {
       loadFuel(db, id);

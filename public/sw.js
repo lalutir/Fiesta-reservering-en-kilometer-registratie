@@ -4,7 +4,7 @@
 // It also shows the reminder notifications the server pushes (see the end of this file).
 // Keep PRECACHE equal to the files in public/ (test/pwa.test.ts checks this).
 
-const CACHE = 'car-static-v6';
+const CACHE = 'car-static-v7';
 
 const PRECACHE = [
   '/',
@@ -31,6 +31,7 @@ const PRECACHE = [
   '/icons/icon-maskable-512.png',
   '/icons/apple-touch-icon.png',
   '/shared/time.js',
+  '/shared/format.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -91,9 +92,10 @@ self.addEventListener('push', (event) => {
     data = null;
   }
   const text = (value, fallback, max) => (typeof value === 'string' && value.trim() !== '' ? value.slice(0, max) : fallback);
-  const title = text(data && data.title, 'Shared car', 100);
+  // The fallbacks are Dutch literals: this worker cannot import public/strings.js. test/dutch.test.ts reads them.
+  const title = text(data && data.title, 'Gedeelde auto', 100);
   const options = {
-    body: text(data && data.body, 'Open the app to see what is waiting.', 300),
+    body: text(data && data.body, 'Open de app om te zien wat er op je wacht.', 300),
     // The start, end and repeat reminders of one reservation share a tag, so a newer one replaces an
     // unread older one instead of piling up. renotify makes the replacement alert again (without it the
     // replacement is silent). It needs a non-empty tag, which the fallback above guarantees.

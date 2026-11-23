@@ -270,9 +270,9 @@ export function startOfLocalDay(key, tz) {
 }
 
 /**
- * A calendar date for people ("14 Mar 2026"), the same in every zone: it is formatted at noon UTC in UTC.
+ * A calendar date for people ("14 mrt 2026"), the same in every zone: it is formatted at noon UTC in UTC.
  * @param {string} key 'YYYY-MM-DD'
- * @param {'date' | 'day'} [kind] 'date' = "14 Mar 2026", 'day' = "Saturday 14 March"
+ * @param {'date' | 'day'} [kind] 'date' = "14 mrt 2026", 'day' = "zaterdag 14 maart"
  * @returns {string} '' when the key is not a calendar date
  */
 export function formatDateKey(key, kind = 'date') {
@@ -311,6 +311,13 @@ export function utcToLocalInput(instant, tz) {
   return { date: dateKey(p), time: `${pad(p.hour)}:${pad(p.minute)}` };
 }
 
+/**
+ * The language of every date and time shown to people (the interface is Dutch only): 24-hour clock, lower-case
+ * weekday and month names ("maandag 16 november", "16 nov 2026, 14:05"). The en-US formatters above only read
+ * numeric parts and must not follow this. Used by the browser calendar as well.
+ */
+export const DISPLAY_LOCALE = 'nl-NL';
+
 /** @type {Map<string, Intl.DateTimeFormat>} */
 const displayFormatters = new Map();
 
@@ -328,7 +335,7 @@ function displayFormatter(tz, kind) {
     else if (kind === 'date') Object.assign(o, { day: 'numeric', month: 'short', year: 'numeric' });
     else if (kind === 'day') Object.assign(o, { weekday: 'long', day: 'numeric', month: 'long' });
     else Object.assign(o, { hour: '2-digit', minute: '2-digit' });
-    f = new Intl.DateTimeFormat('en-GB', o);
+    f = new Intl.DateTimeFormat(DISPLAY_LOCALE, o);
     displayFormatters.set(key, f);
   }
   return f;

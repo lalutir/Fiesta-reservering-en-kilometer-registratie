@@ -26,7 +26,7 @@ export function kmAction(r, meId, isAdmin, nowIso) {
   if (r.kmState === 'registered' && drive) {
     // The driver stays the driver; when the kilometres are someone else's or shared, the line says so.
     const owner = kmOwnerLabel(drive, meId);
-    const line = S.agenda.kmRegistered(drive.distanceKm ?? 0, drive.userId === meId ? S.me : drive.userName);
+    const line = S.agenda.kmRegistered(drive.distanceKm ?? 0, drive.userId === meId ? S.meLabel : drive.userName);
     return { line: owner ? `${line} · ${owner}` : line, state: 'registered', action: null };
   }
   if (r.kmState === 'draft' && drive) {
@@ -80,7 +80,7 @@ export function reservationCard(app, r, past) {
     if (bar?.isConnected) setBusy(bar, false);
   };
 
-  const who = mine ? S.me : r.userName;
+  const who = mine ? S.meHead : r.userName;
   const subtitle = r.suggestion
     ? iCreated
       ? S.agenda.suggestedFor(r.userName)

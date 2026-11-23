@@ -7,60 +7,61 @@
 // and error responses.
 //
 // Only getByRole, getByLabel and getByText are used (never CSS or XPath), so the suite survives a
-// rebuilt frontend as long as people still see the same words. All the words are in UI below.
-import { expect, expectNoHorizontalScroll, expectTabsFit, pastSlot, test } from './fixtures.ts';
+// rebuilt frontend as long as people still see the same words. All the words are in UI below (the
+// interface is Dutch).
+import { NAV_NAME, expect, expectNoHorizontalScroll, expectTabsFit, pastSlot, test } from './fixtures.ts';
 
 /** What a person reads on screen (see public/strings.js). When the wording changes, change it here only. */
 const UI = {
-  appName: 'Shared car',
-  username: 'Username',
-  password: 'Password',
-  signIn: 'Sign in',
-  mainNav: 'Main',
+  appName: 'Gedeelde auto',
+  username: 'Gebruikersnaam',
+  password: 'Wachtwoord',
+  signIn: 'Inloggen',
+  mainNav: NAV_NAME,
   tabAgenda: 'Agenda',
-  tabReserve: 'Reserve',
-  tabHistory: 'History',
-  tabDrives: /^Drives/,
-  tabCar: 'Car',
+  tabReserve: 'Boeken',
+  tabHistory: 'Historie',
+  tabDrives: /^Ritten/,
+  tabCar: 'Auto',
   tabAccount: 'Account',
-  car: 'Car',
-  apkNotSet: 'The APK expiry date has not been entered yet.',
-  reportDamage: 'Report damage',
-  dateNoticed: 'Date first noticed',
-  whereOnCar: 'Where on the car',
-  damageDescription: 'Description',
-  noDamage: 'No damage reports yet. Report the first one with the form above.',
-  newReservation: 'New reservation',
-  fromDate: 'From: Date',
-  fromTime: 'From: Time',
-  untilDate: 'Until: Date',
-  untilTime: 'Until: Time',
-  note: 'Note (recommended)',
-  reserve: 'Reserve',
-  earlier: /^Earlier \(\d+\)$/,
-  registerKm: 'Register km',
-  registerDrive: 'Register a drive',
-  odometerStart: 'Odometer at start (km)',
-  odometerEnd: 'Odometer at end (km)',
-  saveDrive: 'Save drive',
-  kmRegistered: 'Km registered: 42 km',
-  drivenByMe: 'Driven by me',
-  kmCheck: /Kilometre check/,
-  fuelLink: 'Fuel and costs',
-  fuelOdometer: 'Current odometer (km)',
-  litres: 'Litres',
-  totalPrice: 'Total price (EUR)',
-  saveFillUp: 'Save fill-up',
-  required: 'Required.',
-  history: 'History',
+  car: 'Auto',
+  apkNotSet: 'De vervaldatum van de APK is nog niet ingevoerd.',
+  reportDamage: 'Schade melden',
+  dateNoticed: 'Datum eerst opgemerkt',
+  whereOnCar: 'Waar op de auto',
+  damageDescription: 'Beschrijving',
+  noDamage: 'Nog geen schademeldingen. Maak de eerste met het formulier hierboven.',
+  newReservation: 'Nieuwe reservering',
+  fromDate: 'Van: Datum',
+  fromTime: 'Van: Tijd',
+  untilDate: 'Tot: Datum',
+  untilTime: 'Tot: Tijd',
+  note: 'Notitie (aanbevolen)',
+  reserve: 'Reserveren',
+  earlier: /^Eerder \(\d+\)$/,
+  registerKm: 'Kilometers registreren',
+  registerDrive: 'Ritregistratie',
+  odometerStart: 'Kilometerstand bij start (km)',
+  odometerEnd: 'Kilometerstand bij einde (km)',
+  saveDrive: 'Rit opslaan',
+  kmRegistered: 'Km geregistreerd: 42 km',
+  drivenByMe: 'Gereden door jou',
+  kmCheck: /Kilometercontrole/,
+  fuelLink: 'Brandstof en kosten',
+  fuelOdometer: 'Huidige kilometerstand (km)',
+  litres: 'Liters',
+  totalPrice: 'Totaalprijs (€)',
+  saveFillUp: 'Tankbeurt opslaan',
+  required: 'Verplicht.',
+  history: 'Historie',
   admin: 'Admin',
-  adminUsers: 'Users',
-  adminReservations: 'Reservations',
-  adminDrives: 'Drives',
+  adminUsers: 'Gebruikers',
+  adminReservations: 'Reserveringen',
+  adminDrives: 'Ritten',
 } as const;
 
 /** The seven tabs of the bar, by the words on them (a count may follow the name; see expectTabsFit). */
-const ALL_TABS = [UI.tabAgenda, UI.tabReserve, 'Inbox', 'Drives', UI.tabHistory, UI.tabCar, UI.tabAccount];
+const ALL_TABS = [UI.tabAgenda, UI.tabReserve, 'Inbox', 'Ritten', UI.tabHistory, UI.tabCar, UI.tabAccount];
 
 /**
  * Both projects use the same database, and two reservations may not overlap, so each project
@@ -71,6 +72,62 @@ const SLOT_HOURS: Record<string, [number, number]> = {
   'mobile-390': [4, 3],
   'mobile-320': [8, 7],
 };
+
+/** The words of the screens that only read (nothing is created): see public/strings.js. */
+const SCREENS = {
+  inboxTab: 'Inbox',
+  inboxIncoming: 'Wacht op jouw antwoord',
+  accountTitle: 'Account',
+  signOut: 'Uitloggen',
+  ticketsLink: 'Verkeersboetes',
+  ticketsList: 'Alle verkeersboetes',
+  adminRetentionTab: 'Bewaartermijn',
+  adminRetention: 'Bewaartermijn en back-ups',
+} as const;
+
+test('the other screens fit the phone: Inbox, Account, Traffic tickets and the admin Retention tab', async ({ page }) => {
+  const username = process.env['E2E_ADMIN_USERNAME'] ?? '';
+  const password = process.env['E2E_ADMIN_PASSWORD'] ?? '';
+  expect(username !== '' && password !== '', 'the config exports the admin sign-in').toBe(true);
+  const mainNav = page.getByRole('navigation', { name: NAV_NAME });
+
+  await page.goto('/');
+  await page.getByLabel(UI.username).fill(username);
+  await page.getByLabel(UI.password, { exact: true }).fill(password);
+  await page.getByRole('button', { name: UI.signIn }).click();
+  await expect(mainNav).toBeVisible();
+
+  await test.step('Inbox', async () => {
+    await mainNav.getByRole('link', { name: SCREENS.inboxTab }).click();
+    await expect(page.getByRole('heading', { name: SCREENS.inboxIncoming })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'inbox');
+  });
+
+  await test.step('Account', async () => {
+    await mainNav.getByRole('link', { name: UI.tabAccount, exact: true }).click();
+    await expect(page.getByRole('heading', { name: SCREENS.accountTitle, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: SCREENS.signOut })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'account');
+    await expectTabsFit(page, 'tab bar on the Account tab', ALL_TABS);
+  });
+
+  await test.step('Traffic tickets', async () => {
+    await mainNav.getByRole('link', { name: UI.tabDrives }).click();
+    await page.getByRole('link', { name: SCREENS.ticketsLink }).click();
+    await expect(page.getByRole('heading', { name: SCREENS.ticketsList })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'traffic tickets');
+  });
+
+  await test.step('the admin Retention tab', async () => {
+    // Leave no request in flight when the page is replaced: an aborted request is a failed request.
+    await page.waitForLoadState('networkidle');
+    await page.goto('/admin/');
+    await page.getByRole('button', { name: SCREENS.adminRetentionTab, exact: true }).click();
+    await expect(page.getByRole('heading', { name: SCREENS.adminRetention })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'admin retention');
+    await page.waitForLoadState('networkidle');
+  });
+});
 
 test('sign in, reserve, register km from the card, open History and the admin page', async ({ page }, testInfo) => {
   const hours = SLOT_HOURS[testInfo.project.name];

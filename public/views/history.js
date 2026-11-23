@@ -1,8 +1,8 @@
 import { get } from '../api.js';
-import { fmtDriveRange, fmtRange, fmtWhen, groupByDay, h, kmOwnerLine, setBusy } from '../dom.js';
+import { fmtDriveRange, fmtRange, fmtWhen, formatEuro, groupByDay, h, kmOwnerLine, setBusy } from '../dom.js';
 import { kmMarkers } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
-import { carriedRows, fmtCents, selfPaidButton, shareStatus } from './fuel.js';
+import { carriedRows, selfPaidButton, shareStatus } from './fuel.js';
 
 export const live = true;
 
@@ -116,10 +116,10 @@ export async function render(app) {
     // total is not said twice; without it the one line is the amount.
     const carried = open ? carriedRows(f, s, (name, id) => (id === me ? S.me : name)) : [];
     const amountLine = !open
-      ? S.history.fuelOwedPaid(fmtCents(s.request?.amountCents ?? due))
+      ? S.history.fuelOwedPaid(formatEuro(s.request?.amountCents ?? due))
       : carried.length > 0
-        ? S.history.fuelOwedShare(fmtCents(s.cents))
-        : S.history.fuelOwedDue(fmtCents(due));
+        ? S.history.fuelOwedShare(formatEuro(s.cents))
+        : S.history.fuelOwedDue(formatEuro(due));
     return h('li', { class: 'share', id: `owed-${f.id}` }, [
       h('div', { class: 'row owed-head' }, [
         h('strong', { text: S.history.fuelOwedHeader(f.userName, fmtWhen(f.at, app.tz)) }),

@@ -135,7 +135,7 @@ test('admin page: km state and notes per reservation, the pending km per person,
       assert.deepEqual(
         pendingRows().map((r) => r.slice(0, 4)),
         [
-          ['Anna', P.pendingDraft, `${fmtWhen(at(-60), TZ)}, 41120 km`, 'Groceries'],
+          ['Anna', P.pendingDraft, `${fmtWhen(at(-60), TZ)}, 41.120 km`, 'Groceries'],
           ['Anna', `${P.pendingReservation} #7`, fmtRange(at(-300), at(-240), TZ), 'Visit to Oma'],
           ['Ben', `${P.pendingReservation} #10`, fmtRange(at(-1000), at(-900), TZ), '–'],
         ],

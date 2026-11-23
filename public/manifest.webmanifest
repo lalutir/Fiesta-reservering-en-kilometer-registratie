@@ -1,9 +1,9 @@
 {
   "id": "/",
-  "name": "Shared car",
-  "short_name": "Car",
-  "description": "Reserve the shared car and log who drove it.",
-  "lang": "en",
+  "name": "Gedeelde auto",
+  "short_name": "Auto",
+  "description": "Reserveer de gedeelde auto en leg vast wie er reed.",
+  "lang": "nl",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

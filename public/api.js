@@ -241,7 +241,8 @@ export async function api(method, path, body) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ApiError(0, 'network', 'Network error');
+    // The message is the code: people see S.errors.network, never this text.
+    throw new ApiError(0, 'network', 'network');
   }
   if (res.status === 204) return null;
   /** @type {any} */

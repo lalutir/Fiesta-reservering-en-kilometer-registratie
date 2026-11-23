@@ -7,7 +7,7 @@
 // These tests use Playwright's plain `test`, not the guarded one from ./fixtures.ts, because they
 // are SUPPOSED to produce problems; they assert on what the guard collected instead.
 import { expect, test, type Page } from '@playwright/test';
-import { expectNoHorizontalScroll, expectNoProblems, expectTabsFit, isLoggedOutProbe, watch, type Problems } from './fixtures.ts';
+import { NAV_NAME, expectNoHorizontalScroll, expectNoProblems, expectTabsFit, isLoggedOutProbe, watch, type Problems } from './fixtures.ts';
 
 const ORIGIN = 'http://guard.test';
 
@@ -194,12 +194,12 @@ test('guard: an element wider than the phone fails the horizontal-scroll check, 
 
 // ----------------------------------------------------------------------- the tab bar
 
-/** A "Main" navigation of three tabs in a grid, each tab `tabPx` wide, the middle label drawn at `fontPx`. */
+/** A main navigation (NAV_NAME) of three tabs in a grid, each tab `tabPx` wide, the middle label drawn at `fontPx`. */
 async function openTabBar(page: Page, tabPx: number, fontPx: number): Promise<void> {
   await openFakeApp(page);
   const tab = (name: string, px: number) =>
     `<a href="#/${name}" style="display:flex;justify-content:center;align-items:center;min-width:0;height:40px;color:black"><span style="white-space:nowrap;font:${px}px sans-serif">${name}</span></a>`;
-  const html = `<nav aria-label="Main" style="display:grid;grid-template-columns:repeat(3,${tabPx}px);width:${tabPx * 3}px">${tab('Agenda', 12)}${tab('Account', fontPx)}${tab('Car', 12)}</nav>`;
+  const html = `<nav aria-label="${NAV_NAME}" style="display:grid;grid-template-columns:repeat(3,${tabPx}px);width:${tabPx * 3}px">${tab('Agenda', 12)}${tab('Account', fontPx)}${tab('Car', 12)}</nav>`;
   await page.evaluate(`document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(html)})`);
 }
 

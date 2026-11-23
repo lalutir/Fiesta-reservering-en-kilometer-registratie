@@ -130,14 +130,14 @@ test('apkSummary: valid, due soon, today and expired, counted in calendar days',
   assert.equal(apkSummary('2026-07-16', TODAY).kind, 'ok', '31 days is still comfortable');
   assert.equal(apkSummary('2026-07-16', TODAY).badge, S.car.apk.badge.ok);
   assert.equal(apkSummary('2026-06-16', TODAY).detail, S.car.apk.inDays(1));
-  assert.match(S.car.apk.inDays(1), /tomorrow/);
+  assert.match(S.car.apk.inDays(1), /morgen/);
   const today = apkSummary(TODAY, TODAY);
   assert.deepEqual([today.kind, today.daysLeft, today.badge, today.detail], ['today', 0, S.car.apk.badge.today, S.car.apk.todayDetail]);
   const yesterday = apkSummary('2026-06-14', TODAY);
   assert.deepEqual([yesterday.kind, yesterday.daysLeft, yesterday.badge], ['expired', -1, S.car.apk.badge.expired]);
   assert.equal(yesterday.headline, S.car.apk.expiredOn(formatDateKey('2026-06-14')));
   assert.equal(yesterday.detail, S.car.apk.expiredDays(1));
-  assert.match(S.car.apk.expiredDays(1), /yesterday/);
+  assert.match(S.car.apk.expiredDays(1), /gisteren/);
   assert.equal(apkSummary('2026-03-01', TODAY).detail, S.car.apk.expiredDays(106), 'longer ago');
   // Across the clock change of 29 March 2026 a day is still one day.
   assert.equal(apkSummary('2026-03-30', '2026-03-28').daysLeft, 2);
@@ -164,13 +164,13 @@ test('the words of the hint are neutral: information with its basis, never a con
     S.car.hint.note,
     S.car.intro,
   ].join(' ');
-  assert.doesNotMatch(sentences, /\b(fault|blame|guilty|responsible|culprit|caused? by|did it|broke|damaged by)\b/i);
-  assert.match(S.car.hint.note, /does not say|says nothing|for information only/i);
+  assert.doesNotMatch(sentences, /\b(schuld|schuldig|schuldige|verantwoordelijk|dader|veroorzaakt door|gebroken door|beschadigd door)\b/i);
+  assert.match(S.car.hint.note, /zegt niets|alleen ter informatie/i);
   // Each basis says what it rests on: the drive log, an unfinished drive, a reservation, the last logged drive.
-  assert.match(S.car.hint.drive('Ben'), /drive log/);
-  assert.match(S.car.hint.draft('Ben'), /not finished/);
-  assert.match(S.car.hint.reservation('Ben'), /reserved/);
-  assert.match(S.car.hint.last_drive('Ben'), /last drive logged/);
+  assert.match(S.car.hint.drive('Ben'), /ritlogboek/);
+  assert.match(S.car.hint.draft('Ben'), /niet is afgerond/);
+  assert.match(S.car.hint.reservation('Ben'), /gereserveerd/);
+  assert.match(S.car.hint.last_drive('Ben'), /laatste rit die/);
 });
 
 // ------------------------------------------------------------------ the APK card
@@ -343,7 +343,7 @@ test('damage form: noticed on today in the household day, by me first, then the 
     assert.equal(hintOf(noticedOnRow(page)), S.car.noticedOnHint);
 
     const who = control(noticedByRow(page));
-    assert.deepEqual(optionTexts(who), [`Ben (${S.me})`, 'Anna', 'Root', S.car.unknown], 'me first, the others in their order, Unknown last');
+    assert.deepEqual(optionTexts(who), [`Ben (${S.meLabel})`, 'Anna', 'Root', S.car.unknown], 'me first, the others in their order, Unknown last');
     assert.deepEqual(optionValues(who), [String(BEN.id), String(ANNA.id), String(ADMIN.id), 'unknown']);
     assert.equal(who.value, String(BEN.id), 'the reporter is the default noticer');
 
@@ -693,7 +693,7 @@ test('mark repaired: when somebody was quicker (409) it says so, reloads the lis
     assert.deepEqual(me.toasts, [{ message: S.errors.already_repaired, isError: true }]);
     assert.equal(me.refreshes(), 1, 'the list is reloaded so it shows how it is now');
     assert.equal(one(card, 'p.form-error').hidden, true, 'no inline error on top of the toast');
-    assert.match(S.errors.already_repaired, /already/);
+    assert.match(S.errors.already_repaired, /al als gerepareerd/);
   });
 });
 
@@ -810,7 +810,7 @@ test('editing: somebody who has been deactivated since stays selectable as the n
   await withClient({ now: NOW, routes }, async ({ dom, api }) => {
     const page = view(dom, await carPage(me, 'edit=1'));
     const who = control(noticedByRow(page));
-    assert.deepEqual(optionTexts(who), [`Anna (${S.me})`, 'Root', 'Ben', S.car.unknown]);
+    assert.deepEqual(optionTexts(who), [`Anna (${S.meLabel})`, 'Root', 'Ben', S.car.unknown]);
     assert.equal(who.value, String(BEN.id));
     await submit(damageForm(page));
     assert.equal(onlyWrite(api).body['noticedBy'], BEN.id);
@@ -952,12 +952,12 @@ test('the app shell: Car is a view and the seventh tab between History and Accou
   assert.match(app, /const VIEWS = \{[^}]*\bcar\b[^}]*\};/);
   const tabs = [...app.matchAll(/^\s+\['(\w+)', S\.nav\.\w+\],$/gm)].map((m) => m[1]);
   assert.deepEqual(tabs, ['agenda', 'reserve', 'inbox', 'usage', 'history', 'car', 'account'], 'seven tabs, the existing ones in their order');
-  assert.equal(S.nav.car, 'Car');
+  assert.equal(S.nav.car, 'Auto');
   // The page title comes from the tab label: Car has no sub-routes of its own, so it needs no entry in TAB_OF_ROUTE.
   assert.doesNotMatch(app, /TAB_OF_ROUTE = \{[^}]*\bcar\b/);
   // The tab names the end-to-end suite looks for are unchanged.
   for (const name of [S.nav.agenda, S.nav.reserve, S.nav.history, S.nav.usage]) assert.ok(name.length > 0);
-  assert.deepEqual([S.nav.agenda, S.nav.reserve, S.nav.usage, S.nav.history], ['Agenda', 'Reserve', 'Drives', 'History']);
+  assert.deepEqual([S.nav.agenda, S.nav.reserve, S.nav.usage, S.nav.history], ['Agenda', 'Boeken', 'Ritten', 'Historie']);
 });
 
 test('the tab bar is seven columns wide, with a smaller label and tighter padding on a narrow phone', () => {

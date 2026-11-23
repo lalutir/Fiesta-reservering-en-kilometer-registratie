@@ -345,13 +345,13 @@ export async function render(app, route) {
   const row = (u) =>
     h('article', { class: 'card usage' }, [
       h('div', { class: 'row' }, [
-        h('strong', { text: u.userId === me.id ? S.me : u.userName }),
+        h('strong', { text: u.userId === me.id ? S.meHead : u.userName }),
         u.status === 'draft' ? h('span', { class: 'badge-status expired', text: S.usage.draftBadge }) : null,
         u.distanceKm !== null ? h('span', { class: 'badge-status confirmed', text: S.usage.km(u.distanceKm) }) : null,
       ]),
       h('div', { class: 'when', text: fmtDriveRange(u.start, u.end, app.tz) }),
       u.odometerStart !== null || u.odometerEnd !== null
-        ? h('div', { class: 'sub', text: `${u.odometerStart ?? '?'} → ${u.odometerEnd ?? '?'} km` })
+        ? h('div', { class: 'sub', text: S.usage.odometerRange(u.odometerStart, u.odometerEnd) })
         : null,
       kmOwnerLine(u, me.id),
       kmMarkers(u, chain.items),
@@ -402,7 +402,7 @@ export async function render(app, route) {
       ? h('section', { class: 'card' }, [
           h('h3', { text: S.usage.kmTotals }),
           h('ul', { class: 'totals' }, [
-            summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.me : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
+            summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.meHead : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
             // The shared pool is not anybody's: it is shown on its own line (split in the same ratio as the personal kilometres when fuel is paid).
             summary.together && summary.together.km > 0
               ? h('li', {}, [h('span', { text: S.usage.kmTogetherTotal }), h('span', { text: `${S.usage.km(summary.together.km)} · ${S.usage.trips(summary.together.trips)}` })])

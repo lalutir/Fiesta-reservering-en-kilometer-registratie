@@ -148,30 +148,30 @@ test('property: paying a request made over everything that existed leaves nothin
 });
 
 test('the request text: nothing carried reads exactly as before, carried amounts are named, and the pool is explained', () => {
-  const base = { amountCents: 1500, creditorName: 'Anna', debtorName: 'Ben', litres: '40.00', date: 'Sat 14 Nov', km: 50, kmTotal: 200, equalSplit: false, reference: 'fuel-1-2' };
-  const plain = 'Hi Ben, Anna fuelled the shared car on Sat 14 Nov (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). Please pay Anna.';
+  const base = { amountCents: 1500, creditorName: 'Anna', debtorName: 'Ben', litres: '40,00', date: 'zaterdag 14 november', km: 50, kmTotal: 200, equalSplit: false, reference: 'fuel-1-2' };
+  const plain = 'Hoi Ben, Anna heeft op zaterdag 14 november de gedeelde auto getankt (40,00 L). Jouw aandeel is €\u00a015,00 (50 van 200 km gereden). Wil je dit aan Anna betalen?';
   assert.equal(requestMessage(base), plain);
   assert.equal(requestMessage({ ...base, shareCents: 1500, carriedCents: 0, togetherKm: 0 }), plain, 'zero carried and zero together change nothing');
   assert.equal(
     requestMessage({ ...base, amountCents: 2500, shareCents: 1500, carriedCents: 1000 }),
-    'Hi Ben, Anna fuelled the shared car on Sat 14 Nov (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). EUR 10.00 from earlier fill-ups is still open, so the total is EUR 25.00. Please pay Anna.',
+    'Hoi Ben, Anna heeft op zaterdag 14 november de gedeelde auto getankt (40,00 L). Jouw aandeel is €\u00a015,00 (50 van 200 km gereden). €\u00a010,00 van eerdere tankbeurten staat nog open, dus het totaal is €\u00a025,00. Wil je dit aan Anna betalen?',
   );
   assert.equal(
     requestMessage({ ...base, amountCents: 500, shareCents: 1500, carriedCents: -1000 }),
-    'Hi Ben, Anna fuelled the shared car on Sat 14 Nov (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). EUR 10.00 that Anna still owes you from earlier is taken off, so the total is EUR 5.00. Please pay Anna.',
+    'Hoi Ben, Anna heeft op zaterdag 14 november de gedeelde auto getankt (40,00 L). Jouw aandeel is €\u00a015,00 (50 van 200 km gereden). €\u00a010,00 die Anna je van eerder nog schuldig is, gaat eraf, dus het totaal is €\u00a05,00. Wil je dit aan Anna betalen?',
   );
   // 200 km in all, of which 80 together: the share is 50 of the 120 personal km, and the pool follows that ratio.
   const pooled = requestMessage({ ...base, togetherKm: 80 });
-  assert.match(pooled, /\(50 of 120 km driven; the 80 km driven together are split in the same ratio\)/);
+  assert.match(pooled, /\(50 van 120 km gereden; de 80 km die samen zijn gereden, worden in dezelfde verhouding verdeeld\)/);
   assert.doesNotMatch(pooled, /equal part/);
 });
 
 // The words are in src/notify-texts.ts; where a tap opens and the tag are the row of the event table (src/notify.ts), checked over HTTP below.
 test('the push text names the fueler and the amount, and says what is carried', () => {
   const text = (carriedCents: number, dueCents: number, shareCents = 1500, fueler = 'Anna') => fuelCreatedText({ fueler, shareCents, carriedCents, dueCents });
-  assert.deepEqual({ ...text(0, 1500) }, { title: 'Anna fuelled the car', body: 'You owe Anna EUR 15.00. This can still change when more drives are registered.' });
-  assert.match(text(1000, 2500).body, /You owe Anna EUR 25\.00 \(EUR 15\.00 now plus EUR 10\.00 still open from earlier\)/);
-  assert.match(text(-400, 1100).body, /You owe Anna EUR 11\.00 \(EUR 15\.00 now, minus EUR 4\.00 that Anna owes you from earlier\)/);
+  assert.deepEqual({ ...text(0, 1500) }, { title: 'Anna heeft de auto getankt', body: 'Je moet Anna €\u00a015,00 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.' });
+  assert.match(text(1000, 2500).body, /Je moet Anna €\s25,00 betalen \(€\s15,00 nu plus €\s10,00 dat nog openstaat van eerder\)/);
+  assert.match(text(-400, 1100).body, /Je moet Anna €\s11,00 betalen \(€\s15,00 nu, min €\s4,00 dat Anna je van eerder nog schuldig is\)/);
   const long = fit({ ...text(0, 1, 1, 'A'.repeat(200)), url: '/#/history', tag: 'fuel-1' });
   assert.ok(Buffer.byteLength(JSON.stringify(long)) < 600, 'a long name cannot push the message over the size limit');
 });
@@ -207,7 +207,7 @@ test('the second fill-up carries the first: the card, the request, the text and 
     const request = benOf(made.body.fuel).request;
     assert.equal(request.amountCents, 9000, 'the request asks for the total');
     assert.equal(request.changed, false);
-    assert.match(request.message, /Your share is EUR 30\.00 \(50 of 50 km driven\)\. EUR 60\.00 from earlier fill-ups is still open, so the total is EUR 90\.00\. Please pay Anna\./);
+    assert.match(request.message, /Jouw aandeel is €\s30,00 \(50 van 50 km gereden\)\. €\s60,00 van eerdere tankbeurten staat nog open, dus het totaal is €\s90,00\. Wil je dit aan Anna betalen\?/);
     assert.equal(one<Json>(t.db, 'SELECT covers_fuel_id FROM fuel_requests WHERE fuel_id = ?', second.id)?.covers_fuel_id, second.id, 'it covers everything that existed');
     assert.deepEqual(pairs((await anna.get('/api/fuel')).body.balances), [['Ben', 'Anna', 9000]], 'asking changes nothing about what is owed');
 
@@ -287,7 +287,7 @@ test('what the fueler owes the debtor back is taken off the amount due, and sett
     assert.deepEqual(pairs((await anna.get('/api/fuel')).body.balances), [['Ben', 'Anna', 2000]], 'the same 20.00 the balances say');
     const made = await anna.post(`/api/fuel/${second.id}/requests`, { debtorId: ben.id });
     assert.equal(benOf(made.body.fuel).request.amountCents, 2000);
-    assert.match(benOf(made.body.fuel).request.message, /EUR 40\.00 that Anna still owes you from earlier is taken off, so the total is EUR 20\.00\./);
+    assert.match(benOf(made.body.fuel).request.message, /€\s40,00 die Anna je van eerder nog schuldig is, gaat eraf, dus het totaal is €\s20,00\./);
 
     await ben.post(`/api/fuel/${second.id}/requests/${ben.id}/paid`, { paid: true });
     const after = (await anna.get('/api/fuel')).body;
@@ -384,7 +384,7 @@ test('a debtor says "I have paid" for their own share, with or without a request
       { provider: 'manual', amount: 6000, link: '', paidBy: ben.id, covers: row?.covers_fuel_id, paid: true },
     );
     assert.ok((row?.covers_fuel_id as number) >= first.id, 'it records what existed');
-    assert.match(row?.message as string, /^Hi Ben, Anna fuelled the shared car/);
+    assert.match(row?.message as string, /^Hoi Ben, Anna heeft op .* de gedeelde auto getankt/);
     assert.equal(benOf(paid.body.fuel).request.paidAt !== null, true);
 
     // Twice is once: the first mark keeps its name and time, the log has one line.
@@ -468,7 +468,7 @@ test('a new fill-up sends one push to each device of everybody who owes money, a
     assert.deepEqual(sent.map((c) => c.url).sort(), [phone.endpoint, tablet.endpoint].sort(), 'both of Ben\'s devices, once each; not Anna (the fueler), not the admin (owes nothing), not Carla (no device)');
     for (const [sub, call] of [[phone, sent.find((c) => c.url === phone.endpoint)], [tablet, sent.find((c) => c.url === tablet.endpoint)]] as const) {
       const message = sub.read(call!);
-      assert.deepEqual({ ...message }, { title: 'Anna fuelled the car', body: 'You owe Anna EUR 15.00. This can still change when more drives are registered.', url: '/#/history', tag: `fuel-${res.body.fuel.id}` });
+      assert.deepEqual({ ...message }, { title: 'Anna heeft de auto getankt', body: 'Je moet Anna €\u00a015,00 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.', url: '/#/history', tag: `fuel-${res.body.fuel.id}` });
       assert.equal(call!.redirect, 'manual');
       assert.equal(call!.hasSignal, true, 'every send has a timeout');
     }
@@ -489,7 +489,7 @@ test('the push carries what is carried over: the second fill-up\'s message names
     await t.app.idle();
     const bodies = stub.calls.filter((c) => c.url === phone.endpoint).map((c) => phone.read(c).body);
     assert.equal(bodies.length, 2);
-    assert.match(bodies[1], /You owe Anna EUR 35\.00 \(EUR 20\.00 now plus EUR 15\.00 still open from earlier\)/);
+    assert.match(bodies[1], /Je moet Anna €\s35,00 betalen \(€\s20,00 nu plus €\s15,00 dat nog openstaat van eerder\)/);
   } finally {
     await t.close();
   }
@@ -698,7 +698,7 @@ test('"I have paid" with no request on a share that carries earlier ones records
       { provider: 'manual', amount: 9667, covers: late.id, paidBy: ben.id, link: '' },
       'the snapshot asks for the share (30.00) and the 66.67 it carries, and covers everything that existed',
     );
-    assert.match(row?.message as string, /EUR 66\.67 from earlier fill-ups is still open, so the total is EUR 96\.67/);
+    assert.match(row?.message as string, /€\s66,67 van eerdere tankbeurten staat nog open, dus het totaal is €\s96,67/);
     assert.equal(many(t.db, 'SELECT id FROM fuel_requests').length, 1, 'one row: the earlier fill-ups got none of their own');
 
     const after = (await anna.get('/api/fuel')).body;
@@ -823,8 +823,8 @@ test('the push says what is really due: nothing when the fueler owes the debtor 
     assert.deepEqual(
       { ...phone.read(stub.calls[0]!) },
       {
-        title: 'Anna fuelled the car',
-        body: 'You owe Anna EUR 50.00 (EUR 60.00 now, minus EUR 10.00 that Anna owes you from earlier). This can still change when more drives are registered.',
+        title: 'Anna heeft de auto getankt',
+        body: 'Je moet Anna €\u00a050,00 betalen (€\u00a060,00 nu, min €\u00a010,00 dat Anna je van eerder nog schuldig is). Dit kan nog veranderen als er meer ritten worden geregistreerd.',
         url: '/#/history',
         tag: `fuel-${big.body.fuel.id}`,
       },
@@ -849,9 +849,9 @@ test('an admin registering a fill-up for somebody else tells the debtors about t
     // Ben owes Anna, so he hears; Anna fuelled but did not register it, so she is told that somebody did it in her name (see test/notify.test.ts); the admin did it and owes nothing.
     assert.deepEqual(stub.calls.map((c) => c.url).sort(), [annaPhone.endpoint, benPhone.endpoint].sort());
     const message = benPhone.read(stub.calls.find((c) => c.url === benPhone.endpoint)!);
-    assert.equal(message.title, 'Anna fuelled the car', 'the fueler is named, not the admin who typed it in');
-    assert.equal(message.body, 'You owe Anna EUR 15.00. This can still change when more drives are registered.');
-    assert.equal(annaPhone.read(stub.calls.find((c) => c.url === annaPhone.endpoint)!).title, 'Admin registered a fill-up in your name');
+    assert.equal(message.title, 'Anna heeft de auto getankt', 'the fueler is named, not the admin who typed it in');
+    assert.equal(message.body, 'Je moet Anna €\u00a015,00 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.');
+    assert.equal(annaPhone.read(stub.calls.find((c) => c.url === annaPhone.endpoint)!).title, 'Admin registreerde een tankbeurt op jouw naam');
     assert.ok(!stub.calls.some((c) => c.url === adminPhone.endpoint), 'never the one who did it');
   } finally {
     await t.close();
@@ -1050,8 +1050,8 @@ test('together: kilometres driven for others set who owes what, the push and the
 
     // The push says what the card says, to the people who owe and have a device; not to Anna (she fuelled) nor to the admin (who does not pay).
     const firstId = first.body.fuel.id;
-    assert.deepEqual(messagesFor(ben.id, firstId).map((m) => m['body']), ['You owe Anna EUR 53.33. This can still change when more drives are registered.']);
-    assert.deepEqual(messagesFor(carla.id, firstId).map((m) => m['body']), ['You owe Anna EUR 26.67. This can still change when more drives are registered.']);
+    assert.deepEqual(messagesFor(ben.id, firstId).map((m) => m['body']), ['Je moet Anna €\u00a053,33 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.']);
+    assert.deepEqual(messagesFor(carla.id, firstId).map((m) => m['body']), ['Je moet Anna €\u00a026,67 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.']);
     assert.deepEqual(messagesFor(anna.id, firstId), []);
     const mine = ((await ben.get('/api/fuel')).body.items as Json[]).find((f) => f['id'] === firstId) as Json;
     const bensShare = (mine.shares as Json[]).find((s) => s['userId'] === ben.id) as Json;
@@ -1071,8 +1071,8 @@ test('together: kilometres driven for others set who owes what, the push and the
     const benShare = (second.body.fuel.shares as Json[]).find((s) => s['userId'] === ben.id) as Json;
     assert.deepEqual([carlaShare['carriedCents'], carlaShare['dueCents']], [2667, 4667], 'Carla\'s unpaid 26.67 rides along');
     assert.deepEqual([benShare['carriedCents'], benShare['dueCents']], [0, 2000], 'Ben paid, so nothing rides along');
-    assert.deepEqual(messagesFor(ben.id, secondId).map((m) => m['body']), ['You owe Anna EUR 20.00. This can still change when more drives are registered.']);
-    assert.deepEqual(messagesFor(carla.id, secondId).map((m) => m['body']), ['You owe Anna EUR 46.67 (EUR 20.00 now plus EUR 26.67 still open from earlier). This can still change when more drives are registered.']);
+    assert.deepEqual(messagesFor(ben.id, secondId).map((m) => m['body']), ['Je moet Anna €\u00a020,00 betalen. Dit kan nog veranderen als er meer ritten worden geregistreerd.']);
+    assert.deepEqual(messagesFor(carla.id, secondId).map((m) => m['body']), ['Je moet Anna €\u00a046,67 betalen (€\u00a020,00 nu plus €\u00a026,67 dat nog openstaat van eerder). Dit kan nog veranderen als er meer ritten worden geregistreerd.']);
 
     // "Who owes whom" agrees: Carla 46.67 and Ben 20.00, both to Anna (the admin owes nothing); nothing twice.
     const balances = (await anna.get('/api/fuel')).body.balances as Json[];

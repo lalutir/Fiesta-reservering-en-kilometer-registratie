@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Fuel, FuelShare, Reservation } from '../public/api.js';
-import { driveBody, kmOwnerLabel } from '../public/dom.js';
+import { driveBody, formatEuro, kmOwnerLabel } from '../public/dom.js';
 import { S } from '../public/strings.js';
 import { kmAction } from '../public/views/agenda.js';
 import { carriedLines, changedLine, shareStatus } from '../public/views/fuel.js';
@@ -77,10 +77,10 @@ test('kmOwnerLabel: says whose kilometres a drive is, and nothing for the driver
 test('kmAction: a registered reservation says when the kilometres count for someone else or for everybody', () => {
   const drive = (extra: Json) => ({ id: 3, userId: ANNA, userName: 'Anna', status: 'completed', odometerStart: 100, odometerEnd: 150, distanceKm: 50, linked: true, ...extra });
   const forBen = res({ kmState: 'registered', drive: drive({ kmFor: 'person', kmUserId: BEN, kmUserName: 'Ben' }) });
-  assert.equal(kmAction(forBen, ANNA, false, iso(90)).line, `${S.agenda.kmRegistered(50, S.me)} · ${S.usage.kmOwnerPerson('Ben')}`);
+  assert.equal(kmAction(forBen, ANNA, false, iso(90)).line, `${S.agenda.kmRegistered(50, S.meLabel)} · ${S.usage.kmOwnerPerson('Ben')}`);
   assert.equal(kmAction(forBen, BEN, false, iso(90)).line, `${S.agenda.kmRegistered(50, 'Anna')} · ${S.usage.kmOwnerPerson(S.me)}`);
-  assert.equal(kmAction(res({ kmState: 'registered', drive: drive({ kmFor: 'together' }) }), ANNA, false, iso(90)).line, `${S.agenda.kmRegistered(50, S.me)} · ${S.usage.kmOwnerTogether}`);
-  assert.equal(kmAction(res({ kmState: 'registered', drive: drive({ kmFor: 'self' }) }), ANNA, false, iso(90)).line, S.agenda.kmRegistered(50, S.me), 'unchanged for the driver\'s own kilometres');
+  assert.equal(kmAction(res({ kmState: 'registered', drive: drive({ kmFor: 'together' }) }), ANNA, false, iso(90)).line, `${S.agenda.kmRegistered(50, S.meLabel)} · ${S.usage.kmOwnerTogether}`);
+  assert.equal(kmAction(res({ kmState: 'registered', drive: drive({ kmFor: 'self' }) }), ANNA, false, iso(90)).line, S.agenda.kmRegistered(50, S.meLabel), 'unchanged for the driver\'s own kilometres');
 });
 
 // ------------------------------------------------ carried amounts and the History list
@@ -94,8 +94,8 @@ const fuelOf = (id: number, userId: number, userName: string, shares: FuelShare[
 test('carriedLines: nothing when nothing is carried, otherwise what is open or taken off, and the total to pay', () => {
   const fuel = fuelOf(7, ANNA, 'Anna', []);
   assert.deepEqual(carriedLines(fuel, owedShare(), nameOf), []);
-  assert.deepEqual(carriedLines(fuel, owedShare({ carriedCents: 1000, dueCents: 2500 }), nameOf), [S.fuel.carried('10.00'), S.fuel.due('25.00')]);
-  assert.deepEqual(carriedLines(fuel, owedShare({ carriedCents: -400, dueCents: 1100 }), nameOf), [S.fuel.carriedBack('Anna', S.me, '4.00'), S.fuel.due('11.00')], 'names read as "me" for the viewer');
+  assert.deepEqual(carriedLines(fuel, owedShare({ carriedCents: 1000, dueCents: 2500 }), nameOf), [S.fuel.carried(formatEuro(1000)), S.fuel.due(formatEuro(2500))]);
+  assert.deepEqual(carriedLines(fuel, owedShare({ carriedCents: -400, dueCents: 1100 }), nameOf), [S.fuel.carriedBack('Anna', S.me, formatEuro(400)), S.fuel.due(formatEuro(1100))], 'names read as "jou" for the viewer');
   assert.deepEqual(carriedLines(fuel, { ...owedShare(), carriedCents: undefined, dueCents: undefined } as unknown as FuelShare, nameOf), [], 'older answers without the fields');
 });
 
@@ -109,11 +109,11 @@ test('shareStatus: a share a later payment settled is its own state, and paid st
 
 test('changedLine compares with what a request would ask now (the share plus what is carried), not with the share alone', () => {
   const share = owedShare({ cents: 1500, carriedCents: 1500, dueCents: 3000, request: { amountCents: 4500, paidAt: null, changed: true, currentCents: 3000 } });
-  assert.equal(changedLine(share), S.fuel.changedAsked('45.00', '30.00', false, '15.00'));
+  assert.equal(changedLine(share), S.fuel.changedAsked(formatEuro(4500), formatEuro(3000), false, formatEuro(1500)));
   const paid = owedShare({ cents: 1500, carriedCents: 1500, dueCents: 3000, request: { amountCents: 2000, paidAt: iso(0), changed: true, currentCents: 3000 } });
-  assert.equal(changedLine(paid), S.fuel.changedPaid('20.00', '30.00', true, '10.00'));
+  assert.equal(changedLine(paid), S.fuel.changedPaid(formatEuro(2000), formatEuro(3000), true, formatEuro(1000)));
   const old = owedShare({ cents: 2000, request: { amountCents: 1500, paidAt: null, changed: true } });
-  assert.equal(changedLine(old), S.fuel.changedAsked('15.00', '20.00', true, '5.00'), 'an answer without currentCents falls back to the share');
+  assert.equal(changedLine(old), S.fuel.changedAsked(formatEuro(1500), formatEuro(2000), true, formatEuro(500)), 'an answer without currentCents falls back to the share');
 });
 
 test('fuelOwed: my open shares first, then the latest few that are paid or settled; never my own fill-ups or shares that owe nothing', () => {

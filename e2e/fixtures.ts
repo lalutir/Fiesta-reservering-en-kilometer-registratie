@@ -5,6 +5,9 @@ import { utcToLocalInput } from '../shared/time.js';
 
 const HOUSEHOLD_TZ = 'Europe/Amsterdam';
 
+/** The accessible name of the tab bar, as a person hears it (S.nav.label in public/strings.js; test/dutch.test.ts keeps the two equal). */
+export const NAV_NAME = 'Hoofdmenu';
+
 /** A date (YYYY-MM-DD) and a time (HH:MM), the values the form fields take. */
 type FormParts = ReturnType<typeof utcToLocalInput>;
 
@@ -97,11 +100,11 @@ export async function expectNoHorizontalScroll(page: Page, where: string): Promi
  * neighbour) and no tab is narrower than the minimum size of a touch target (24 px, WCAG 2.2). A failing check is a
  * font size or padding to fix in public/style.css, never a reason to loosen this.
  *
- * It looks at what a person sees: each tab is found by its name as a link of the "Main" navigation, its words by
+ * It looks at what a person sees: each tab is found by its name as a link of the main navigation (NAV_NAME), its words by
  * their text inside it, and both are measured on screen. A count floating over a corner is not part of the words.
  */
 export async function expectTabsFit(page: Page, where: string, names: readonly string[]): Promise<void> {
-  const nav = page.getByRole('navigation', { name: 'Main' });
+  const nav = page.getByRole('navigation', { name: NAV_NAME });
   for (const name of names) {
     // A tab's name may carry a count ("Drives, 2 ..."), so it is matched from the start.
     const tab = nav.getByRole('link', { name: new RegExp(`^${name}`) });

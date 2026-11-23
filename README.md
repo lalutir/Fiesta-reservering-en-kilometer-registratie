@@ -102,7 +102,13 @@ plus an admin page for the person who manages it.
 - **Admin page** at `/admin/` (admins only): manage users (create, deactivate, reset password,
   roles), see and correct all reservations and drives, and check the purge and backup status.
 - Times are stored in UTC and shown in the household time zone (default `Europe/Amsterdam`).
-  The interface is in English with all text in one file (`public/strings.js`).
+  The interface is Dutch (informal "je") and only Dutch: there is no language switcher. All text of the
+  browser is in one file (`public/strings.js`), every push text in `src/notify-texts.ts`, the payment
+  request in `src/payments.ts`, and the vocabulary is written down in [docs/GLOSSARY.md](docs/GLOSSARY.md).
+  Dates, times, amounts and numbers are written the Dutch way (`maandag 16 november`, `€ 12,50`,
+  `45.210 km`), and a decimal field accepts a comma or a dot. This README, the code, the logs and the
+  command-line tool stay in English, and so do the button names quoted below (the screens say the Dutch
+  ones, see the glossary); the English version of the interface is in the git history.
 
 ## Design decisions
 
@@ -229,14 +235,16 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   reservations.ts  reservations, suggestions, permissions          usage.ts    drive log, drafts, pending km
   fuel.ts     fill-ups, cost shares, payment requests              payments.ts payment request provider (manual, Tikkie)
   fuel-carry.ts  carried-over amounts and settlement (pure)        notify.ts   the one notifier and its event table
-  notify-texts.ts  every word of every notification (translate here)
+  notify-texts.ts  every word of every notification (in Dutch)
   tickets.ts  traffic tickets and who was driving at the time       odometer.ts  the odometer chain, its gaps and explanations
   car.ts      the Car tab: damage reports and the APK date
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
   db.ts       the only file that touches node:sqlite (schema v6, migrations)
-shared/     time.js: time zone, DST, calendar-month and calendar-date maths, used by the server and the browser
+shared/     time.js: time zone, DST, calendar-month and calendar-date maths, and the Dutch date display;
+            format.js: euro, litres, price per litre and kilometres as integers written the Dutch way.
+            Both are used by the server and the browser
 public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views,
             kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab)
             and public/admin/ (admin page)
@@ -244,7 +252,7 @@ test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
 .github/    the CI workflow and Dependabot config (`.nvmrc` is the Node version CI uses)
-docs/       DEPLOYMENT.md
+docs/       DEPLOYMENT.md, GLOSSARY.md (the Dutch vocabulary and tone, checked by test/dutch.test.ts)
 Dockerfile, docker-compose.yml, Caddyfile   production setup
 ```
 

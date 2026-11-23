@@ -317,13 +317,13 @@ test('payment requests: one per person per fill-up, never for the fueler or a ze
     assert.equal(share.request.link, '');
     assert.equal(share.request.changed, false);
     assert.equal(share.request.paidAt, null);
-    assert.match(share.request.message, /Hi Ben, Anna fuelled the shared car on .* \(40\.00 L\)\. Your share is EUR 15\.00 \(50 of 200 km driven\)\. Please pay Anna\./);
+    assert.match(share.request.message, /Hoi Ben, Anna heeft op .* de gedeelde auto getankt \(40,00 L\)\. Jouw aandeel is €\s15,00 \(50 van 200 km gereden\)\. Wil je dit aan Anna betalen\?/);
 
     // Asking again redoes the snapshot (here with a pasted payment link) but never makes a second record.
     const again = await anna.post(url, { debtorId: ben.id, link: 'https://pay.example/abc' });
     assert.equal(again.status, 200);
     assert.equal(again.body.fuel.shares.find((s: Json) => s.userId === ben.id).request.link, 'https://pay.example/abc');
-    assert.match(again.body.fuel.shares.find((s: Json) => s.userId === ben.id).request.message, /Pay here: https:\/\/pay\.example\/abc$/);
+    assert.match(again.body.fuel.shares.find((s: Json) => s.userId === ben.id).request.message, /Betaal hier: https:\/\/pay\.example\/abc$/);
     assert.equal(one<{ n: number }>(t.db, 'SELECT COUNT(*) AS n FROM fuel_requests')?.n, 1);
 
     // Paid is final for requests and for the fill-up itself, until it is marked unpaid again.

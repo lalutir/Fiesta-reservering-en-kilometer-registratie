@@ -123,7 +123,7 @@ test('nobody is pushed for an admin\'s share: the people who owe hear about it, 
     const callsTo = (userId: number): number => stub.calls.filter((c) => c.url === devices.get(userId)?.endpoint).length;
     assert.deepEqual([callsTo(anna.id), callsTo(ben.id), callsTo(admin.id)], [1, 1, 0]);
     const message = devices.get(anna.id)?.read(stub.calls.find((c) => c.url === devices.get(anna.id)?.endpoint) as never) as Json;
-    assert.match(message['body'], /You owe Carla EUR 40\.00/);
+    assert.match(message['body'], /Je moet Carla €\s40,00 betalen/);
   } finally {
     await t.close();
   }

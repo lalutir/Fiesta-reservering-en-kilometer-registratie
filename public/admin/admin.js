@@ -175,7 +175,7 @@ async function renderUsers() {
   );
 
   const rows = users.map((u) => [
-    h('span', {}, [h('strong', { text: u.displayName }), u.id === me ? h('span', { class: 'hint', text: ` (${S.you})` }) : null]),
+    h('span', {}, [h('strong', { text: u.displayName }), u.id === me ? h('span', { class: 'hint', text: ` (${S.meLabel})` }) : null]),
     u.username,
     S.admin.users.roleLabel[u.role],
     h('span', { class: `badge-status ${u.active ? 'confirmed' : 'declined'}`, text: u.active ? S.admin.users.active : S.admin.users.inactive }),
@@ -390,7 +390,7 @@ function pendingSection(pending, days) {
       rows.push([
         entry.userName,
         P.pendingDraft,
-        `${fmtWhen(d.start, tz)}${d.odometerStart === null ? '' : `, ${d.odometerStart} km`}`,
+        `${fmtWhen(d.start, tz)}${d.odometerStart === null ? '' : `, ${S.usage.km(d.odometerStart)}`}`,
         text(d.note),
         h('div', { class: 'actions' }, [
           button(S.edit, () => openUsageEditor(d)),
@@ -578,7 +578,7 @@ async function renderRetention() {
       h('h2', { text: r.title }),
       h('dl', { class: 'kv' }, [
         h('dt', { text: r.window }),
-        h('dd', { text: `${formatLocal(s.window.from, tz)} – ${formatLocal(s.window.to, tz)} (${s.windowMonths} months, ${s.timeZone})` }),
+        h('dd', { text: `${formatLocal(s.window.from, tz)} – ${formatLocal(s.window.to, tz)} (${r.windowValue(s.windowMonths, s.timeZone)})` }),
         h('dt', { text: r.cutoff }),
         h('dd', { text: formatLocal(s.cutoff, tz) }),
         h('dt', { text: r.lastPurge }),

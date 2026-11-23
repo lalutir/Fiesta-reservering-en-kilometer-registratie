@@ -3,3 +3,5 @@
 # CI reads the Node version from this file and passes it to docker build as a build
 # argument: a CR from a Windows checkout would end up in the image tag.
 .nvmrc text eol=lf
+# test/dutch.test.ts parses this key list line by line; keep it LF on a Windows checkout too.
+test/dutch-keys.txt text eol=lf

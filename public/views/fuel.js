@@ -3,7 +3,22 @@
 // Money is whole cents and volume whole millilitres everywhere: nothing here
 // uses floating point to decide an amount.
 import { del, get, patch, post } from '../api.js';
-import { dateTimeField, driverSelect, field, fmtWhen, focusFirstInvalid, h, numberInput, readNumber, setBusy, showFieldErrors } from '../dom.js';
+import {
+  dateTimeField,
+  driverSelect,
+  field,
+  fmtWhen,
+  focusFirstInvalid,
+  formatCentsInput,
+  formatEuro,
+  formatLitres,
+  formatPrice,
+  h,
+  numberInput,
+  readNumber,
+  setBusy,
+  showFieldErrors,
+} from '../dom.js';
 import { odometerContext, odometerNote } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
 
@@ -84,32 +99,6 @@ export function deriveFuel(input) {
 }
 
 /**
- * 1500 -> "15.00"
- * @param {number} cents
- */
-export function fmtCents(cents) {
-  return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, '0')}`;
-}
-
-/**
- * 40000 -> "40.00", 40123 -> "40.123" (litres from millilitres)
- * @param {number} millilitres
- */
-export function fmtLitres(millilitres) {
-  const whole = Math.floor(millilitres / 1000);
-  const rest = String(millilitres % 1000).padStart(3, '0');
-  return millilitres % 10 === 0 ? `${whole}.${rest.slice(0, 2)}` : `${whole}.${rest}`;
-}
-
-/**
- * 1500 -> "1.500" (thousandths of a euro per litre)
- * @param {number} thousandths
- */
-export function fmtPrice(thousandths) {
-  return `${Math.floor(thousandths / 1000)}.${String(thousandths % 1000).padStart(3, '0')}`;
-}
-
-/**
  * The ways to hand a message to someone: a text message and WhatsApp, as links.
  * @param {string} message
  */
@@ -142,9 +131,9 @@ export function carriedLines(fuel, share, nameOf) {
   const carried = share.carriedCents ?? 0;
   if (carried === 0) return [];
   const line = carried > 0
-    ? S.fuel.carried(fmtCents(carried))
-    : S.fuel.carriedBack(nameOf(fuel.userName, fuel.userId), nameOf(share.userName, share.userId), fmtCents(-carried));
-  return [line, S.fuel.due(fmtCents(share.dueCents ?? share.cents))];
+    ? S.fuel.carried(formatEuro(carried))
+    : S.fuel.carriedBack(nameOf(fuel.userName, fuel.userId), nameOf(share.userName, share.userId), formatEuro(-carried));
+  return [line, S.fuel.due(formatEuro(share.dueCents ?? share.cents))];
 }
 
 /**
@@ -188,7 +177,7 @@ export function changedLine(share) {
   if (!request || !request.changed) return null;
   // What a request for this share would ask now (the share plus what is carried); older requests asked for the share alone.
   const difference = (request.currentCents ?? share.cents) - request.amountCents;
-  const args = /** @type {const} */ ([fmtCents(request.amountCents), fmtCents(request.currentCents ?? share.cents), difference > 0, fmtCents(Math.abs(difference))]);
+  const args = /** @type {const} */ ([formatEuro(request.amountCents), formatEuro(request.currentCents ?? share.cents), difference > 0, formatEuro(Math.abs(difference))]);
   return request.paidAt ? S.fuel.changedPaid(...args) : S.fuel.changedAsked(...args);
 }
 
@@ -218,8 +207,9 @@ export async function render(app, route) {
   // A member can only edit their own fill-ups, so `existing` is theirs and the select (locked for them) already holds them.
   who.value = String(existing?.userId ?? me.id);
   const input = (/** @type {string} */ value) => h('input', { type: 'text', inputmode: 'decimal', autocomplete: 'off', value });
-  const litres = input(existing ? fmtLitres(existing.millilitres) : '');
-  const total = input(existing ? fmtCents(existing.totalCents) : '');
+  // Shown and prefilled with a comma and without grouping, so what is on screen parses back to the same number.
+  const litres = input(existing ? formatLitres(existing.millilitres) : '');
+  const total = input(existing ? formatCentsInput(existing.totalCents) : '');
   const price = input('');
   const odometer = numberInput(existing?.odometer ?? null);
   const note = h('input', { type: 'text', maxlength: '500', value: existing?.note ?? '', autocomplete: 'off' });
@@ -243,7 +233,7 @@ export async function render(app, route) {
 
   const showWorked = () => {
     const d = deriveFuel({ litres: litres.value, total: total.value, price: price.value });
-    worked.textContent = d.ok ? S.fuel.worked(fmtLitres(d.millilitres), fmtCents(d.totalCents), fmtPrice(d.pricePerLitreMillis)) : '';
+    worked.textContent = d.ok ? S.fuel.worked(formatLitres(d.millilitres), formatEuro(d.totalCents), formatPrice(d.pricePerLitreMillis)) : '';
   };
   for (const el of [litres, total, price]) el.addEventListener('input', showWorked);
   showWorked();
@@ -338,7 +328,7 @@ export async function render(app, route) {
           { class: 'totals' },
           data.balances.map((b) =>
             h('li', {}, [
-              h('span', { text: S.fuel.owes(b.fromUserId === me.id ? S.me : b.fromName, b.toUserId === me.id ? S.me : b.toName, fmtCents(b.cents)) }),
+              h('span', { text: S.fuel.owes(b.fromUserId === me.id ? S.me : b.fromName, b.toUserId === me.id ? S.me : b.toName, formatEuro(b.cents)) }),
             ]),
           ),
         ),
@@ -502,9 +492,9 @@ export async function render(app, route) {
     const lockedHint = (f.hasPaidRequests || f.settledByLater) && (isAdmin || f.userId === me.id);
     return h('article', { class: 'card fuel', id: `fuel-${f.id}` }, [
       h('div', { class: 'row' }, [
-        h('strong', { text: S.fuel.header(f.userId === me.id ? S.me : f.userName, fmtLitres(f.millilitres), fmtCents(f.totalCents)) }),
+        h('strong', { text: S.fuel.header(f.userId === me.id ? S.me : f.userName, formatLitres(f.millilitres), formatEuro(f.totalCents)) }),
         // Neutral: green is kept for "paid" and "confirmed", this is only a fact about the fill-up.
-        h('span', { class: 'badge-status', text: S.fuel.perLitre(fmtPrice(f.pricePerLitreMillis)) }),
+        h('span', { class: 'badge-status', text: S.fuel.perLitre(formatPrice(f.pricePerLitreMillis)) }),
       ]),
       h('div', { class: 'when', text: fmtWhen(f.at, app.tz) }),
       f.note ? h('div', { class: 'note', text: f.note }) : null,
@@ -525,8 +515,8 @@ export async function render(app, route) {
           const selfPaid = s.can.selfPaid === true;
           return h('li', { class: 'share' }, [
             h('div', { class: 'row' }, [
-              h('strong', { text: s.userId === me.id ? S.me : s.userName }),
-              h('span', { text: S.fuel.shareLine(s.km, fmtCents(s.cents)) }),
+              h('strong', { text: s.userId === me.id ? S.meHead : s.userName }),
+              h('span', { text: S.fuel.shareLine(s.km, formatEuro(s.cents)) }),
               s.owes
                 ? h('span', { class: `chip ${status === 'paidChanged' ? 'changed' : status}`, text: S.fuel.status[status] })
                 : s.userId === f.userId
