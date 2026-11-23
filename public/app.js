@@ -185,7 +185,7 @@ function buildShell(/** @type {import('./api.js').Session} */ session) {
         session.user.role === 'admin' ? h('a', { class: 'admin-link', href: '/admin/' }, S.nav.admin) : null,
       ]),
       viewHost,
-      h('nav', { class: 'tabs', 'aria-label': 'Main' }, tabs),
+      h('nav', { class: 'tabs', 'aria-label': S.nav.label }, tabs),
       toastEl,
     ]),
   );

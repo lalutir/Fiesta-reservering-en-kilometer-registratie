@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCents, isTikkieLink, requestMessage, manualProvider, type PaymentInput } from '../src/payments.ts';
+import { formatEuro } from '../shared/format.js';
+import { isTikkieLink, requestMessage, manualProvider, type PaymentInput } from '../src/payments.ts';
 import { loadConfig } from '../src/config.ts';
 import { FUEL_ODO, at, createHousehold, insertUsage, stubFetch, type Json, type StubFetch } from './helpers.ts';
 
@@ -12,8 +13,8 @@ const INPUT: PaymentInput = {
   amountCents: 1500,
   creditorName: 'Anna',
   debtorName: 'Ben',
-  litres: '40.00',
-  date: 'Saturday 13 June',
+  litres: '40,00',
+  date: 'zaterdag 13 juni',
   km: 50,
   kmTotal: 200,
   equalSplit: false,
@@ -31,10 +32,10 @@ async function household(opts: Parameters<typeof createHousehold>[0] = {}) {
 const everything = (h: { t: { logs: unknown[] } }, ...replies: Array<{ text: string }>): string => JSON.stringify(h.t.logs) + replies.map((r) => r.text).join('\n');
 
 test('money is formatted from integer cents without floats', () => {
-  assert.equal(formatCents(1500), '15.00');
-  assert.equal(formatCents(5), '0.05');
-  assert.equal(formatCents(1234567), '12345.67');
-  assert.equal(formatCents(-250), '-2.50');
+  assert.equal(formatEuro(1500), '€\u00a015,00');
+  assert.equal(formatEuro(5), '€\u00a00,05');
+  assert.equal(formatEuro(1234567), '€\u00a012.345,67');
+  assert.equal(formatEuro(-250), '€\u00a0-2,50');
 });
 
 test('the manual provider writes the request text with the amount, the names and the basis', async () => {
@@ -42,33 +43,33 @@ test('the manual provider writes the request text with the amount, the names and
   assert.equal(made.provider, 'manual');
   assert.equal(made.link, undefined);
   assert.match(made.message, /Ben/);
-  assert.match(made.message, /Anna fuelled the shared car on Saturday 13 June \(40\.00 L\)/);
-  assert.match(made.message, /EUR 15\.00/);
-  assert.match(made.message, /50 of 200 km driven/);
-  assert.match(requestMessage({ ...INPUT, equalSplit: true }), /no kilometres count in that period, so the cost is split equally/);
+  assert.match(made.message, /Anna heeft op zaterdag 13 juni de gedeelde auto getankt \(40,00 L\)/);
+  assert.match(made.message, /€\s15,00/);
+  assert.match(made.message, /50 van 200 km gereden/);
+  assert.match(requestMessage({ ...INPUT, equalSplit: true }), /in die periode zijn geen kilometers geteld, dus de kosten zijn gelijk verdeeld/);
 });
 
 test('the request text explains the split: personal kilometres, the pool in the same ratio, only the pool, or nothing counted', () => {
   // Personal kilometres only: as it always was.
-  assert.match(requestMessage(INPUT), /Your share is EUR 15\.00 \(50 of 200 km driven\)\./);
-  assert.match(requestMessage({ ...INPUT, togetherKm: 0 }), /\(50 of 200 km driven\)/);
+  assert.match(requestMessage(INPUT), /Jouw aandeel is €\s15,00 \(50 van 200 km gereden\)\./);
+  assert.match(requestMessage({ ...INPUT, togetherKm: 0 }), /\(50 van 200 km gereden\)/);
 
   // Personal kilometres plus a pool: the ratio is told against the personal total, and the pool follows it.
   const withPool = requestMessage({ ...INPUT, km: 50, kmTotal: 260, togetherKm: 60 });
-  assert.match(withPool, /\(50 of 200 km driven; the 60 km driven together are split in the same ratio\)/);
-  assert.doesNotMatch(withPool, /equal part|equally/);
+  assert.match(withPool, /\(50 van 200 km gereden; de 60 km die samen zijn gereden, worden in dezelfde verhouding verdeeld\)/);
+  assert.doesNotMatch(withPool, /gelijk deel|gelijk verdeeld/);
 
   // Only the pool: an equal split, and it says why.
   const onlyPool = requestMessage({ ...INPUT, km: 0, kmTotal: 60, togetherKm: 60, equalSplit: true });
-  assert.match(onlyPool, /\(only 60 km were driven together in that period, so the cost is split equally\)/);
+  assert.match(onlyPool, /\(in die periode zijn maar 60 km samen gereden, dus de kosten zijn gelijk verdeeld\)/);
 
   // Nothing counted at all.
-  assert.match(requestMessage({ ...INPUT, km: 0, kmTotal: 0, equalSplit: true }), /\(no kilometres count in that period, so the cost is split equally\)/);
+  assert.match(requestMessage({ ...INPUT, km: 0, kmTotal: 0, equalSplit: true }), /\(in die periode zijn geen kilometers geteld, dus de kosten zijn gelijk verdeeld\)/);
 
   // Without a pool and with nothing carried, only the no-kilometres sentence differs from the old text.
   assert.equal(
     requestMessage(INPUT),
-    'Hi Ben, Anna fuelled the shared car on Saturday 13 June (40.00 L). Your share is EUR 15.00 (50 of 200 km driven). Please pay Anna.',
+    'Hoi Ben, Anna heeft op zaterdag 13 juni de gedeelde auto getankt (40,00 L). Jouw aandeel is €\u00a015,00 (50 van 200 km gereden). Wil je dit aan Anna betalen?',
   );
 });
 
@@ -110,12 +111,12 @@ test('with all three Tikkie settings the adapter calls the configured endpoint w
     assert.equal(call.headers['content-type'], 'application/json');
     const sent = JSON.parse(call.body!.toString('utf8'));
     assert.deepEqual(sent, { amountInCents: 1500, currency: 'EUR', description: sent.description, referenceId: `fuel-${fuel.id}-${ben.id}` });
-    assert.match(sent.description, /^Fuel /);
+    assert.match(sent.description, /^Tankbeurt /);
     const request = res.body.fuel.shares.find((s: Json) => s.userId === ben.id).request;
     assert.equal(request.provider, 'tikkie');
     assert.equal(request.link, 'https://tikkie.me/pay/abc123');
-    assert.match(request.message, /EUR 15\.00/);
-    assert.match(request.message, /Pay here: https:\/\/tikkie\.me\/pay\/abc123$/);
+    assert.match(request.message, /€\s15,00/);
+    assert.match(request.message, /Betaal hier: https:\/\/tikkie\.me\/pay\/abc123$/);
     // The paymentRequestUrl spelling is accepted too, and a link pasted by the user wins over the provider's.
     stub.respond(() => Response.json({ paymentRequestUrl: 'https://tikkie.me/pay/second' }));
     const second = await anna.post(`/api/fuel/${fuel.id}/requests`, { debtorId: ben.id });
@@ -148,7 +149,7 @@ test('whatever goes wrong at Tikkie, the request falls back to the manual text a
       const request = res.body.fuel.shares.find((s: Json) => s.userId === h.ben.id).request;
       assert.equal(request.provider, 'manual', label);
       assert.equal(request.link, '', label);
-      assert.match(request.message, /EUR 15\.00/, label);
+      assert.match(request.message, /€\s15,00/, label);
       assert.equal(stub.calls.length, 1, label);
       const text = everything(h, res);
       assert.ok(!text.includes(API_KEY) && !text.includes(TOKEN), `${label}: no secret in the logs or the response`);
@@ -212,4 +213,51 @@ test('a partial Tikkie configuration fails fast and names what is missing; an ht
   assert.throws(() => loadConfig({ ...TIKKIE_ENV, TIKKIE_ACCESS_TOKEN: '' }), /missing: TIKKIE_ACCESS_TOKEN/);
   assert.throws(() => loadConfig({ ...TIKKIE_ENV, TIKKIE_PAYMENT_REQUEST_URL: 'http://tikkie.example/v1' }), /must start with https:\/\//);
   assert.throws(() => loadConfig({ TIKKIE_API_KEY: API_KEY }), (err: Error) => !err.message.includes(API_KEY), 'the error does not echo the secret');
+});
+
+// ----------------------------------------------------------------- added by the test stage
+
+/** Anna drove 150 km and Ben 50 km, then Anna fills up: Ben's share of a fill-up is a quarter of it. */
+async function fillUp(millilitres: number, totalCents: number) {
+  const h = await createHousehold();
+  insertUsage(h.t, { userId: h.anna.id, start: at(h.t.clock, -30), end: at(h.t.clock, -28), odometerStart: 1000, odometerEnd: 1150 });
+  insertUsage(h.t, { userId: h.ben.id, start: at(h.t.clock, -26), end: at(h.t.clock, -24), odometerStart: 1150, odometerEnd: 1200 });
+  const made = await h.anna.post('/api/fuel', { at: at(h.t.clock, -10), millilitres, totalCents, odometer: FUEL_ODO });
+  assert.equal(made.status, 201, made.text);
+  return { ...h, fuel: made.body.fuel as Json };
+}
+
+test('a stored payment request writes a fill-up that is not a round number the Dutch way: litres with a comma and three decimals, the euro with a comma, the date in Dutch', async () => {
+  const h = await fillUp(40_123, 123_456);
+  try {
+    // The API still speaks integers: only the text people read is formatted.
+    assert.equal(h.fuel.millilitres, 40_123);
+    assert.equal(h.fuel.totalCents, 123_456);
+    assert.ok(Number.isInteger(h.fuel.pricePerLitreMillis), 'the price per litre stays an integer number of thousandths');
+    const res = await h.anna.post(`/api/fuel/${h.fuel.id}/requests`, { debtorId: h.ben.id });
+    assert.equal(res.status, 201, res.text);
+    const share = res.body.fuel.shares.find((s: Json) => s.userId === h.ben.id);
+    assert.equal(share.cents, 30_864, 'a quarter of 1.234,56');
+    assert.equal(
+      share.request.message,
+      'Hoi Ben, Anna heeft op maandag 15 juni de gedeelde auto getankt (40,123 L). Jouw aandeel is €\u00a0308,64 (50 van 200 km gereden). Wil je dit aan Anna betalen?',
+    );
+    assert.ok(!/\d\.\d{2}\b/.test(share.request.message), 'no decimal dot in the text');
+  } finally {
+    await h.t.close();
+  }
+});
+
+test('a stored payment request groups thousands with a dot and keeps two decimals on litres that are exact', async () => {
+  const h = await fillUp(200_000, 1_000_000); // the largest fill-up there is
+  try {
+    const res = await h.anna.post(`/api/fuel/${h.fuel.id}/requests`, { debtorId: h.ben.id });
+    assert.equal(res.status, 201, res.text);
+    const share = res.body.fuel.shares.find((s: Json) => s.userId === h.ben.id);
+    assert.equal(share.cents, 250_000);
+    assert.match(share.request.message, /getankt \(200,00 L\)\. Jouw aandeel is €\u00a02\.500,00 \(50 van 200 km gereden\)\./);
+    assert.equal(share.request.amountCents, 250_000, 'the amount stays whole cents in the API');
+  } finally {
+    await h.t.close();
+  }
 });

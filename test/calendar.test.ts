@@ -98,24 +98,24 @@ test('keysBetween: both ends included, empty when backwards', () => {
   assert.deepEqual(keysBetween('2026-11-17', '2026-11-16'), []);
 });
 
-test('viewRange: day, 3 days (the day and the two after it), week (Monday to Sunday) and the whole month', () => {
+test('viewRange: day, 3 days (the day and the two after it), week (maandag to zondag) and the whole month', () => {
   assert.deepEqual(viewRange('day', '2026-11-18'), { from: '2026-11-18', to: '2026-11-18' });
   assert.deepEqual(viewRange('3days', '2026-11-18'), { from: '2026-11-18', to: '2026-11-20' });
   assert.deepEqual(viewRange('3days', '2026-11-29'), { from: '2026-11-29', to: '2026-12-01' }, 'over a month end');
   assert.deepEqual(viewRange('week', '2026-11-18'), { from: '2026-11-16', to: '2026-11-22' });
   assert.deepEqual(viewRange('week', '2026-11-22'), { from: '2026-11-16', to: '2026-11-22' });
-  assert.deepEqual(viewRange('week', '2026-03-29'), { from: '2026-03-23', to: '2026-03-29' }, 'the 23-hour Sunday is the last day of its week');
+  assert.deepEqual(viewRange('week', '2026-03-29'), { from: '2026-03-23', to: '2026-03-29' }, 'the 23-hour zondag is the last day of its week');
   assert.deepEqual(viewRange('month', '2026-02-10'), { from: '2026-02-01', to: '2026-02-28' });
   assert.deepEqual(viewRange('month', '2028-02-10'), { from: '2028-02-01', to: '2028-02-29' });
 });
 
-test('monthGrid: rows of seven, Monday first, from the Monday on or before the 1st to the Sunday on or after the last day', () => {
+test('monthGrid: rows of seven, maandag first, from the maandag on or before the 1st to the zondag on or after the last day', () => {
   const nov = monthGrid('2026-11-16');
-  assert.equal(nov.length, 6, 'the 1st is a Sunday and the 30th a Monday');
+  assert.equal(nov.length, 6, 'the 1st is a zondag and the 30th a maandag');
   assert.equal(nov[0]?.[0], '2026-10-26');
   assert.equal(nov[5]?.[6], '2026-12-06');
   const feb = monthGrid('2027-02-10');
-  assert.equal(feb.length, 4, 'the 1st is a Monday and the 28th a Sunday: exactly four rows');
+  assert.equal(feb.length, 4, 'the 1st is a maandag and the 28th a zondag: exactly four rows');
   assert.equal(feb[0]?.[0], '2027-02-01');
   assert.equal(feb[3]?.[6], '2027-02-28');
   assert.equal(monthGrid('2026-02-10').length, 5);
@@ -191,9 +191,9 @@ test('stepTarget: disabled when the period it leads to is completely outside the
   assert.equal(stepTarget('week', '2026-12-08', 1, WIN).disabled, false, 'the week of the 14th is partly inside');
   // Months: the window ends on the 15th, so December 2026 is the last month and December 2025 the first.
   assert.equal(stepTarget('month', '2025-12-20', -1, WIN).disabled, true);
-  assert.deepEqual(stepTarget('month', '2026-01-10', -1, WIN), { key: '2025-12-15', disabled: false }, 'December 2025 is partly inside');
+  assert.deepEqual(stepTarget('month', '2026-01-10', -1, WIN), { key: '2025-12-15', disabled: false }, 'december 2025 is partly inside');
   assert.equal(stepTarget('month', '2026-12-10', 1, WIN).disabled, true);
-  assert.deepEqual(stepTarget('month', '2026-11-20', 1, WIN), { key: '2026-12-15', disabled: false }, 'December 2026 is partly inside; lands on the last day');
+  assert.deepEqual(stepTarget('month', '2026-11-20', 1, WIN), { key: '2026-12-15', disabled: false }, 'december 2026 is partly inside; lands on the last day');
 });
 
 test('calendarHash: the list has no date, the others carry view and date', () => {
@@ -248,11 +248,11 @@ test('reservationDays is clipped to the range it is asked for, so a very long re
 });
 
 test('labels: a date key as text, independent of the household time zone', () => {
-  assert.equal(keyLabel('2026-11-16', 'day'), 'Monday 16 November');
-  assert.equal(keyLabel('2026-11-16', 'date'), '16 Nov 2026');
-  assert.equal(keyLabel('2026-03-29', 'day'), 'Sunday 29 March', 'the DST day has its own name');
-  assert.equal(monthLabel('2026-11-16'), 'November 2026');
-  assert.equal(monthLabel('2028-02-29'), 'February 2028');
+  assert.equal(keyLabel('2026-11-16', 'day'), 'maandag 16 november');
+  assert.equal(keyLabel('2026-11-16', 'date'), '16 nov 2026');
+  assert.equal(keyLabel('2026-03-29', 'day'), 'zondag 29 maart', 'the DST day has its own name');
+  assert.equal(monthLabel('2026-11-16'), 'november 2026');
+  assert.equal(monthLabel('2028-02-29'), 'februari 2028');
 });
 
 // ------------------------------------------------------------ the views
@@ -295,7 +295,7 @@ test('no view in the address: the list, exactly as before, with the switcher abo
       assert.equal(all(page, '.cal-nav').length, 0, 'no Previous / Next in the list');
       assert.equal(all(page, '.cal-grid').length, 0);
       // The groups per day of what is coming (Anna's today, Ben's from the 16th, Carla, Femke), the Earlier box and the window note.
-      assert.deepEqual(texts(page, 'section.day h3'), ['Monday 15 June', 'Tuesday 16 June', 'Thursday 18 June', 'Saturday 20 June', 'Wednesday 10 June'], 'what is coming, then the Earlier box');
+      assert.deepEqual(texts(page, 'section.day h3'), ['maandag 15 juni', 'dinsdag 16 juni', 'donderdag 18 juni', 'zaterdag 20 juni', 'woensdag 10 juni'], 'what is coming, then the Earlier box');
       assert.deepEqual(texts(page, 'details.earlier summary'), [`${S.agenda.past} (1)`]);
       assert.equal(one(page, 'details.earlier').querySelectorAll('article.reservation').length, 1);
       assert.equal(one(page, 'p.hint.center').textContent, S.agenda.windowNote(6));
@@ -322,7 +322,7 @@ test('the list: the empty state and the window note are unchanged', async () => 
 test('the switcher: five labelled buttons in order, the current one marked with aria-pressed "true", the others "false"', async () => {
   await withClient({ now: NOW, routes: routes() }, async ({ dom }) => {
     const order = ['list', 'day', '3days', 'week', 'month'];
-    const labels = ['List', 'Day', '3 days', 'Week', 'Month'];
+    const labels = ['Lijst', 'Dag', '3 dagen', 'Week', 'Maand'];
     for (const [i, view] of order.entries()) {
       const { el } = await show(view === 'list' ? '' : `view=${view}&date=2026-06-17`);
       const page = dom.mount(el);
@@ -345,11 +345,11 @@ test('the switcher keeps the day: List opens #/, the others #/?view=..&date=..',
     const week = await show('view=week&date=2026-06-17');
     const page = dom.mount(week.el);
     for (const [label, hash] of [
-      ['List', '#/'],
-      ['Day', '#/?view=day&date=2026-06-17'],
-      ['3 days', '#/?view=3days&date=2026-06-17'],
+      ['Lijst', '#/'],
+      ['Dag', '#/?view=day&date=2026-06-17'],
+      ['3 dagen', '#/?view=3days&date=2026-06-17'],
       ['Week', '#/?view=week&date=2026-06-17'],
-      ['Month', '#/?view=month&date=2026-06-17'],
+      ['Maand', '#/?view=month&date=2026-06-17'],
     ] as const) {
       await button(one(page, '.view-switch'), label).fire('click');
       assert.equal(week.me.navigated.at(-1), hash, label);
@@ -365,7 +365,7 @@ test('Day: one day with its reservations, who, the time and whether it is confir
   await withClient({ now: NOW, routes: routes([...ITEMS], { 'DELETE /api/reservations/2': () => new Reply({}, 204) }) }, async ({ dom }) => {
     const { me, el } = await show('view=day&date=2026-06-16');
     const page = dom.mount(el);
-    assert.deepEqual(texts(page, 'h2'), ['Tuesday 16 June']);
+    assert.deepEqual(texts(page, 'h2'), ['dinsdag 16 juni']);
     assert.equal(one(page, 'h2').className, 'cal-title');
     assert.equal(all(page, 'section.cal-day').length, 1);
     assert.equal(all(page, 'h3').length, 0, 'the single heading is the h2');
@@ -389,8 +389,8 @@ test('Day: today is named, an empty day says so, and Previous / Today / Next ste
   await withClient({ now: NOW, routes: routes() }, async ({ dom }) => {
     const today = await show('view=day&date=2026-06-15');
     const page = dom.mount(today.el);
-    assert.deepEqual(texts(page, 'h2'), [S.agenda.dayHeading('Monday 15 June', true)]);
-    assert.equal(cardsOf(page, S.me).length, 1, 'Anna sees her own as "me", like in the list');
+    assert.deepEqual(texts(page, 'h2'), [S.agenda.dayHeading('maandag 15 juni', true)]);
+    assert.equal(cardsOf(page, S.meHead).length, 1, 'Anna sees her own as "me", like in the list');
     assert.deepEqual(texts(page, '.cal-nav button'), [S.agenda.prev, S.agenda.today, S.agenda.next]);
     assert.deepEqual(all(page, '.cal-nav button').map((b) => attr(b, 'aria-label')), [S.agenda.stepLabel.prev.day, null, S.agenda.stepLabel.next.day]);
     await button(page, S.agenda.prev).fire('click');
@@ -402,7 +402,7 @@ test('Day: today is named, an empty day says so, and Previous / Today / Next ste
     const quiet = dom.mount(empty.el);
     assert.equal(all(quiet, 'article.reservation').length, 0);
     assert.deepEqual(texts(quiet, 'section.cal-day p.hint'), [S.agenda.nothingThisDay]);
-    assert.equal(texts(quiet, 'h2')[0], 'Friday 19 June', 'not today: no "(today)"');
+    assert.equal(texts(quiet, 'h2')[0], 'vrijdag 19 juni', 'not today: no "(vandaag)"');
   });
 });
 
@@ -410,8 +410,8 @@ test('3 days: the day and the two after it, a reservation over midnight on both 
   await withClient({ now: NOW, routes: routes() }, async ({ dom }) => {
     const { me, el } = await show('view=3days&date=2026-06-16');
     const page = dom.mount(el);
-    assert.deepEqual(texts(page, 'h2'), [S.agenda.range('16 Jun 2026', '18 Jun 2026')]);
-    assert.deepEqual(texts(page, 'section.cal-day h3'), ['Tuesday 16 June', 'Wednesday 17 June', 'Thursday 18 June']);
+    assert.deepEqual(texts(page, 'h2'), [S.agenda.range('16 jun 2026', '18 jun 2026')]);
+    assert.deepEqual(texts(page, 'section.cal-day h3'), ['dinsdag 16 juni', 'woensdag 17 juni', 'donderdag 18 juni']);
     const sections = all(page, 'section.cal-day');
     const who = (s: FakeElement): string[] => all(s, '.what').map((e) => e.textContent);
     assert.deepEqual(sections.map(who), [['Ben'], ['Ben'], ['Carla']], 'Dora (declined) and Eva (expired) are not shown');
@@ -433,19 +433,19 @@ test('Week: Monday to Sunday, a long reservation on each of its days, empty days
   await withClient({ now: NOW, routes: routes() }, async ({ dom }) => {
     const { me, el } = await show('view=week&date=2026-06-17');
     const page = dom.mount(el);
-    assert.deepEqual(texts(page, 'h2'), [S.agenda.range('15 Jun 2026', '21 Jun 2026')]);
+    assert.deepEqual(texts(page, 'h2'), [S.agenda.range('15 jun 2026', '21 jun 2026')]);
     assert.deepEqual(texts(page, 'section.cal-day h3'), [
-      S.agenda.dayHeading('Monday 15 June', true),
-      'Tuesday 16 June',
-      'Wednesday 17 June',
-      'Thursday 18 June',
-      'Friday 19 June',
-      'Saturday 20 June',
-      'Sunday 21 June',
+      S.agenda.dayHeading('maandag 15 juni', true),
+      'dinsdag 16 juni',
+      'woensdag 17 juni',
+      'donderdag 18 juni',
+      'vrijdag 19 juni',
+      'zaterdag 20 juni',
+      'zondag 21 juni',
     ]);
     assert.ok(one(page, 'section.cal-day').className.split(' ').includes('today'));
     const perDay = all(page, 'section.cal-day').map((s) => all(s, '.what').map((e) => e.textContent));
-    assert.deepEqual(perDay, [[S.me], ['Ben'], ['Ben'], ['Carla'], [], ['Femke'], ['Femke']], 'Femke\'s 20 to 23 June shows on the 20th and 21st, the rest of the week stops at Sunday');
+    assert.deepEqual(perDay, [[S.meHead], ['Ben'], ['Ben'], ['Carla'], [], ['Femke'], ['Femke']], 'Femke\'s 20 to 23 juni shows on the 20th and 21st, the rest of the week stops at zondag');
     assert.deepEqual(texts(page, 'section.cal-day p.hint'), [S.agenda.nothingThisDay], 'only Friday is empty');
     // Every day Ben's reservation touches offers its actions again.
     assert.equal(cardsOf(page, 'Ben').length, 2);
@@ -463,21 +463,21 @@ test('Week over the DST changes: no day is skipped or doubled and a reservation 
   const autumn = item(21, 'Hanne', '2026-10-24T22:00:00.000Z', '2026-10-25T23:00:00.000Z'); // exactly the 25-hour day
   await withClient({ now: NOW, routes: routes([across, autumn]) }, async ({ dom }) => {
     const spring = dom.mount((await show('view=week&date=2026-03-29')).el);
-    assert.deepEqual(texts(spring, 'section.cal-day h3').map((t) => t.replace(/ \(today\)$/, '')), [
-      'Monday 23 March',
-      'Tuesday 24 March',
-      'Wednesday 25 March',
-      'Thursday 26 March',
-      'Friday 27 March',
-      'Saturday 28 March',
-      'Sunday 29 March',
+    assert.deepEqual(texts(spring, 'section.cal-day h3').map((t) => t.replace(/ \(vandaag\)$/, '')), [
+      'maandag 23 maart',
+      'dinsdag 24 maart',
+      'woensdag 25 maart',
+      'donderdag 26 maart',
+      'vrijdag 27 maart',
+      'zaterdag 28 maart',
+      'zondag 29 maart',
     ]);
     assert.deepEqual(all(spring, 'section.cal-day').map((s) => all(s, '.what').length), [0, 0, 0, 0, 0, 1, 1], 'on the 28th and the 29th, not on the 30th');
     const threeDays = dom.mount((await show('view=3days&date=2026-03-28')).el);
-    assert.deepEqual(texts(threeDays, 'section.cal-day h3'), ['Saturday 28 March', 'Sunday 29 March', 'Monday 30 March']);
+    assert.deepEqual(texts(threeDays, 'section.cal-day h3'), ['zaterdag 28 maart', 'zondag 29 maart', 'maandag 30 maart']);
 
     const fall = dom.mount((await show('view=day&date=2026-10-25')).el);
-    assert.deepEqual(texts(fall, 'h2'), ['Sunday 25 October']);
+    assert.deepEqual(texts(fall, 'h2'), ['zondag 25 oktober']);
     assert.equal(cardsOf(fall, 'Hanne').length, 1, 'the whole 25-hour day is one day');
     const next = dom.mount((await show('view=day&date=2026-10-26')).el);
     assert.equal(all(next, 'article.reservation').length, 0, 'and not the day after');
@@ -488,43 +488,43 @@ test('Month: weekday headings, a Monday-first grid with the neighbouring days mu
   await withClient({ now: NOW, routes: routes() }, async ({ dom }) => {
     const { me, el } = await show('view=month&date=2026-06-18');
     const page = dom.mount(el);
-    assert.deepEqual(texts(page, 'h2'), ['June 2026']);
+    assert.deepEqual(texts(page, 'h2'), ['juni 2026']);
     const heads = all(page, '.cal-head');
-    assert.deepEqual(heads.map((e) => e.textContent), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+    assert.deepEqual(heads.map((e) => e.textContent), ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo']);
     assert.ok(heads.every((e) => attr(e, 'aria-hidden') === 'true'), 'the cells carry the weekday in their label');
 
     const cells = all(page, 'button.cal-cell');
-    assert.equal(cells.length, 35, 'June 2026 starts on a Monday and ends on a Tuesday: five rows');
+    assert.equal(cells.length, 35, 'juni 2026 starts on a maandag and ends on a dinsdag: five rows');
     const cell = (label: string): FakeElement => {
       const found = cells.find((c) => (attr(c, 'aria-label') ?? '').startsWith(`${label},`));
       assert.ok(found, `no cell "${label}"`);
       return found;
     };
-    assert.deepEqual(cells.filter((c) => c.className.split(' ').includes('out')).length, 5, '1 to 5 July belong to the next month');
-    assert.ok(cell('Wednesday 1 July').className.split(' ').includes('out'));
-    assert.ok(!cell('Monday 1 June').className.split(' ').includes('out'));
+    assert.deepEqual(cells.filter((c) => c.className.split(' ').includes('out')).length, 5, '1 to 5 juli belong to the next month');
+    assert.ok(cell('woensdag 1 juli').className.split(' ').includes('out'));
+    assert.ok(!cell('maandag 1 juni').className.split(' ').includes('out'));
 
-    const today = cell('Monday 15 June');
+    const today = cell('maandag 15 juni');
     assert.ok(today.className.split(' ').includes('today'));
     assert.equal(attr(today, 'aria-current'), 'date');
     assert.equal(cells.filter((c) => attr(c, 'aria-current') !== null).length, 1, 'only today');
-    assert.equal(attr(today, 'aria-label'), S.agenda.cellLabel('Monday 15 June', true, 1, 0));
+    assert.equal(attr(today, 'aria-label'), S.agenda.cellLabel('maandag 15 juni', true, 1, 0));
 
     // Counts: declined and expired suggestions are not counted; Ben's night counts for the 16th and the 17th.
     const count = (label: string): string => one(cell(label), '.cal-count').textContent;
-    assert.equal(count('Tuesday 16 June'), '1');
-    assert.equal(count('Wednesday 17 June'), '1');
-    assert.equal(attr(cell('Tuesday 16 June'), 'aria-label'), S.agenda.cellLabel('Tuesday 16 June', false, 1, 0));
-    assert.equal(all(cell('Friday 19 June'), '.cal-count').length, 0, 'an empty day has no count');
-    assert.equal(attr(cell('Friday 19 June'), 'aria-label'), S.agenda.cellLabel('Friday 19 June', false, 0, 0));
-    assert.deepEqual(['Saturday 20 June', 'Sunday 21 June', 'Monday 22 June', 'Tuesday 23 June'].map(count), ['1', '1', '1', '1'], 'Femke\'s four days');
+    assert.equal(count('dinsdag 16 juni'), '1');
+    assert.equal(count('woensdag 17 juni'), '1');
+    assert.equal(attr(cell('dinsdag 16 juni'), 'aria-label'), S.agenda.cellLabel('dinsdag 16 juni', false, 1, 0));
+    assert.equal(all(cell('vrijdag 19 juni'), '.cal-count').length, 0, 'an empty day has no count');
+    assert.equal(attr(cell('vrijdag 19 juni'), 'aria-label'), S.agenda.cellLabel('vrijdag 19 juni', false, 0, 0));
+    assert.deepEqual(['zaterdag 20 juni', 'zondag 21 juni', 'maandag 22 juni', 'dinsdag 23 juni'].map(count), ['1', '1', '1', '1'], 'Femke\'s four days');
 
     // A waiting suggestion is marked on its day, in the label and by the class (the dashed edge is CSS).
-    const waiting = cell('Thursday 18 June');
+    const waiting = cell('donderdag 18 juni');
     assert.ok(waiting.className.split(' ').includes('has-pending'));
-    assert.equal(attr(waiting, 'aria-label'), S.agenda.cellLabel('Thursday 18 June', false, 1, 1));
-    assert.match(attr(waiting, 'aria-label') as string, /1 waiting for an answer/);
-    assert.ok(!cell('Tuesday 16 June').className.split(' ').includes('has-pending'));
+    assert.equal(attr(waiting, 'aria-label'), S.agenda.cellLabel('donderdag 18 juni', false, 1, 1));
+    assert.match(attr(waiting, 'aria-label') as string, /1 wacht op een antwoord/);
+    assert.ok(!cell('dinsdag 16 juni').className.split(' ').includes('has-pending'));
     assert.ok(all(page, 'p.hint').some((p) => p.textContent === S.agenda.monthHint));
 
     // A day opens the Day view.
@@ -550,17 +550,17 @@ test('Month: Previous and Next step one month, and stop at the edges of the wind
     assert.equal(button(last, S.agenda.prev).disabled, false);
     const lastCells = all(last, 'button.cal-cell');
     const lastLabel = (c: FakeElement): string => attr(c, 'aria-label') as string;
-    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('Tuesday 15 December,'))?.disabled, false, 'the last day is open');
-    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('Wednesday 16 December,'))?.disabled, true, 'the day after is not');
-    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('Thursday 31 December,'))?.disabled, true);
+    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('dinsdag 15 december,'))?.disabled, false, 'the last day is open');
+    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('woensdag 16 december,'))?.disabled, true, 'the day after is not');
+    assert.equal(lastCells.find((c) => lastLabel(c).startsWith('donderdag 31 december,'))?.disabled, true);
 
     // The first month: the window starts on 15 December 2025.
     const first = dom.mount((await show('view=month&date=2025-12-20')).el);
     assert.equal(button(first, S.agenda.prev).disabled, true);
     assert.equal(button(first, S.agenda.next).disabled, false);
     const firstCells = all(first, 'button.cal-cell');
-    assert.equal(firstCells.find((c) => lastLabel(c).startsWith('Sunday 14 December,'))?.disabled, true);
-    assert.equal(firstCells.find((c) => lastLabel(c).startsWith('Monday 15 December,'))?.disabled, false);
+    assert.equal(firstCells.find((c) => lastLabel(c).startsWith('zondag 14 december,'))?.disabled, true);
+    assert.equal(firstCells.find((c) => lastLabel(c).startsWith('maandag 15 december,'))?.disabled, false);
   });
 });
 
@@ -573,15 +573,15 @@ test('the edges of the window for Day, 3 days and Week; a date outside it lands 
     assert.equal(button(lastDay, S.agenda.next).disabled, true);
     assert.equal(button(lastDay, S.agenda.prev).disabled, false);
 
-    assert.deepEqual(texts(dom.mount((await show('view=day&date=2030-01-01')).el), 'h2'), ['Tuesday 15 December'], 'far ahead: the last day');
-    assert.deepEqual(texts(dom.mount((await show('view=day&date=1999-01-01')).el), 'h2'), ['Monday 15 December'], 'far back: the first day');
+    assert.deepEqual(texts(dom.mount((await show('view=day&date=2030-01-01')).el), 'h2'), ['dinsdag 15 december'], 'far ahead: the last day');
+    assert.deepEqual(texts(dom.mount((await show('view=day&date=1999-01-01')).el), 'h2'), ['maandag 15 december'], 'far back: the first day');
 
     // A week that sticks out of the window only shows its days inside it.
     const edge = dom.mount((await show('view=week&date=2026-12-15')).el);
-    assert.deepEqual(texts(edge, 'section.cal-day h3'), ['Monday 14 December', 'Tuesday 15 December']);
+    assert.deepEqual(texts(edge, 'section.cal-day h3'), ['maandag 14 december', 'dinsdag 15 december']);
     assert.equal(button(edge, S.agenda.next).disabled, true);
     const threeEdge = dom.mount((await show('view=3days&date=2026-12-14')).el);
-    assert.deepEqual(texts(threeEdge, 'section.cal-day h3'), ['Monday 14 December', 'Tuesday 15 December']);
+    assert.deepEqual(texts(threeEdge, 'section.cal-day h3'), ['maandag 14 december', 'dinsdag 15 december']);
     assert.equal(button(threeEdge, S.agenda.next).disabled, true);
   });
 });
@@ -594,7 +594,7 @@ test('a broken address never breaks the page: it opens the list, or today', asyn
       dom.body.replaceChildren();
     }
     const noDate = dom.mount((await show('view=day&date=2026-02-30')).el);
-    assert.equal(texts(noDate, 'h2')[0], S.agenda.dayHeading('Monday 15 June', true), 'a date that does not exist is today');
+    assert.equal(texts(noDate, 'h2')[0], S.agenda.dayHeading('maandag 15 juni', true), 'a date that does not exist is today');
     const noView = dom.mount((await show('date=2026-06-17')).el);
     assert.deepEqual(texts(noView, 'h2'), [S.agenda.upcoming], 'a date without a view is still the list');
     // And without any route at all (a caller that does not pass one).
@@ -647,7 +647,7 @@ test('the view reads the address of its own render, not what was shown before', 
     dom.body.replaceChildren();
     const month = dom.mount((await show('view=month&date=2026-06-17')).el);
     assert.equal(attr(button(one(month, '.view-switch'), 'Week'), 'aria-pressed'), 'false');
-    assert.equal(attr(button(one(month, '.view-switch'), 'Month'), 'aria-pressed'), 'true');
+    assert.equal(attr(button(one(month, '.view-switch'), 'Maand'), 'aria-pressed'), 'true');
   });
 });
 
@@ -668,7 +668,7 @@ test('the cards in the calendar views offer what the list offers: approve and de
     for (const query of ['view=day&date=2026-06-17', 'view=3days&date=2026-06-17', 'view=week&date=2026-06-17']) {
       const { me, el } = await show(query);
       const page = dom.mount(el);
-      const card = cardsOf(page, S.me).find((c) => one(c, '.badge-status').textContent === S.status.pending) as FakeElement;
+      const card = cardsOf(page, S.meHead).find((c) => one(c, '.badge-status').textContent === S.status.pending) as FakeElement;
       assert.ok(card, `${query}: Anna's own suggestion is shown, as "me"`);
       assert.equal(one(card, '.sub').textContent, S.agenda.suggestedBy('Ben'));
       assert.deepEqual(
@@ -685,7 +685,7 @@ test('the cards in the calendar views offer what the list offers: approve and de
     // Declining cannot be undone, so it asks first; saying no sends nothing.
     const { me, el } = await show('view=day&date=2026-06-17');
     const page = dom.mount(el);
-    const card = cardsOf(page, S.me)[0] as FakeElement;
+    const card = cardsOf(page, S.meHead)[0] as FakeElement;
     dom.answer = false;
     await button(card, S.agenda.decline).fire('click');
     assert.deepEqual(dom.confirms.slice(-1), [S.agenda.confirmDecline]);
@@ -699,7 +699,7 @@ test('the cards in the calendar views offer what the list offers: approve and de
 
     // Today's reservation of Anna starts in 20 minutes: the km button is there, as in the list.
     const today = dom.mount((await show('view=day&date=2026-06-15')).el);
-    const mine = cardsOf(today, S.me)[0] as FakeElement;
+    const mine = cardsOf(today, S.meHead)[0] as FakeElement;
     assert.ok(all(mine, 'a').some((a) => a.textContent === S.agenda.registerKm && attr(a, 'href') === '#/usage?res=1'));
     assert.equal(one(mine, '.km-line').textContent, S.agenda.kmMissing);
   });
@@ -712,12 +712,12 @@ test('the day views mark what is over as past, like the Earlier box of the list,
     assert.ok(cardsOf(gone, 'Gerrit')[0]?.className.split(' ').includes('past'), 'ended before now');
     dom.body.replaceChildren();
     const now = dom.mount((await show('view=day&date=2026-06-15')).el);
-    assert.ok(!(cardsOf(now, S.me)[0] as FakeElement).className.split(' ').includes('past'), 'not over yet');
+    assert.ok(!(cardsOf(now, S.meHead)[0] as FakeElement).className.split(' ').includes('past'), 'not over yet');
     dom.body.replaceChildren();
     // The week of the 15th starts on Monday: it does not hold the 14th, and nothing in it is over.
     const week = dom.mount((await show('view=week&date=2026-06-15')).el);
     const flags = all(week, 'article.reservation').map((c) => [one(c, '.what').textContent, c.className.split(' ').includes('past')]);
-    assert.deepEqual(flags.filter(([who]) => who === 'Gerrit'), [], 'the 14th is a Sunday of the week before');
+    assert.deepEqual(flags.filter(([who]) => who === 'Gerrit'), [], 'the 14th is a zondag of the week before');
     assert.ok(flags.length > 0 && flags.every(([, past]) => past === false));
     dom.body.replaceChildren();
     // A week that does hold it: Monday the 8th to Sunday the 14th.
@@ -735,10 +735,10 @@ test('Month: reservations on the muted days of the neighbouring months are count
     const cells = all(page, 'button.cal-cell');
     assert.equal(cells.length, 35);
     const cell = (label: string): FakeElement => cells.find((c) => (attr(c, 'aria-label') ?? '').startsWith(`${label},`)) as FakeElement;
-    assert.ok(cell('Tuesday 30 June').className.split(' ').includes('out'), '30 June belongs to the month before');
-    assert.equal(one(cell('Tuesday 30 June'), '.cal-count').textContent, '1', 'and still shows its reservation');
-    assert.ok(cell('Saturday 1 August').className.split(' ').includes('out'));
-    assert.ok(cell('Saturday 1 August').className.split(' ').includes('has-pending'), 'also the waiting suggestion of a muted day');
+    assert.ok(cell('dinsdag 30 juni').className.split(' ').includes('out'), '30 juni belongs to the month before');
+    assert.equal(one(cell('dinsdag 30 juni'), '.cal-count').textContent, '1', 'and still shows its reservation');
+    assert.ok(cell('zaterdag 1 augustus').className.split(' ').includes('out'));
+    assert.ok(cell('zaterdag 1 augustus').className.split(' ').includes('has-pending'), 'also the waiting suggestion of a muted day');
     assert.equal(cells.filter((c) => c.className.split(' ').includes('today')).length, 0, 'today is in June: not marked in July');
     assert.equal(cells.filter((c) => attr(c, 'aria-current') !== null).length, 0);
     // The month that does hold today marks it once.
@@ -782,13 +782,13 @@ test('the window follows the household setting, not a fixed six months', async (
     const first = await view('view=day&date=2026-03-15');
     assert.equal(button(first, S.agenda.prev).disabled, true);
     dom.body.replaceChildren();
-    assert.deepEqual(texts(await view('view=day&date=2026-12-01'), 'h2'), ['Tuesday 15 September'], 'a day beyond three months lands on the last one');
+    assert.deepEqual(texts(await view('view=day&date=2026-12-01'), 'h2'), ['dinsdag 15 september'], 'a day beyond three months lands on the last one');
     dom.body.replaceChildren();
     // A month cell after the last day cannot be opened, and there is no next month.
     const month = await view('view=month&date=2026-09-10');
     const sep = all(month, 'button.cal-cell');
-    assert.equal(sep.find((c) => (attr(c, 'aria-label') ?? '').startsWith('Tuesday 15 September,'))?.disabled, false);
-    assert.equal(sep.find((c) => (attr(c, 'aria-label') ?? '').startsWith('Wednesday 16 September,'))?.disabled, true);
+    assert.equal(sep.find((c) => (attr(c, 'aria-label') ?? '').startsWith('dinsdag 15 september,'))?.disabled, false);
+    assert.equal(sep.find((c) => (attr(c, 'aria-label') ?? '').startsWith('woensdag 16 september,'))?.disabled, true);
     assert.equal(button(month, S.agenda.next).disabled, true);
   });
 });
@@ -842,7 +842,7 @@ test('no API change: every view reads the one list of reservations, once, and a 
       );
       // Switching view, stepping and opening a day do not talk to the server: the router renders the new address.
       const quiet = api.calls.length;
-      for (const label of ['List', 'Day', '3 days', 'Week', 'Month']) await button(one(page, '.view-switch'), label).fire('click');
+      for (const label of ['Lijst', 'Dag', '3 dagen', 'Week', 'Maand']) await button(one(page, '.view-switch'), label).fire('click');
       if (query !== '') {
         for (const label of [S.agenda.prev, S.agenda.today, S.agenda.next]) await button(one(page, '.cal-nav'), label).fire('click');
       }
@@ -855,15 +855,15 @@ test('no API change: every view reads the one list of reservations, once, and a 
 });
 
 test('the texts of the views read well: singular and plural, today, and what is waiting', () => {
-  const day = 'Monday 15 June';
-  assert.equal(S.agenda.cellLabel(day, true, 0, 0), 'Monday 15 June, today, no reservations');
-  assert.equal(S.agenda.cellLabel(day, false, 1, 0), 'Monday 15 June, 1 reservation');
-  assert.equal(S.agenda.cellLabel(day, false, 3, 2), 'Monday 15 June, 3 reservations, 2 waiting for an answer');
-  assert.equal(S.agenda.cellLabel(day, true, 1, 1), 'Monday 15 June, today, 1 reservation, 1 waiting for an answer');
-  assert.equal(S.agenda.dayHeading(day, true), 'Monday 15 June (today)');
+  const day = 'maandag 15 juni';
+  assert.equal(S.agenda.cellLabel(day, true, 0, 0), 'maandag 15 juni, vandaag, geen reserveringen');
+  assert.equal(S.agenda.cellLabel(day, false, 1, 0), 'maandag 15 juni, 1 reservering');
+  assert.equal(S.agenda.cellLabel(day, false, 3, 2), 'maandag 15 juni, 3 reserveringen, 2 wachten op een antwoord');
+  assert.equal(S.agenda.cellLabel(day, true, 1, 1), 'maandag 15 juni, vandaag, 1 reservering, 1 wacht op een antwoord');
+  assert.equal(S.agenda.dayHeading(day, true), 'maandag 15 juni (vandaag)');
   assert.equal(S.agenda.dayHeading(day, false), day);
-  assert.equal(S.agenda.range('15 Jun 2026', '21 Jun 2026'), '15 Jun 2026 – 21 Jun 2026');
-  assert.deepEqual(S.agenda.weekdays, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], 'weeks start on Monday');
+  assert.equal(S.agenda.range('15 jun 2026', '21 jun 2026'), '15 jun 2026 – 21 jun 2026');
+  assert.deepEqual(S.agenda.weekdays, ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo'], 'weeks start on Monday');
   assert.deepEqual(Object.keys(S.agenda.views), [...VIEWS], 'one label per view, in the order of the switcher');
   for (const direction of ['prev', 'next'] as const) {
     assert.deepEqual(Object.keys(S.agenda.stepLabel[direction]), ['day', '3days', 'week', 'month'], 'a spoken name for every step');

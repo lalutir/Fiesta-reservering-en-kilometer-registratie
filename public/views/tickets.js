@@ -3,9 +3,9 @@
 // drive log and the reservations; nothing here decides it. Reached from the Drives tab (it is not
 // a tab itself). Money is whole cents; nothing here uses floating point to decide an amount.
 import { del, get, patch, post } from '../api.js';
-import { dateTimeField, field, fmtWhen, focusFirstInvalid, h, setBusy, showFieldErrors } from '../dom.js';
+import { dateTimeField, field, fmtWhen, focusFirstInvalid, formatCentsInput, formatEuro, h, setBusy, showFieldErrors } from '../dom.js';
 import { S, errorText } from '../strings.js';
-import { fmtCents, parseDecimal } from './fuel.js';
+import { parseDecimal } from './fuel.js';
 
 // Contains a form, so it is not re-rendered in the background.
 export const live = false;
@@ -49,7 +49,8 @@ export async function render(app, route) {
     type: 'text',
     inputmode: 'decimal',
     autocomplete: 'off',
-    value: existing && existing.amountCents !== null ? fmtCents(existing.amountCents) : '',
+    // Prefilled with a comma and without grouping, so saving the form again keeps the amount.
+    value: existing && existing.amountCents !== null ? formatCentsInput(existing.amountCents) : '',
   });
   const reason = h('input', { type: 'text', maxlength: String(REASON_MAX), autocomplete: 'off', value: existing?.reason ?? '' });
   const fAmount = field(S.tickets.amount, amount, S.tickets.amountHint);
@@ -146,7 +147,7 @@ export async function render(app, route) {
     return h('article', { class: 'card ticket', id: `ticket-${t.id}` }, [
       h('div', { class: 'row' }, [
         h('strong', { text: driverText(t) }),
-        t.amountCents !== null ? h('span', { class: 'badge-status', text: S.tickets.price(fmtCents(t.amountCents)) }) : null,
+        t.amountCents !== null ? h('span', { class: 'badge-status', text: S.tickets.price(formatEuro(t.amountCents)) }) : null,
       ]),
       h('div', { class: 'when', text: whenText }),
       h('div', { class: 'sub', text: S.tickets.basis[t.basis] }),

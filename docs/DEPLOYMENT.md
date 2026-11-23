@@ -637,8 +637,9 @@ allowed to do what; the notification is sent after the change has been saved.
   drive that only overlaps somebody's reservation in time, without being linked to it,
   does not notify its owner. Creating a payment request tells nobody (the fueler sends
   it), and an admin marking a share paid does not tell the fueler.
-- **All the words are in `src/notify-texts.ts`**, so the Dutch translation is one
-  edit there (and the list in `public/strings.js`). What is told to whom is the table
+- **All the words are in `src/notify-texts.ts`** (Dutch, in the voice of the rest of the
+  app, see `docs/GLOSSARY.md`), and the list on the Account page is in
+  `public/strings.js`. What is told to whom is the table
   `EVENTS` in `src/notify.ts`; a new kind of notification, such as one for everybody,
   is one more row.
 - **Not verified:** real delivery to real phones (see the checklist above). The tests

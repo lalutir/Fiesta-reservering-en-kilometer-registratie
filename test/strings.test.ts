@@ -71,8 +71,8 @@ test('the exceptions list stays honest: nothing on it has a sentence, and everyt
 
 test('the text lookups give the sentence for a known code and fall back for an unknown one', () => {
   assert.equal(errorText({ code: 'draft_exists' }), S.errors.draft_exists);
-  assert.equal(errorText({ code: 'no_such_code', message: 'Server said so' }), 'Server said so');
+  assert.equal(errorText({ code: 'no_such_code', message: 'Server said so' }), S.errors.error);
   assert.equal(errorText({ code: 'no_such_code' }), S.errors.error);
   assert.equal(fieldErrorText('invalid_link'), S.fieldErrors.invalid_link);
-  assert.equal(fieldErrorText('no_such_code'), 'no_such_code');
+  assert.equal(fieldErrorText('no_such_code'), S.errors.error);
 });

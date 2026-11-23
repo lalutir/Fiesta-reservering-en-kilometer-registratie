@@ -1014,6 +1014,124 @@ Defaults taken for nine open questions (none scope-changing; no one was asked):
 - Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git. Audit directory: `.claude/runs/car-tab-damage-reports-apk-expiry` (git-excluded). Base commit `6f62bbca245fe2af56cd835d2b60ac8c59654b9b`.
 <!-- implement:run:car-tab-damage-reports-apk-expiry:end -->
 
+<!-- implement:run:translate-app-to-dutch:start -->
+### Dutch as the only interface language (translate-app-to-dutch)
+
+Date 2026-11-22. Branch `implement/translate-app-to-dutch`. Base branch `main`, base commit `30130fc50bc8670118c42be74e750ebbd10753fd` (origin/main with PR #11 merged; local `main` is still `a3953c1`, see Honesty flags).
+
+### Request
+
+> Translate the whole app to Dutch. The household is Dutch. Dutch becomes THE interface language, replacing English in the one central dictionary. Do not build a language switcher, and mention in your report that git history keeps the English version.
+>
+> Scope, which goes beyond public/strings.js:
+> - The member PWA, the admin page (public/admin/), the login screen, error and validation sentences, empty states, aria-labels and screen-reader texts, <html lang>, and the manifest (lang, name, description).
+> - Texts composed on the server or in the service worker: push notification texts (reminders, fuel, and everything added by the push-notification change, which should live in one module), the payment-request message that people send each other, and any user-visible English literal in src/. Search for them thoroughly.
+> - Formatting: dates and times via Intl with nl-NL in the household time zone (24-hour clock, Monday first), numbers with a decimal comma and thousands dot, and euro as "€ 12,50".
+> - Input: every decimal field (fuel price per litre, litres, total) must accept a comma AND a dot, and show the value with a comma. This is the classic Dutch-translation bug. Test it explicitly, together with the integer-cent arithmetic.
+>
+> Choose one consistent vocabulary and write it down in a short glossary in the docs, in informal "je" form, for example reservering, ritregistratie, kilometerstand, tankbeurt, verkeersboete, schademelding, "Ik heb betaald". Keep "APK" and "Tikkie" as they are. Check that every screen still fits at 320 px, since Dutch is often 20 to 30 percent longer. Fix overflow properly, not with smaller fonts. Do not translate the code, logs, README or DEPLOYMENT (they stay English). Update the existing tests that pin English strings, and add a test that fails when a user-visible English string or a missing key slips in. Run the headless Chromium pass at 390 and 320 px, and keep the browser smoke suite green.
+
+### What was built
+
+Dutch (informal "je") replaces English in place as the only interface language: `public/strings.js` keeps its key tree with Dutch text only, and the two HTML pages, the manifest, the service worker fallbacks, every push text (`src/notify-texts.ts`), the payment request and the Tikkie description (`src/payments.ts`) are Dutch. Dates use `Intl` `nl-NL` through one constant in `shared/time.js`, a new integer-only `shared/format.js` writes `€ 12,50`, `40,5` and `45.210` for server and browser, and every decimal field accepts a comma or a dot and shows a comma. `docs/GLOSSARY.md` fixes the vocabulary and `test/dutch.test.ts` fails on English text or a missing key. There is no language switcher; git history (base `30130fc`) keeps the English version. Nothing is committed: HEAD equals the base commit; git shows 49 modified tracked files (+1389/-1144 against the base, before this entry) and 6 untracked (`docs/GLOSSARY.md`, `shared/format.js`, `test/dutch-keys.txt`, `test/dutch-words.ts`, `test/dutch.test.ts`, `test/format.test.ts`).
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.3). Translate in place, one shared integer-only formatter, nl-NL dates through one constant, guard tests written first and shown red (13 of 18 failed on the English tree). It is based on the real seven-tab HEAD and lets the compiler find every old formatter call.
+- Rejected: idiomatic (scan-style guards: weaker literal coverage, no scan of unreached branches) and robust (rule-based Dutch grammar helpers, fail-closed guards: more machinery than about 430 strings need).
+- Rejected: plan 1 (assumed a six-column tab bar, missed the Car tab). An i18n library, locale parameter or language switcher (out of scope). Float or `Intl.NumberFormat` currency on float amounts (money stays integer cents).
+
+### How it works
+
+Start with `docs/GLOSSARY.md` (vocabulary, tone, where each text lives), then `shared/format.js`, `DISPLAY_LOCALE` in `shared/time.js`, `src/notify-texts.ts` and `test/dutch.test.ts`.
+
+- Browser text comes only from `S` in `public/strings.js`. A name in a sentence uses `S.meLabel` ("jij"), a card or row heading uses `S.meHead` ("Jij"). `errorText` no longer falls back to the English server message: an unknown code shows the Dutch generic sentence, and a test checks every emitted code has a Dutch sentence. HttpError messages stay English behind it.
+- Money is integer cents and litres integer millilitres. `shared/format.js` writes and parses with integer maths; the parser takes a comma or a dot, refuses grouping, signs, exponents and a third decimal for cents. Edit forms prefill with a comma and no grouping. Shares still sum to the cent.
+- `DISPLAY_LOCALE = 'nl-NL'` drives the display formatter (24-hour); the two `en-US` part readers are unchanged. The Dutch dates need full ICU (Node 22.23 and `node:22.23-alpine`); a test checks a Dutch month name comes out.
+- `src/notify-texts.ts` is the one module of push text; each push is clipped to 100 characters, 300 characters and 900 bytes (a test renders every push at two 40-character names of 3-byte characters). `requestMessage` and the Tikkie description (`Tankbeurt <date>`, at most 35 characters) are in `src/payments.ts`.
+- `public/sw.js` cannot import the dictionary: its two fallbacks are Dutch literals that the guard reads. The cache is `car-static-v7` and `/shared/format.js` is in `PRECACHE`.
+- `test/dutch.test.ts` (with `test/dutch-words.ts`, `test/dutch-keys.txt`): key tree, English denylist walked over `S` with probe arguments, literal scans of the dictionary, other browser code, HTML, manifest, service worker and server texts, push caps, payment texts, and the glossary tied to the texts.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `shared/format.js` | added | Euro, litres, price per litre, km writers and decimal parser (90 lines) |
+| `shared/time.js` | modified | `DISPLAY_LOCALE` nl-NL, 24-hour clock; part readers unchanged |
+| `public/strings.js` | modified | Whole dictionary in Dutch, same key tree (+579/-565); `meLabel`, `meHead` |
+| `public/app.js`, `api.js`, `dom.js`, `calendar.js`, `kmcheck.js`, `admin/admin.js`, `views/*.js` (6) | modified | Literals out, formatter calls, comma prefill, Dutch dates |
+| `public/index.html`, `admin/index.html`, `manifest.webmanifest`, `sw.js` | modified | `lang="nl"`, Dutch titles, noscript, name "Gedeelde auto", short name "Auto"; cache `car-static-v7`, `/shared/format.js` precached, Dutch push fallbacks |
+| `public/style.css` | modified | App title wraps between words only (+7/-2); no font size changed |
+| `src/notify-texts.ts`, `src/payments.ts`, `src/fuel.ts` | modified | Dutch push texts; Dutch payment request and Tikkie description; formatter calls |
+| `test/dutch.test.ts`, `dutch-words.ts`, `dutch-keys.txt`, `format.test.ts` | added | Guards; format, parse and round-trip tests (572, 188, 579 and 263 lines) |
+| `test/*.test.ts` (18 modified) | modified | Dutch wording pins, `S.me` to `S.meLabel`, formatter imports, comma prefill, 24-hour clock, Dutch pages |
+| `e2e/` (4 files), `scripts/smoke.mjs` | modified | Dutch UI dictionary, locale nl-NL, read-only screens test; smoke wording |
+| `docs/GLOSSARY.md` | added | Vocabulary, tone and use / do not use terms (79 lines) |
+| `README.md`, `docs/DEPLOYMENT.md`, `CLAUDE.md` | modified | Factual corrections about the Dutch interface (+12/-4, +3/-2), both stay English; this entry |
+| `.gitattributes` | modified | `test/dutch-keys.txt` stays LF (review fix) |
+
+`Dockerfile`, `docker-compose.yml`, `Caddyfile`, `package.json`, the lock file, `src/db.ts` and `.github/` are unchanged (not in `git status`).
+
+### How to run and test
+
+Node 22.23.1, Windows. Last test stage (second run), final tree, all exit 0; this documentation step ran no test command:
+
+- `npm run typecheck` and `npm run lint`: clean. `npm test`: 1094 of 1094, 0 skipped, 0 todo (1049 on the base, 1084 after build); also under `TZ=UTC` and `TZ=America/Los_Angeles`. `npm run build`: clean. `npm run smoke`: 21 of 21 over real HTTP.
+- `npm run e2e` (`E2E_CHROMIUM_PATH` set to Playwright chromium-1255): 54 passed at 390 and 320 px.
+- Build stage: `npm run check` exit 0; 17 mutation checks all killed (files restored, SHA-256 compared); Chromium sweep of 13 routes and 4 admin tabs at 390 and 320 px, light and dark, with a 36-character name and badges, clean. The UI pass repeated it (78 screens plus 4 admin tabs).
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design | No | 4 microcopy fixes, no layout, colour or font change: `S.meHead` "Jij" heads rows, `kmcheck.intro`, `kmcheck.warnHigher` and `account.reminders.intro` reworded; tests changed by the symbol rename |
+| Backend | engineering-skills:senior-backend | No | No change; 386 targeted tests, typecheck, lint, build and smoke 21 of 21 pass (no full `npm test`, e2e or Docker); declined an ICU start-up warning, a Tikkie clip and rewriting stored English requests |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; read-through with filtering inline, no `07-security.md` |
+| Simplicity | simplify | No | 5 behaviour-neutral cleanups in 4 files; single inline pass, not the 4-agent fan-out; tests, typecheck and lint re-run, build, smoke and e2e not |
+| Data, DevOps | none | n/a | Did not run (no ledger entry; no schema, Docker or Caddy change) |
+
+### Verification
+
+Verified (ran and saw pass): the commands above; the guard test red on the English tree before the translation; infra files unchanged per git.
+
+NOT verified:
+- A real CRLF checkout or a `windows-latest` run on GitHub (nothing is pushed); no GitHub Actions job, `npm audit`, Docker build, compose or Caddy run; the production image having full ICU.
+- The 78-screen Chromium sweep after the last edits (only `npm run e2e` ran on the final tree).
+- Real phones, an installed PWA picking up `car-static-v7` and the new name, screen readers, contrast (no colour changed), native date pickers and `confirm()` button language (they follow the browser). The Dutch idiom has no native review.
+
+Test confidence: high for what the commands cover (ledger); it does not cover the items above.
+
+### Review
+
+Two rounds, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`). Round 1: 17 findings, 1 confirmed major, F15 (the key-list guard failed on a CRLF checkout and would turn `Check (windows-latest)` red), fixed with a `.gitattributes` LF rule and a `\r?\n` split in `test/dutch.test.ts`. Round 2: 19 findings, 0 confirmed; nothing was fixed after it.
+
+Remaining minor notes (not fixed): `docs/DEPLOYMENT.md` still quotes English screen names; no check that the production image has full ICU; calendar test titles mix Dutch and English; euro sign plus no-break space spelled inline in two dictionary texts; several keys for "you" chosen per call site; the key snapshot has no header and ratchets only old keys; the push byte-cap test cannot fail and tolerates clipped bodies; the English guard is a denylist of the old vocabulary. Nits: the admin Drives table shows odometer readings without a thousands dot; English examples in comments (`public/dom.js`); `S.tickets.price` is an identity function; a stale `/shared` comment in `src/static.ts`; screen names in push texts are not tied to the dictionary; `errorText` indexes a plain object by a server code.
+
+### Assumptions and open questions
+
+Defaults taken for seven open questions (none scope-changing; no one was asked):
+- App name "Gedeelde auto", short name "Auto"; installed PWAs keep the old name until the manifest refreshes or the app is reinstalled. The reservation tab is "Boeken" (a longer word does not fit at 320 px).
+- Typed thousands grouping is refused with a Dutch hint; edit forms prefill without grouping. Euro and number are joined by a no-break space everywhere, including the payment request.
+- The glossary is `docs/GLOSSARY.md`, English prose with Dutch terms. HttpError messages, logs, the CLI and plain-text 404/405/403 bodies stay English; stored payment requests, notes and display names stay as stored.
+- The problem statement treated the car-tab branch as unmerged; the base already contains it (PR #11), so `public/views/car.js` and the Car tab texts are translated here (the glossary keeps `schademelding`, and `APK` stays as it is).
+
+### Honesty flags
+
+- Restarts: 1 (the ledger does not name the stage). Degraded stages: none. Debug attempts: 0. The test stage ran twice. Caveat: the test agent reported a pass although `npm run lint` exited non-zero in the first run; the final run exits 0.
+- Ledger and git disagree on the base and the baseline: the problem notes cite base `6f62bbc` and 911 tests, the ledger's `git.base_sha` and the build record say `30130fc` and 1049. Git (HEAD equals `30130fc`) is trusted; 911 was not re-measured.
+- Ledger and git disagree on tests: the rise 1049 to 1094 matches 45 more test declarations in git (887 against 842 by a line pattern over `test/`), but the ledger names 11 in `format.test.ts`, 20 in `dutch.test.ts` and uncounted additions in `pwa`, `forms`, `tickets-view` and `time`. Git has 15 and 24 declarations in the two new files and one more each in those four (43 in all, 2 more sit in other files); which stage added them is not recorded.
+- `.gitattributes` is changed in git but in no ledger file list (the review fix has no stage entry). Local `main` is `a3953c1`, two PRs behind origin, so `git diff main` shows 72 files; figures here use the base commit.
+- Existing tests changed beyond wording where the change forced it (`S.me` to `S.meLabel`, `formatEuro(...)` arguments, formatter imports, the unknown-code sentence, `45.210`-style km, Dutch blame words in `car-view`); a wording-only checker ran over the 18 edited files and no assertion was removed, skipped or loosened. Only the English-tree guard is recorded as run red; the 17 mutation checks are the evidence that the other new tests can fail.
+- Unplanned: the `public/style.css` title wrap (found by the Chromium sweep); two extra tests (`NAV_NAME` equals `S.nav.label`, literal scan of `src/notify-texts.ts` and `src/payments.ts`); `node_modules` is a real `npm ci` in the worktree; escapes that the editor turned into literal no-break spaces were rewritten.
+- An unmarked section `## /implement run log: the whole app in Dutch (build stage)` at the end of this file is the build stage's record, left untouched. It is stale (1,084 tests, no specialist or review results); this entry supersedes it.
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/translate-app-to-dutch` (git-excluded). Base commit `30130fc50bc8670118c42be74e750ebbd10753fd`.
+<!-- implement:run:translate-app-to-dutch:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)
@@ -1195,3 +1313,18 @@ NOT verified:
 ### Reproduce
 
 - Invocation: `/implement` (a workflow run, step 6 of 14). Plan and problem statement come from the pipeline, not a file in the repository. Audit directory `.claude/runs/km-for-others-and-fuel-payment-push` (git-excluded). Base commit `ed6cc59bef939c2b17f96c4ca620e7e02b7c2be8`.
+
+## /implement run log: the whole app in Dutch (build stage)
+
+### Dutch as the only interface language (translate-app-to-dutch)
+
+Branch `implement/translate-app-to-dutch`, base commit `30130fc` (PR #11, seven tabs). This is the build stage's record; later stages add their own results. Nothing is committed.
+
+- **What changed.** `public/strings.js`, `src/notify-texts.ts` and the payment request in `src/payments.ts` are Dutch (informal "je"). Dates come from `Intl` `nl-NL` through one constant, `DISPLAY_LOCALE` in `shared/time.js` (the two `en-US` part readers are untouched). Amounts, litres, price per litre and kilometres are written by one new integer-only module, `shared/format.js` (`€ 12,50` with a non-breaking space, `40,5`, `1,859`, `45.210`), used by the server and the browser. Decimal fields accept a comma or a dot and now show and prefill a comma without grouping. The two HTML pages, the manifest (`name` "Gedeelde auto", `short_name` "Auto") and the two service worker fallbacks are Dutch; the cache is `car-static-v7` and `/shared/format.js` is precached. The vocabulary is in `docs/GLOSSARY.md`.
+- **No language switcher, no locale parameter, no API, error code, DTO, schema or dependency change.** Git history (base `30130fc`) keeps the English version. HttpError messages, logs, the CLI, README and DEPLOYMENT stay English (README and DEPLOYMENT only got factual corrections), and `errorText` no longer falls back to the English server message.
+- **Guards.** `test/dutch.test.ts` (with `test/dutch-words.ts` and `test/dutch-keys.txt`) walks the dictionary with probe arguments, scans every literal of the dictionary, the server texts and the other browser code, renders every push text at two 40-character names of 3-byte characters (caps 100, 300 and 1000 bytes), checks the Dutch Tikkie description (at most 35 characters), ties the glossary to the texts and keeps the list of words that are also Dutch honest. It was red on the English tree (13 of 18 tests failed) before the translation.
+- **Layout.** One CSS change, no font size changed: the app title in the top bar no longer breaks inside a word next to a long name (`public/style.css`). A headless Chromium sweep (13 routes, 4 admin tabs, 390 and 320 px, light and dark, a 36-character name, badges) found no sideways scroll, no clipped tab label and no console error; `npm run e2e` 54 of 54 (a new read-only screens test was added).
+
+### Verification and limits
+
+`npm run check` exit 0 (1,084 tests, 0 skipped; baseline 1,049), `npm run e2e` 54 passed, 17 mutation checks all killed, existing tests changed by a wording-only checker (the exceptions: `S.me` renamed to `S.meLabel`, the formatter imports, and the Dutch pins that were added). NOT verified: Docker, real phones, an installed PWA picking up `car-static-v7` and the new name, screen readers. The Dutch has no native review. Payment requests that were stored before this change stay English; notes and display names stay as stored; the browser date pickers and `confirm()` buttons follow the browser language.

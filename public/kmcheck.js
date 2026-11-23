@@ -107,7 +107,7 @@ export function warningText(warning) {
  * @param {{ tz: string, meId: number }} o
  */
 function whoAndWhen(reading, o) {
-  return { who: reading.userId === o.meId ? S.me : reading.userName, when: fmtWhen(reading.at, o.tz) };
+  return { who: reading.userId === o.meId ? S.meLabel : reading.userName, when: fmtWhen(reading.at, o.tz) };
 }
 
 /**

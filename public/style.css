@@ -165,13 +165,18 @@ img {
 .topbar .title {
   font-size: 1.1rem;
   margin: 0;
-  flex: 1;
-  min-width: 0;
+  /* The name of the app wraps between words only: next to a long name of a person it must not break inside "Gedeelde". */
+  flex: 0 1 auto;
+  min-width: min-content;
+  overflow-wrap: normal;
 }
 .topbar .who {
   color: var(--muted);
   font-size: 0.85rem;
   min-width: 0;
+  /* Pushed to the right; a long name takes what is left and wraps. */
+  margin-left: auto;
+  text-align: right;
 }
 .admin-link {
   display: inline-flex;

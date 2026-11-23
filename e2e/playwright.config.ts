@@ -44,7 +44,8 @@ const phone = {
   ...devices['Desktop Chrome'],
   // The household time zone, so "a few hours ago" means the same on every runner.
   timezoneId: HOUSEHOLD_TZ,
-  locale: 'en-GB',
+  // The interface is Dutch: the browser asks for it, like the phones of the household.
+  locale: 'nl-NL',
   isMobile: true,
   hasTouch: true,
   // The service worker is not what is under test here and would add caching to every request.

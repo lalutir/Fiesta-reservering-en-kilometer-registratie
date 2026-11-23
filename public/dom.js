@@ -1,9 +1,12 @@
 // Safe DOM construction (text only, never innerHTML) and display helpers.
 // The time helpers come from the same file the server uses (/shared/time.js).
 import { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput } from '../shared/time.js';
+import { formatCentsInput, formatEuro, formatLitres, formatPrice } from '../shared/format.js';
 import { S, errorText, fieldErrorText } from './strings.js';
 
 export { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput };
+// Amounts, litres and kilometres are written by one module, the same one the server uses (/shared/format.js).
+export { formatCentsInput, formatEuro, formatLitres, formatPrice };
 
 const PROPERTY_KEYS = new Set(['value', 'checked', 'disabled', 'selected', 'hidden', 'required', 'readOnly', 'multiple']);
 
@@ -394,7 +397,7 @@ export function kmOwnerControl(o) {
     for (const u of o.users) {
       if (u.id === driverId) continue;
       offered.add(u.id);
-      options.push(h('option', { value: `person:${u.id}`, text: u.id === o.meId ? `${u.displayName} (${S.me})` : u.displayName }));
+      options.push(h('option', { value: `person:${u.id}`, text: u.id === o.meId ? `${u.displayName} (${S.meLabel})` : u.displayName }));
     }
     // Someone deactivated since the drive was saved stays selectable while it is edited, so saving it does not drop them.
     if (currentUserId !== null && currentUserId !== driverId && !offered.has(currentUserId)) {
@@ -496,7 +499,7 @@ export function driverSelect(users, meId, disabled) {
   return h(
     'select',
     { name: 'driver', disabled },
-    users.map((u) => h('option', { value: String(u.id), text: u.id === meId ? `${u.displayName} (${S.me})` : u.displayName })),
+    users.map((u) => h('option', { value: String(u.id), text: u.id === meId ? `${u.displayName} (${S.meLabel})` : u.displayName })),
   );
 }
 

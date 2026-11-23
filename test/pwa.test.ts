@@ -50,6 +50,23 @@ test('manifest has what installability needs: names, standalone display, start u
   }
 });
 
+test('the pages and the manifest are Dutch: language, titles, noscript and the name on the home screen', () => {
+  const index = read(publicDir, 'index.html');
+  const admin = read(publicDir, 'admin/index.html');
+  assert.match(index, /<html lang="nl">/);
+  assert.match(admin, /<html lang="nl">/);
+  assert.match(index, /<title>Gedeelde auto<\/title>/);
+  assert.match(admin, /<title>Gedeelde auto, admin<\/title>/);
+  assert.match(index, /<noscript><p class="noscript">Deze app heeft JavaScript nodig\.<\/p><\/noscript>/);
+  const m = JSON.parse(read(publicDir, 'manifest.webmanifest'));
+  assert.equal(m.lang, 'nl');
+  assert.equal(m.name, 'Gedeelde auto');
+  assert.equal(m.short_name, 'Auto');
+  assert.equal(m.description, 'Reserveer de gedeelde auto en leg vast wie er reed.');
+  const homeScreenName = /<meta name="apple-mobile-web-app-title" content="([^"]*)"/.exec(index)?.[1];
+  assert.equal(homeScreenName, m.short_name, 'iOS and Android show the same name');
+});
+
 test('icons are RGBA PNGs of the documented sizes, and the iOS icon is opaque-corner full bleed', () => {
   for (const [file, px] of [['icon-192.png', 192], ['icon-512.png', 512], ['icon-maskable-512.png', 512], ['apple-touch-icon.png', 180]] as const) {
     const size = pngSize(path.join(publicDir, 'icons', file));
@@ -145,7 +162,7 @@ test('phone width: no fixed width wider than a phone outside the scrolling table
   }
 });
 
-test('the service worker precache list equals the files in public/ (plus the shared time module)', () => {
+test('the service worker precache list equals the files in public/ (plus the shared modules)', () => {
   const sw = read(publicDir, 'sw.js');
   const block = /const PRECACHE = \[([\s\S]*?)\];/.exec(sw)?.[1] ?? '';
   const listed = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1] as string);
@@ -154,8 +171,9 @@ test('the service worker precache list equals the files in public/ (plus the sha
   const onDisk = walk(publicDir)
     .filter((f) => f !== 'sw.js' && !f.startsWith('admin/'))
     .map((f) => (f === 'index.html' ? '/' : `/${f}`));
-  assert.deepEqual([...listed].sort(), [...onDisk, '/shared/time.js'].sort());
+  assert.deepEqual([...listed].sort(), [...onDisk, '/shared/time.js', '/shared/format.js'].sort());
   assert.ok(fs.existsSync(path.join(sharedDir, 'time.js')));
+  assert.ok(fs.existsSync(path.join(sharedDir, 'format.js')));
 });
 
 /** Load sw.js into a sandbox with fake browser APIs and return its handlers. */
@@ -178,7 +196,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -198,7 +216,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
 test('service worker: the cache name is bumped with the app files, so phones drop the old copy of the shell', () => {
   // A new view file changes what the shell is: without a new name an installed app keeps serving the old one.
   const source = read(publicDir, 'sw.js');
-  assert.match(source, /const CACHE = 'car-static-v6';/);
+  assert.match(source, /const CACHE = 'car-static-v7';/);
   assert.match(source, /'\/views\/tickets\.js',/, 'the tickets view is precached');
   assert.match(source, /'\/views\/car\.js',/, 'the Car view is precached');
   assert.match(source, /'\/kmcheck\.js',/, 'the kilometre check module is precached');
@@ -211,13 +229,14 @@ test('service worker: precaches on install, drops old caches on activate', async
   await installed;
   assert.ok(sw.store.has('https://car.example/app.js'));
   assert.ok(sw.store.has('https://car.example/shared/time.js'));
+  assert.ok(sw.store.has('https://car.example/shared/format.js'), 'the shared formatter is cached too');
   assert.ok(sw.store.has('https://car.example/views/tickets.js'));
   assert.ok(sw.store.has('https://car.example/kmcheck.js'));
   assert.ok(sw.store.has('https://car.example/views/car.js'));
   let activated: Promise<unknown> | undefined;
   (sw.handlers['activate'] as (e: Json) => void)({ waitUntil: (p: Promise<unknown>) => (activated = p) });
   await activated;
-  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5'], 'the previous versions of the shell go, the current one stays');
+  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6'], 'the previous versions of the shell go, the current one stays');
 });
 
 test('service worker never handles /api, /admin, non-GET or cross-origin requests', async () => {
@@ -298,7 +317,7 @@ test('service worker push: shows the reminder it was sent, and always shows some
   assert.equal(sw.shown[0]?.options.icon, '/icons/icon-192.png');
 
   // Unreadable, missing, empty or wrongly typed data still ends in a generic notification (iOS withdraws silent pushes).
-  const generic = { title: 'Shared car', body: 'Open the app to see what is waiting.', tag: 'car', data: { url: '/' } };
+  const generic = { title: 'Gedeelde auto', body: 'Open de app om te zien wat er op je wacht.', tag: 'car', data: { url: '/' } };
   const cases: Array<string | null | (() => never)> = [
     'not json{',
     () => {
@@ -393,12 +412,15 @@ test('service worker notificationclick: closes it and opens the registration for
   assert.deepEqual(b.opened, ['https://car.example/#/usage?res=3']);
 });
 
-test('the server serves the app shell, the service worker and the exact shared time module', async () => {
+test('the server serves the app shell, the service worker and the exact shared modules', async () => {
   const t = await createTestApp(); // default config: the real public/ and shared/ directories
   try {
     const shared = await rawRequest(t.port, 'GET', '/shared/time.js');
     assert.equal(shared.status, 200);
     assert.equal(shared.text, fs.readFileSync(path.join(sharedDir, 'time.js'), 'utf8'));
+    const format = await rawRequest(t.port, 'GET', '/shared/format.js');
+    assert.equal(format.status, 200);
+    assert.equal(format.text, fs.readFileSync(path.join(sharedDir, 'format.js'), 'utf8'));
     const home = await rawRequest(t.port, 'GET', '/');
     assert.equal(home.text, read(publicDir, 'index.html'));
     const sw = await rawRequest(t.port, 'GET', '/sw.js');
@@ -418,10 +440,10 @@ test('the server serves the app shell, the service worker and the exact shared t
 const TZ = 'Europe/Amsterdam';
 
 test('fmtRange shows one day compactly and several days in full, in the household zone', () => {
-  assert.match(fmtRange('2026-06-20T07:00:00.000Z', '2026-06-20T11:30:00.000Z', TZ), /Saturday.*20 June, 09:00 – 13:30/);
-  assert.match(fmtRange('2026-06-20T07:00:00.000Z', '2026-06-22T11:30:00.000Z', TZ), /20 Jun 2026.*09:00 – 22 Jun 2026.*13:30/);
+  assert.match(fmtRange('2026-06-20T07:00:00.000Z', '2026-06-20T11:30:00.000Z', TZ), /zaterdag.*20 juni, 09:00 – 13:30/);
+  assert.match(fmtRange('2026-06-20T07:00:00.000Z', '2026-06-22T11:30:00.000Z', TZ), /20 jun 2026.*09:00 – 22 jun 2026.*13:30/);
   // 22:30 UTC is already the next day in Amsterdam.
-  assert.match(fmtRange('2026-06-20T22:30:00.000Z', '2026-06-20T23:30:00.000Z', TZ), /Sunday.*21 June, 00:30 – 01:30/);
+  assert.match(fmtRange('2026-06-20T22:30:00.000Z', '2026-06-20T23:30:00.000Z', TZ), /zondag.*21 juni, 00:30 – 01:30/);
 });
 
 test('groupByDay groups consecutive items by local calendar day', () => {
@@ -437,7 +459,7 @@ test('groupByDay groups consecutive items by local calendar day', () => {
     ['2026-06-21', [3]],
     ['2026-06-22', [4]],
   ]);
-  assert.match(groups[0]?.label as string, /Saturday/);
+  assert.match(groups[0]?.label as string, /zaterdag/);
   assert.deepEqual(groupByDay([], (i: { start: string }) => i.start, TZ), []);
 });
 

@@ -99,7 +99,7 @@ const readingEnd = (form: unknown) => control(fieldRow(form, S.usage.odometerEnd
 const lastKnown = (form: unknown) => one(fieldRow(form, S.usage.odometerStart), '.km-last').textContent;
 const warning = (form: unknown) => one(fieldRow(form, S.usage.odometerStart), 'p.km-warn');
 
-const who = (name: string, me = 'Anna') => (name === me ? S.me : name);
+const who = (name: string, me = 'Anna') => (name === me ? S.meLabel : name);
 const lastKnownText = (r: Json, me = 'Anna') => K.lastKnown(r['km'] as number, who(r['userName'] as string, me), fmtWhen(r['at'] as string, TZ));
 
 // ============================================================ the pure helpers
@@ -311,7 +311,7 @@ test('a new drive starts from the latest known reading and says where it comes f
     const form = mount(dom, await driveForm(me));
     assert.equal(readingStart(form).value, '41300', 'the fill-up is the latest reading');
     assert.equal(lastKnown(form), lastKnownText(annaFuel));
-    assert.match(lastKnown(form), /^Last known: 41,300 km, me, /, 'thousands separator and "me" for the signed-in person');
+    assert.match(lastKnown(form), /^Laatst bekend: 41\.300 km, jij, /, 'thousands dot and "jij" for the signed-in person');
     const region = warning(form);
     assert.equal(region.getAttribute('role'), 'status');
     assert.equal(region.getAttribute('aria-live'), 'polite');
@@ -523,7 +523,7 @@ test('the section names both neighbours of every finding and offers the fix, for
     assert.equal(one(first, 'strong').textContent, K.gap(40, fmtWhen(annaEnd['at'] as string, TZ), fmtWhen(annaFuel['at'] as string, TZ)));
     assert.deepEqual(
       all(first, 'div.sub').map((d) => d.textContent),
-      [K.neighbour(K.source['drive-end'], 41260, S.me, fmtWhen(annaEnd['at'] as string, TZ)), K.neighbour(K.source.fuel, 41300, S.me, fmtWhen(annaFuel['at'] as string, TZ))],
+      [K.neighbour(K.source['drive-end'], 41260, S.meLabel, fmtWhen(annaEnd['at'] as string, TZ)), K.neighbour(K.source.fuel, 41300, S.meLabel, fmtWhen(annaFuel['at'] as string, TZ))],
       'both ends: what kind of reading, how many km, whose and when',
     );
     assert.equal(byText(first, 'a', K.addMissing).getAttribute('href'), `#/usage?gap=${encodeURIComponent(gapFuel['key'] as string)}`);
@@ -590,7 +590,7 @@ test('Mark as explained needs a note and sends nothing without one; with one it 
     assert.equal(one(row, 'summary').textContent, K.explainSummary);
     const noteRow = fieldRow(row, K.explainLabel);
     assert.equal(hintOf(noteRow), K.explainHint);
-    assert.equal(K.explainLabel, 'Why is this explained? (required)');
+    assert.equal(K.explainLabel, 'Waarom is dit toegelicht? (verplicht)');
 
     await submitForm(row);
     assert.deepEqual(api.writes(), [], 'nothing is sent without a reason');
@@ -775,7 +775,7 @@ test('fill-up form: the odometer is required for a new fill-up, checked against 
   await withClient({ now: NOW, routes: fuelRoutes([], odometerRoutes(asChain(chainA()) as unknown as Json)) }, async ({ dom, api }) => {
     const form = mount(dom, await fuelForm(me));
     const row = fieldRow(form, S.fuel.odometer);
-    assert.equal(S.fuel.odometer, 'Current odometer (km)');
+    assert.equal(S.fuel.odometer, 'Huidige kilometerstand (km)');
     assert.equal(hintOf(row), S.fuel.odometerHint);
     assert.equal(fuelOdometer(form).value, '', 'never prefilled: the point is to read it off the dashboard');
     assert.equal(one(row, '.km-last').textContent, lastKnownText(annaFuel), 'but the last known reading is shown');
@@ -907,7 +907,7 @@ test('fuel cards show the reading, the unaccounted kilometres of their period, a
     const page = mount(dom, await fuelForm(me));
     const card = (id: number): FakeElement => one(page, `#fuel-${id}`);
     assert.ok(all(card(5), 'div.sub').some((d) => d.textContent === S.fuel.odometerLine(41300)));
-    assert.equal(S.fuel.unaccounted(40), '40 km unaccounted for in this period; the split only counts registered km');
+    assert.equal(S.fuel.unaccounted(40), '40 km niet geregistreerd in deze periode; de verdeling telt alleen geregistreerde km');
     assert.ok(all(card(5), 'div.km-flag').some((d) => d.textContent === S.fuel.unaccounted(40)));
     assert.equal(all(card(5), 'a').some((a) => a.textContent === S.fuel.correctOdometer), false, 'an editable fill-up has Edit instead');
 

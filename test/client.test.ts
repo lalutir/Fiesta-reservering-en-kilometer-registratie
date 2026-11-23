@@ -5,11 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FuelShare, OdometerReading, Reservation } from '../public/api.js';
-import { driveBody, fmtDriveRange } from '../public/dom.js';
+import { driveBody, fmtDriveRange, formatCentsInput, formatEuro, formatLitres, formatPrice } from '../public/dom.js';
 import { S } from '../public/strings.js';
 import { keyBytes, reminderSupport } from '../public/views/account.js';
 import { kmAction } from '../public/views/agenda.js';
-import { changedLine, deriveFuel, fmtCents, fmtLitres, fmtPrice, parseDecimal, shareLinks, shareStatus } from '../public/views/fuel.js';
+import { changedLine, deriveFuel, parseDecimal, shareLinks, shareStatus } from '../public/views/fuel.js';
 import { defaultsFor, offeredReservations, submitLabel, suggestReservation } from '../public/views/usage.js';
 
 type Json = Record<string, unknown>;
@@ -70,8 +70,8 @@ test('kmAction: another member sees "I drove this" only once it started and only
 test('kmAction: registered shows who and how far, draft offers Finish drive to its driver and an admin only', () => {
   const done = res({ kmState: 'registered', drive: { id: 3, userId: BEN, userName: 'Ben', status: 'completed', odometerStart: 100, odometerEnd: 142, distanceKm: 42, linked: false } });
   const registered = kmAction(done, ANNA, false, iso(-600));
-  assert.deepEqual(registered, { line: 'Km registered: 42 km (Ben)', state: 'registered', action: null }, 'also long before the lead time: it is a fact, not a nag');
-  assert.equal(kmAction(done, BEN, false, iso(90)).line, 'Km registered: 42 km (me)');
+  assert.deepEqual(registered, { line: 'Km geregistreerd: 42 km (Ben)', state: 'registered', action: null }, 'also long before the lead time: it is a fact, not a nag');
+  assert.equal(kmAction(done, BEN, false, iso(90)).line, 'Km geregistreerd: 42 km (jij)');
 
   const draftDrive = { id: 9, userId: ANNA, userName: 'Anna', status: 'draft', odometerStart: 100, odometerEnd: null, distanceKm: null, linked: true };
   const draft = res({ kmState: 'draft', drive: draftDrive });
@@ -179,7 +179,7 @@ test('fmtDriveRange: an open drive says when it started instead of showing an en
   const tz = 'Europe/Amsterdam';
   assert.match(fmtDriveRange(START, END, tz), /12:00 – 14:00/);
   const open = fmtDriveRange(START, null, tz);
-  assert.match(open, /^Started .*12:00, still open$/);
+  assert.match(open, /^Gestart .*12:00, nog open$/);
   assert.ok(!open.includes('–'));
 });
 
@@ -218,15 +218,15 @@ test('deriveFuel: any two of litres, total and price give the third, with intege
 });
 
 test('fuel formatting: whole cents, litres and thousandths of a euro', () => {
-  assert.equal(fmtCents(5), '0.05');
-  assert.equal(fmtCents(7560), '75.60');
-  assert.equal(fmtCents(100), '1.00');
-  assert.equal(fmtLitres(40_000), '40.00');
-  assert.equal(fmtLitres(40_123), '40.123');
-  assert.equal(fmtLitres(500), '0.50');
-  assert.equal(fmtPrice(1859), '1.859');
-  assert.equal(fmtPrice(2000), '2.000');
-  assert.equal(fmtPrice(5), '0.005');
+  assert.equal(formatCentsInput(5), '0,05');
+  assert.equal(formatCentsInput(7560), '75,60');
+  assert.equal(formatCentsInput(100), '1,00');
+  assert.equal(formatLitres(40_000), '40,00');
+  assert.equal(formatLitres(40_123), '40,123');
+  assert.equal(formatLitres(500), '0,50');
+  assert.equal(formatPrice(1859), '1,859');
+  assert.equal(formatPrice(2000), '2,000');
+  assert.equal(formatPrice(5), '0,005');
 });
 
 test('shareLinks encode the message; shareStatus names the state of a share', () => {
@@ -247,12 +247,12 @@ test('changedLine says by how much a share moved after its request, and stays si
   const paidAt = '2026-06-15T10:00:00.000Z';
   assert.equal(changedLine(share(1500, null)), null);
   assert.equal(changedLine(share(1500, { amountCents: 1500, paidAt: null, changed: false })), null);
-  assert.equal(changedLine(share(2000, { amountCents: 1500, paidAt: null, changed: true })), S.fuel.changedAsked('15.00', '20.00', true, '5.00'));
-  assert.equal(changedLine(share(0, { amountCents: 1500, paidAt: null, changed: true })), S.fuel.changedAsked('15.00', '0.00', false, '15.00'), 'a share that dropped to nothing');
-  assert.equal(changedLine(share(3000, { amountCents: 1500, paidAt, changed: true })), S.fuel.changedPaid('15.00', '30.00', true, '15.00'));
-  assert.equal(changedLine(share(0, { amountCents: 1500, paidAt, changed: true })), S.fuel.changedPaid('15.00', '0.00', false, '15.00'));
-  assert.match(S.fuel.changedPaid('15.00', '30.00', true, '15.00'), /still to pay/);
-  assert.match(S.fuel.changedPaid('15.00', '0.00', false, '15.00'), /too much paid/);
+  assert.equal(changedLine(share(2000, { amountCents: 1500, paidAt: null, changed: true })), S.fuel.changedAsked(formatEuro(1500), formatEuro(2000), true, formatEuro(500)));
+  assert.equal(changedLine(share(0, { amountCents: 1500, paidAt: null, changed: true })), S.fuel.changedAsked(formatEuro(1500), formatEuro(0), false, formatEuro(1500)), 'a share that dropped to nothing');
+  assert.equal(changedLine(share(3000, { amountCents: 1500, paidAt, changed: true })), S.fuel.changedPaid(formatEuro(1500), formatEuro(3000), true, formatEuro(1500)));
+  assert.equal(changedLine(share(0, { amountCents: 1500, paidAt, changed: true })), S.fuel.changedPaid(formatEuro(1500), formatEuro(0), false, formatEuro(1500)));
+  assert.match(S.fuel.changedPaid(formatEuro(1500), formatEuro(3000), true, formatEuro(1500)), /nog te betalen/);
+  assert.match(S.fuel.changedPaid(formatEuro(1500), formatEuro(0), false, formatEuro(1500)), /te veel betaald/);
 });
 
 test('keyBytes decodes the server key; reminderSupport tells apart ready, iOS-in-a-tab and unsupported', () => {

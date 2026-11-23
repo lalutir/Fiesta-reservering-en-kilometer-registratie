@@ -57,8 +57,8 @@ test('timing: 30 minutes before the start, at the end, and once more an hour lat
     for (const later of ['13:31:00', '13:40:00', '13:44:59']) assert.equal((await s.tick(`2026-06-15T${later}.000Z`)).claimed, 0, `${later} again`);
     assert.equal(s.messages().length, 1);
     assert.deepEqual({ ...s.messages()[0] }, {
-      title: 'Your car reservation starts soon',
-      body: 'It starts at 16:00. Save your starting odometer reading now.',
+      title: 'Je reservering begint zo',
+      body: 'De reservering begint om 16:00. Sla nu de kilometerstand bij het begin op.',
       url: `/#/usage?res=${s.reservation}`,
       tag: `km-${s.reservation}`,
     });
@@ -67,15 +67,15 @@ test('timing: 30 minutes before the start, at the end, and once more an hour lat
     assert.equal((await s.tick(MOMENTS.end)).sent, 1);
     assert.equal((await s.tick('2026-06-15T16:01:00.000Z')).claimed, 0);
     assert.deepEqual({ ...s.messages()[1] }, {
-      title: 'Register your kilometres',
-      body: 'Your reservation ended at 18:00. Register the kilometres you drove.',
+      title: 'Registreer je kilometers',
+      body: 'Je reservering eindigde om 18:00. Registreer de kilometers die je hebt gereden.',
       url: `/#/usage?res=${s.reservation}`,
       tag: `km-${s.reservation}`,
     });
 
     assert.equal((await s.tick('2026-06-15T16:59:59.000Z')).claimed, 0);
     assert.equal((await s.tick(MOMENTS.repeat)).sent, 1);
-    assert.equal(s.messages()[2]?.['title'], 'Reminder: Register your kilometres');
+    assert.equal(s.messages()[2]?.['title'], 'Herinnering: Registreer je kilometers');
     for (const later of ['17:01:00', '17:14:00', '17:16:00', '19:00:00']) assert.equal((await s.tick(`2026-06-15T${later}.000Z`)).claimed, 0, `${later}: nothing after the repeat`);
     assert.equal(s.messages().length, 3);
     assert.deepEqual(claims(s).map((c) => [c.kind, c.scheduled_utc]), [['start', MOMENTS.start], ['end', MOMENTS.end], ['repeat', MOMENTS.repeat]]);
@@ -138,8 +138,8 @@ test('a completed registration silences the reminders; an unfinished draft chang
     insertDraft(drive.t, { userId: drive.anna.id, start: '2026-06-15T14:05:00.000Z', reservationId: drive.reservation });
     assert.equal((await drive.tick(MOMENTS.end)).sent, 1);
     assert.equal((await drive.tick(MOMENTS.repeat)).sent, 1);
-    assert.deepEqual(drive.messages().map((m) => m['title']), ['Your car reservation starts soon', 'Finish your drive', 'Reminder: Finish your drive']);
-    assert.equal(drive.messages()[1]?.['body'], 'Your reservation ended at 18:00. Enter the end odometer reading.');
+    assert.deepEqual(drive.messages().map((m) => m['title']), ['Je reservering begint zo', 'Rond je rit af', 'Herinnering: Rond je rit af']);
+    assert.equal(drive.messages()[1]?.['body'], 'Je reservering eindigde om 18:00. Vul de kilometerstand bij het einde in.');
   } finally {
     await drive.t.close();
   }
@@ -150,7 +150,7 @@ test('a completed registration silences the reminders; an unfinished draft chang
     insertDraft(early.t, { userId: early.anna.id, start: MOMENTS.start });
     assert.equal((await early.tick(MOMENTS.start)).claimed, 0, 'the start reading is already saved: no start reminder');
     assert.equal((await early.tick(MOMENTS.end)).sent, 1);
-    assert.equal(early.messages()[0]?.['title'], 'Finish your drive');
+    assert.equal(early.messages()[0]?.['title'], 'Rond je rit af');
   } finally {
     await early.t.close();
   }
@@ -163,8 +163,8 @@ test('only a draft that belongs to the reservation counts: a forgotten old draft
     insertDraft(stale.t, { userId: stale.anna.id, start: '2026-06-12T09:00:00.000Z' });
     assert.equal((await stale.tick(MOMENTS.start)).sent, 1, 'the start reminder is not silenced by an old draft');
     assert.equal((await stale.tick(MOMENTS.end)).sent, 1);
-    assert.deepEqual(stale.messages().map((m) => m['title']), ['Your car reservation starts soon', 'Register your kilometres']);
-    assert.equal(stale.messages()[1]?.['body'], 'Your reservation ended at 18:00. Register the kilometres you drove.');
+    assert.deepEqual(stale.messages().map((m) => m['title']), ['Je reservering begint zo', 'Registreer je kilometers']);
+    assert.equal(stale.messages()[1]?.['body'], 'Je reservering eindigde om 18:00. Registreer de kilometers die je hebt gereden.');
   } finally {
     await stale.t.close();
   }
@@ -184,7 +184,7 @@ test('only a draft that belongs to the reservation counts: a forgotten old draft
     insertDraft(linked.t, { userId: linked.anna.id, start: '2026-06-12T09:00:00.000Z', reservationId: linked.reservation });
     assert.equal((await linked.tick(MOMENTS.start)).claimed, 0, 'linked draft: the start reading is saved');
     assert.equal((await linked.tick(MOMENTS.end)).sent, 1);
-    assert.equal(linked.messages()[0]?.['title'], 'Finish your drive');
+    assert.equal(linked.messages()[0]?.['title'], 'Rond je rit af');
   } finally {
     await linked.t.close();
   }
@@ -251,7 +251,7 @@ test('a moved reservation gets fresh reminders for its new time', async () => {
     assert.equal((await s.tick(MOMENTS.start)).sent, 1);
     run(s.t.db, 'UPDATE reservations SET start_utc = ?, end_utc = ? WHERE id = ?', '2026-06-15T18:00:00.000Z', '2026-06-15T20:00:00.000Z', s.reservation);
     assert.equal((await s.tick('2026-06-15T17:30:00.000Z')).sent, 1, 'new start moment');
-    assert.equal(s.messages()[1]?.['body'], 'It starts at 20:00. Save your starting odometer reading now.');
+    assert.equal(s.messages()[1]?.['body'], 'De reservering begint om 20:00. Sla nu de kilometerstand bij het begin op.');
     assert.equal(claims(s).length, 2);
   } finally {
     await s.t.close();
@@ -354,7 +354,7 @@ test('the reminders and the pending list agree on which reservations still need 
       s.stub.calls.length = 0;
       const out = await s.tick(row.end_utc);
       assert.ok(out.claimed <= 1);
-      if (s.messages().some((m) => m['title'] === 'Register your kilometres' && m['tag'] === `km-${id}`)) reminded.add(id);
+      if (s.messages().some((m) => m['title'] === 'Registreer je kilometers' && m['tag'] === `km-${id}`)) reminded.add(id);
     }
     s.t.clock.set(hours(12));
     const pending = (await s.anna.get('/api/usage/pending')).body.items[0].reservations.map((r: Json) => r.id as number);

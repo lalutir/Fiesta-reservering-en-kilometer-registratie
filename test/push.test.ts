@@ -215,8 +215,8 @@ test('end to end: a test notification reaches the stub push service, signed with
     assert.ok((token.claims['exp'] as number) * 1000 - t.clock.now().getTime() <= 24 * 3_600_000);
 
     const message = phone.read(call);
-    assert.deepEqual({ ...message }, { title: 'Test notification', body: 'Reminders work on this device.', url: '/#/account', tag: 'test' });
-    assert.ok(!call.body!.toString('latin1').includes('Test notification'), 'the push service only sees ciphertext');
+    assert.deepEqual({ ...message }, { title: 'Testmelding', body: 'Je herinneringen werken op dit apparaat.', url: '/#/account', tag: 'test' });
+    assert.ok(!call.body!.toString('latin1').includes('Testmelding'), 'the push service only sees ciphertext');
     // A different subscriber cannot read it.
     assert.throws(() => makeSubscriber().read(call));
   } finally {

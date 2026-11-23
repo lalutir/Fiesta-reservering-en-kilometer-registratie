@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DISPLAY_LOCALE,
   addCalendarMonths,
   addDateKeyYears,
   daysBetween,
@@ -18,6 +19,24 @@ import {
 } from '../shared/time.js';
 
 const TZ = 'Europe/Amsterdam';
+
+test('dates are shown in Dutch for the household zone, on a 24-hour clock, and the numeric part reader is untouched', () => {
+  assert.equal(DISPLAY_LOCALE, 'nl-NL');
+  const at = '2026-11-16T13:05:00.000Z';
+  // The exact output is pinned for the pinned runtime (Node 22.23, full ICU); the checks in test/dutch.test.ts fail loudly without ICU.
+  assert.equal(formatLocal(at, TZ, 'datetime'), '16 nov 2026, 14:05');
+  assert.equal(formatLocal(at, TZ, 'day'), 'maandag 16 november');
+  assert.equal(formatLocal(at, TZ, 'date'), '16 nov 2026');
+  assert.equal(formatLocal(at, TZ, 'time'), '14:05');
+  assert.equal(formatLocal('2026-11-16T22:30:00.000Z', TZ, 'time'), '23:30', 'a 24-hour clock, not 11:30 PM');
+  // Across both DST changes the clock reads the local wall time.
+  assert.equal(formatLocal('2026-03-29T00:30:00.000Z', TZ, 'time'), '01:30', 'before the spring change');
+  assert.equal(formatLocal('2026-03-29T01:30:00.000Z', TZ, 'time'), '03:30', 'after it: 02:30 does not exist');
+  assert.equal(formatLocal('2026-10-25T00:30:00.000Z', TZ, 'time'), '02:30', 'the first 02:30 of the autumn change');
+  assert.equal(formatLocal('2026-10-25T01:30:00.000Z', TZ, 'time'), '02:30', 'and the second one');
+  // The parts that logic reads are numbers from the en-US formatter, whatever the display language is.
+  assert.deepEqual(zonedParts(at, TZ), { year: 2026, month: 11, day: 16, hour: 14, minute: 5, second: 0, ms: 0 });
+});
 
 test('zonedParts reads wall clock in the zone', () => {
   assert.deepEqual(zonedParts('2026-07-01T10:15:30.250Z', TZ), {
@@ -87,9 +106,9 @@ test('localDateKey follows the zone', () => {
 });
 
 test('formatLocal renders in the zone', () => {
-  assert.match(formatLocal('2026-03-29T12:30:00.000Z', TZ), /29 Mar 2026.*14:30/);
+  assert.match(formatLocal('2026-03-29T12:30:00.000Z', TZ), /29 mrt 2026.*14:30/);
   assert.equal(formatLocal('2026-03-29T12:30:00.000Z', TZ, 'time'), '14:30');
-  assert.match(formatLocal('2026-03-29T12:30:00.000Z', TZ, 'day'), /Sunday.*29 March/);
+  assert.match(formatLocal('2026-03-29T12:30:00.000Z', TZ, 'day'), /zondag 29 maart/);
   assert.equal(formatLocal('not a date', TZ), '');
 });
 
@@ -188,9 +207,9 @@ test('startOfLocalDay is local midnight, 23 and 25 hour days included', () => {
 });
 
 test('formatDateKey names the same day for everybody', () => {
-  assert.equal(formatDateKey('2026-03-28'), '28 Mar 2026');
-  assert.equal(formatDateKey('2028-02-29'), '29 Feb 2028');
-  assert.equal(formatDateKey('2026-03-28', 'day'), 'Saturday 28 March');
+  assert.equal(formatDateKey('2026-03-28'), '28 mrt 2026');
+  assert.equal(formatDateKey('2028-02-29'), '29 feb 2028');
+  assert.equal(formatDateKey('2026-03-28', 'day'), 'zaterdag 28 maart');
   assert.equal(formatDateKey('2026-02-30'), '', 'not a date: nothing to show');
 });
 
@@ -202,7 +221,7 @@ test('the date helpers give the same answers whatever the zone of the process is
       process.env['TZ'] = tz;
       assert.equal(daysBetween('2026-03-28', '2026-03-30'), 2, tz);
       assert.equal(daysBetween('2026-10-24', '2026-10-26'), 2, tz);
-      assert.equal(formatDateKey('2026-03-28'), '28 Mar 2026', tz);
+      assert.equal(formatDateKey('2026-03-28'), '28 mrt 2026', tz);
       assert.equal(startOfLocalDay('2026-03-29', TZ), '2026-03-28T23:00:00.000Z', tz);
       assert.equal(localDateKey('2026-03-27T23:30:00.000Z', TZ), '2026-03-28', tz);
     }
