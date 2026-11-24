@@ -27,6 +27,11 @@ import {
 } from '../dom.js';
 import { kmCheckSection } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
+import { initTheme, themeControl } from '../theme.js';
+import { button as uiButton, confirmSheet, emptyState, errorState, linkButton, sheet } from '../ui.js';
+import { installUndoFlush } from '../undo.js';
+// An empty header text in a table stands for the actions column; a long table gets sortable headers and a filter.
+import { dataTable as table, withSort } from './table.js';
 
 /** @typedef {import('../api.js').ApiError} ApiError */
 
@@ -46,7 +51,6 @@ let revealed = null;
 // CSS selector of the control to focus after the next render (the panel is rebuilt on every change).
 /** @type {string | null} */
 let focusSelector = null;
-const EDITOR_FIRST_CONTROL = 'form.editor input, form.editor select';
 
 const toast = toaster(() => toastEl);
 
@@ -66,34 +70,25 @@ async function perform(action, done) {
 }
 
 /**
- * A data table. The wrapper scrolls sideways on a phone, so it is a named,
- * keyboard-focusable region. An empty header text stands for the actions column.
- * @param {string} label what the table lists (its accessible name)
- * @param {string[]} headers
- * @param {Array<Array<unknown>>} rows
+ * A compact button of a table row or of the page.
+ * @param {string} label
+ * @param {() => unknown} onclick
+ * @param {import('../ui.js').ButtonVariant} [variant]
  */
-function table(label, headers, rows) {
-  return h('div', { class: 'table-wrap', role: 'region', 'aria-label': label, tabindex: '0' }, [
-    h('table', { class: 'data' }, [
-      h('thead', {}, [
-        h(
-          'tr',
-          {},
-          headers.map((t) => h('th', { scope: 'col' }, t === '' ? h('span', { class: 'sr-only', text: S.admin.actions }) : t)),
-        ),
-      ]),
-      h('tbody', {}, rows.map((cells) => h('tr', {}, cells.map((c) => h('td', {}, [c]))))),
-    ]),
-  ]);
+function button(label, onclick, variant = 'secondary') {
+  return uiButton({ label, small: true, variant, onclick: () => onclick() });
 }
 
 /**
- * @param {string} label
- * @param {() => void} onclick
- * @param {string} [cls]
+ * Open a form in a drawer (a side panel on a wide screen, a bottom sheet on a phone). The first control of the form has focus.
+ * @param {string} title
+ * @param {HTMLElement} form
+ * @returns {ReturnType<typeof sheet>}
  */
-function button(label, onclick, cls = '') {
-  return h('button', { class: `btn small ${cls}`.trim(), type: 'button', onclick }, label);
+function openDrawer(title, form) {
+  const drawer = sheet({ title, kind: 'drawer', body: form, focus: () => form.querySelector('input, select') });
+  drawer.open();
+  return drawer;
 }
 
 /** @param {unknown} value */
@@ -170,7 +165,7 @@ async function renderUsers() {
       h('h2', { text: S.admin.users.create }),
       h('div', { class: 'inline-form top' }, [fUser.row, fName.row, fRole.row, fPass.row]),
       formError,
-      h('button', { class: 'btn primary', type: 'submit' }, S.admin.users.add),
+      uiButton({ label: S.admin.users.add, variant: 'primary', type: 'submit' }),
     ],
   );
 
@@ -180,32 +175,70 @@ async function renderUsers() {
     S.admin.users.roleLabel[u.role],
     h('span', { class: `badge-status ${u.active ? 'confirmed' : 'declined'}`, text: u.active ? S.admin.users.active : S.admin.users.inactive }),
     h('div', { class: 'actions' }, [
-      button(u.active ? S.admin.users.deactivate : S.admin.users.reactivate, () => {
-        if (u.active && !confirm(S.admin.users.confirmDeactivate)) return;
+      button(u.active ? S.admin.users.deactivate : S.admin.users.reactivate, async () => {
+        if (u.active && !(await confirmSheet(S.admin.users.confirmDeactivate, { confirmLabel: S.admin.users.deactivate }))) return;
         void perform(() => patch(`/api/admin/users/${u.id}`, { active: !u.active }), S.admin.users.updated);
-      }, u.active ? 'danger' : ''),
+      }, u.active ? 'danger' : 'secondary'),
       button(u.role === 'admin' ? S.admin.users.makeMember : S.admin.users.makeAdmin, () =>
         void perform(() => patch(`/api/admin/users/${u.id}`, { role: u.role === 'admin' ? 'member' : 'admin' }), S.admin.users.updated),
       ),
-      button(S.admin.users.rename, () => {
-        const name = prompt(S.admin.users.renamePrompt, u.displayName);
-        if (name?.trim()) void perform(() => patch(`/api/admin/users/${u.id}`, { displayName: name.trim() }), S.admin.users.updated);
-      }),
-      button(S.admin.users.resetPassword, () => {
-        if (!confirm(S.admin.users.confirmReset)) return;
-        void (async () => {
-          try {
-            const res = await post(`/api/admin/users/${u.id}/password`, {});
-            await reveal(u.displayName, res.generatedPassword);
-          } catch (err) {
-            toast(errorText(/** @type {Error} */ (err)), true);
-          }
-        })();
+      button(S.admin.users.rename, () => renameUser(u)),
+      button(S.admin.users.resetPassword, async () => {
+        if (!(await confirmSheet(S.admin.users.confirmReset, { confirmLabel: S.admin.users.resetPassword }))) return;
+        try {
+          const res = await post(`/api/admin/users/${u.id}/password`, {});
+          await reveal(u.displayName, res.generatedPassword);
+        } catch (err) {
+          toast(errorText(/** @type {Error} */ (err)), true);
+        }
       }),
     ]),
   ]);
 
   return h('div', {}, [secret, createForm, table(S.admin.tabs.users, [S.admin.users.name, S.admin.users.username, S.admin.users.role, S.admin.users.status, ''], rows)]);
+}
+
+/**
+ * Rename a user: a field in a drawer (it used to be a browser prompt).
+ * @param {import('../api.js').User} u
+ */
+function renameUser(u) {
+  const input = h('input', { type: 'text', name: 'displayName', maxlength: '60', autocomplete: 'off', value: u.displayName });
+  const f = field(S.admin.users.renamePrompt, input);
+  const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  /** @type {ReturnType<typeof sheet> | null} */
+  let drawer = null;
+  const form = h(
+    'form',
+    {
+      class: 'editor',
+      novalidate: true,
+      onsubmit: async (/** @type {Event} */ e) => {
+        e.preventDefault();
+        f.setError(null);
+        formError.hidden = true;
+        const name = input.value.trim();
+        if (name === '') {
+          f.setError('required');
+          input.focus();
+          return;
+        }
+        try {
+          await patch(`/api/admin/users/${u.id}`, { displayName: name });
+          drawer?.close();
+          toast(S.admin.users.updated);
+          await showTab('users');
+        } catch (err) {
+          const apiErr = /** @type {ApiError} */ (err);
+          showFieldErrors({ displayName: f }, apiErr);
+          formError.textContent = errorText(apiErr);
+          formError.hidden = false;
+        }
+      },
+    },
+    [f.row, formError, h('div', { class: 'actions' }, [uiButton({ label: S.admin.reservations.save, variant: 'primary', type: 'submit' }), uiButton({ label: S.cancel, onclick: () => drawer?.close() })])],
+  );
+  drawer = openDrawer(S.admin.users.rename, form);
 }
 
 /**
@@ -221,8 +254,6 @@ async function reveal(who, password) {
 
 // ------------------------------------------------------------ reservations
 
-/** @type {import('../api.js').Reservation | null} */
-let editingReservation = null;
 const resFilter = { status: '', userId: '', from: '', to: '' };
 
 async function renderReservations() {
@@ -267,20 +298,14 @@ async function renderReservations() {
     r.userName,
     r.suggestion ? r.createdByName : '–',
     h('span', { class: `badge-status ${r.status}`, text: S.status[r.status] }),
-    fmtRange(r.start, r.end, tz),
+    withSort(fmtRange(r.start, r.end, tz), r.start),
     r.status === 'confirmed' ? kmCell(r) : '–',
     text(r.note),
     h('div', { class: 'actions' }, [
-      r.can.edit
-        ? button(S.edit, () => {
-            editingReservation = r;
-            focusSelector = EDITOR_FIRST_CONTROL;
-            void showTab('reservations');
-          })
-        : null,
+      r.can.edit ? button(S.edit, () => openReservationEditor(r)) : null,
       r.can.cancel
-        ? button(S.admin.reservations.cancelReservation, () => {
-            if (!confirm(S.admin.reservations.confirmCancel)) return;
+        ? button(S.admin.reservations.cancelReservation, async () => {
+            if (!(await confirmSheet(S.admin.reservations.confirmCancel, { confirmLabel: S.admin.reservations.cancelReservation }))) return;
             void perform(() => del(`/api/reservations/${r.id}`), S.admin.reservations.cancelled);
           }, 'danger')
         : null,
@@ -289,9 +314,8 @@ async function renderReservations() {
 
   return h('div', {}, [
     filters,
-    editingReservation ? reservationEditor(editingReservation) : null,
     items.length === 0
-      ? h('p', { class: 'empty', text: S.admin.reservations.none })
+      ? emptyState({ text: S.admin.reservations.none })
       : table(S.admin.tabs.reservations, ['#', S.admin.reservations.driver, S.admin.reservations.createdBy, S.admin.reservations.status, S.admin.reservations.when, S.admin.usage.kmColumn, S.admin.reservations.note, ''], rows),
   ]);
 }
@@ -308,17 +332,22 @@ function kmCell(r) {
   return h('span', { class: `chip ${chip}`, text: `${label}${detail}` });
 }
 
-/** @param {import('../api.js').Reservation} r */
-function reservationEditor(r) {
+/**
+ * Change a reservation in a drawer.
+ * @param {import('../api.js').Reservation} r
+ */
+function openReservationEditor(r) {
   const start = dateTimeField(S.reserve.start, r.start, tz);
   const end = dateTimeField(S.reserve.end, r.end, tz);
   const note = h('input', { type: 'text', maxlength: '500', value: r.note, autocomplete: 'off' });
   const fNote = field(S.reserve.note, note);
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  return h(
+  /** @type {ReturnType<typeof sheet> | null} */
+  let drawer = null;
+  const form = h(
     'form',
     {
-      class: 'card editor',
+      class: 'editor',
       novalidate: true,
       onsubmit: async (/** @type {Event} */ e) => {
         e.preventDefault();
@@ -328,7 +357,7 @@ function reservationEditor(r) {
         if (!range) return;
         try {
           await patch(`/api/reservations/${r.id}`, { ...range, note: note.value });
-          editingReservation = null;
+          drawer?.close();
           toast(S.admin.reservations.saved);
           await showTab('reservations');
         } catch (err) {
@@ -340,48 +369,47 @@ function reservationEditor(r) {
       },
     },
     [
-      h('h2', { text: `${S.admin.reservations.editTitle} #${r.id} (${r.userName})` }),
       h('div', { class: 'inline-form' }, [start.row, end.row, fNote.row]),
       formError,
-      h('div', { class: 'actions' }, [
-        h('button', { class: 'btn primary', type: 'submit' }, S.admin.reservations.save),
-        button(S.cancel, () => { editingReservation = null; void showTab('reservations'); }),
-      ]),
+      h('div', { class: 'actions' }, [uiButton({ label: S.admin.reservations.save, variant: 'primary', type: 'submit' }), uiButton({ label: S.cancel, onclick: () => drawer?.close() })]),
     ],
   );
+  drawer = openDrawer(`${S.admin.reservations.editTitle} #${r.id} (${r.userName})`, form);
 }
 
 // ------------------------------------------------------------------- usage
 
-/** @type {import('../api.js').Usage | 'new' | null} */
-let editingUsage = null;
 /** @typedef {{ userId: number, reservationId: number, start: string, end: string }} UsagePreset */
-/**
- * What a new drive starts with when it is added from the "kilometres to register" list.
- * @type {UsagePreset | null}
- */
-let usagePreset = null;
 /** Look back 30 days by default; the toggle shows the whole 6 month window. */
 let pendingFull = false;
 
 /**
- * Open the drive editor (an existing drive, or a new one with an optional preset) and move focus into it.
+ * Open the drive editor (an existing drive, or a new one with an optional preset) in a drawer.
  * @param {import('../api.js').Usage | 'new'} record
+ * @param {import('../api.js').User[]} users
  * @param {UsagePreset | null} [preset]
  */
-function openUsageEditor(record, preset = null) {
-  editingUsage = record;
-  usagePreset = preset;
-  focusSelector = EDITOR_FIRST_CONTROL;
-  void showTab('usage');
+function openUsageEditor(record, users, preset = null) {
+  /** @type {ReturnType<typeof sheet> | null} */
+  let drawer = null;
+  const form = usageEditor(record, users, preset, {
+    saved: async () => {
+      drawer?.close();
+      toast(S.admin.usage.saved);
+      await showTab('usage');
+    },
+    cancel: () => drawer?.close(),
+  });
+  drawer = openDrawer(record === 'new' ? S.admin.usage.newRecord : `${S.admin.usage.editTitle} #${record.id}`, form);
 }
 
 /**
  * Kilometres still to register, per person: unfinished drives and ended reservations with no completed drive.
  * @param {import('../api.js').Pending} pending
  * @param {number} days
+ * @param {import('../api.js').User[]} users
  */
-function pendingSection(pending, days) {
+function pendingSection(pending, days, users) {
   const P = S.admin.usage;
   /** @type {Array<Array<unknown>>} */
   const rows = [];
@@ -390,24 +418,22 @@ function pendingSection(pending, days) {
       rows.push([
         entry.userName,
         P.pendingDraft,
-        `${fmtWhen(d.start, tz)}${d.odometerStart === null ? '' : `, ${S.usage.km(d.odometerStart)}`}`,
+        withSort(`${fmtWhen(d.start, tz)}${d.odometerStart === null ? '' : `, ${S.usage.km(d.odometerStart)}`}`, d.start),
         text(d.note),
-        h('div', { class: 'actions' }, [
-          button(S.edit, () => openUsageEditor(d)),
-        ]),
+        h('div', { class: 'actions' }, [button(S.edit, () => openUsageEditor(d, users))]),
       ]);
     }
     for (const r of entry.reservations.filter((x) => x.kmState !== 'draft')) {
       rows.push([
         entry.userName,
         `${P.pendingReservation} #${r.id}`,
-        fmtRange(r.start, r.end, tz),
+        withSort(fmtRange(r.start, r.end, tz), r.start),
         text(r.note),
         h('div', { class: 'actions' }, [
-          button(P.newRecord, () => openUsageEditor('new', { userId: r.userId, reservationId: r.id, start: r.start, end: r.end })),
+          button(P.newRecord, () => openUsageEditor('new', users, { userId: r.userId, reservationId: r.id, start: r.start, end: r.end })),
           r.can.cancel
-            ? button(S.admin.reservations.cancelReservation, () => {
-                if (!confirm(S.admin.reservations.confirmCancel)) return;
+            ? button(S.admin.reservations.cancelReservation, async () => {
+                if (!(await confirmSheet(S.admin.reservations.confirmCancel, { confirmLabel: S.admin.reservations.cancelReservation }))) return;
                 void perform(() => del(`/api/reservations/${r.id}`), S.admin.reservations.cancelled);
               }, 'danger')
             : null,
@@ -419,7 +445,7 @@ function pendingSection(pending, days) {
     h('h2', { text: `${P.pendingTitle} (${pending.count})` }),
     h('p', { class: 'hint', text: P.pendingScope(days) }),
     rows.length === 0
-      ? h('p', { class: 'empty', text: P.pendingNone })
+      ? emptyState({ text: P.pendingNone })
       : table(P.pendingTitle, [P.pendingUser, P.pendingItem, S.admin.reservations.when, S.admin.reservations.note, ''], rows),
     h('div', { class: 'actions' }, [
       button(pendingFull ? P.pendingShort : P.pendingFull, () => {
@@ -443,42 +469,42 @@ async function renderUsage() {
     u.id,
     u.userName,
     h('span', { class: `badge-status ${u.status === 'draft' ? 'expired' : 'confirmed'}`, text: S.admin.usage.statusLabel[u.status] }),
-    fmtDriveRange(u.start, u.end, tz),
+    withSort(fmtDriveRange(u.start, u.end, tz), u.start),
     u.odometerStart !== null || u.odometerEnd !== null ? `${text(u.odometerStart)} → ${text(u.odometerEnd)}` : '–',
     // Whose kilometres they are, when not the driver's own: another person's or the shared pool.
     [u.distanceKm === null ? '–' : S.usage.km(u.distanceKm), kmOwnerLabel(u, session.user.id)].filter(Boolean).join(' · '),
     text(u.reservationId),
     text(u.note),
     h('div', { class: 'actions' }, [
-      button(S.edit, () => openUsageEditor(u)),
-      button(S.delete, () => {
-        if (!confirm(S.admin.usage.confirmDelete)) return;
+      button(S.edit, () => openUsageEditor(u, users)),
+      button(S.delete, async () => {
+        if (!(await confirmSheet(S.admin.usage.confirmDelete, { confirmLabel: S.delete }))) return;
         void perform(() => del(`/api/usage/${u.id}`), S.admin.usage.deleted);
       }, 'danger'),
     ]),
   ]);
   return h('div', {}, [
-    pendingSection(pending, days),
+    pendingSection(pending, days, users),
     odometer
       ? kmCheckSection(odometer, { meId: session.user.id, isAdmin: true, tz, hrefBase: '/', heading: 'h2', toast, onChange: () => showTab('usage') })
       : null,
-    h('div', { class: 'actions' }, [
-      button(S.admin.usage.newRecord, () => openUsageEditor('new'), 'primary'),
-    ]),
-    editingUsage ? usageEditor(editingUsage, users) : null,
+    h('div', { class: 'actions' }, [button(S.admin.usage.newRecord, () => openUsageEditor('new', users), 'primary')]),
     items.length === 0
-      ? h('p', { class: 'empty', text: S.admin.usage.none })
+      ? emptyState({ text: S.admin.usage.none })
       : table(S.admin.tabs.usage, ['#', S.admin.reservations.driver, S.admin.usage.status, S.admin.reservations.when, S.admin.usage.odometer, S.admin.usage.km, S.admin.usage.reservation, S.admin.reservations.note, ''], rows),
   ]);
 }
 
 /**
+ * The form of the drive drawer.
  * @param {import('../api.js').Usage | 'new'} record
  * @param {import('../api.js').User[]} users
+ * @param {UsagePreset | null} presetOf what a new drive starts with (from the list of kilometres to register)
+ * @param {{ saved: () => Promise<void>, cancel: () => void }} done
  */
-function usageEditor(record, users) {
+function usageEditor(record, users, presetOf, done) {
   const existing = record === 'new' ? null : record;
-  const preset = existing ? null : usagePreset;
+  const preset = existing ? null : presetOf;
   const now = new Date();
   // A finished drive needs both readings; one that is still open (a draft) may leave the end empty.
   const mode = /** @type {'new' | 'draft' | 'completed'} */ (existing ? existing.status : 'new');
@@ -508,7 +534,7 @@ function usageEditor(record, users) {
   return h(
     'form',
     {
-      class: 'card editor',
+      class: 'editor',
       novalidate: true,
       onsubmit: async (/** @type {Event} */ e) => {
         e.preventDefault();
@@ -536,10 +562,7 @@ function usageEditor(record, users) {
         try {
           if (existing) await patch(`/api/usage/${existing.id}`, body);
           else await post('/api/usage', body);
-          editingUsage = null;
-          usagePreset = null;
-          toast(S.admin.usage.saved);
-          await showTab('usage');
+          await done.saved();
         } catch (err) {
           const apiErr = /** @type {ApiError} */ (err);
           showFieldErrors(
@@ -552,14 +575,10 @@ function usageEditor(record, users) {
       },
     },
     [
-      h('h2', { text: existing ? `${S.admin.usage.editTitle} #${existing.id}` : S.admin.usage.newRecord }),
       mode === 'completed' ? null : h('p', { class: 'hint', text: S.admin.usage.editHint }),
       h('div', { class: 'inline-form' }, [fDriver.row, start.row, end.row, fOdoStart.row, fOdoEnd.row, fRes.row, kmOwner.row, fNote.row]),
       formError,
-      h('div', { class: 'actions' }, [
-        h('button', { class: 'btn primary', type: 'submit' }, S.admin.usage.save),
-        button(S.cancel, () => { editingUsage = null; usagePreset = null; void showTab('usage'); }),
-      ]),
+      h('div', { class: 'actions' }, [uiButton({ label: S.admin.usage.save, variant: 'primary', type: 'submit' }), uiButton({ label: S.cancel, onclick: () => done.cancel() })]),
     ],
   );
 }
@@ -596,8 +615,8 @@ async function renderRetention() {
       ]),
       h('p', { class: 'hint', text: r.damageNote }),
       h('div', { class: 'actions' }, [
-        button(r.runNow, () => {
-          if (!confirm(r.confirmRun)) return;
+        button(r.runNow, async () => {
+          if (!(await confirmSheet(r.confirmRun, { confirmLabel: r.runNow }))) return;
           void perform(async () => {
             const res = await post('/api/admin/retention/run', {});
             toast(r.done(res.result.reservations, res.result.usage, res.result.fuel ?? 0, res.result.tickets ?? 0, res.result.odometerExplained ?? 0, res.result.damageReports ?? 0));
@@ -608,7 +627,7 @@ async function renderRetention() {
     h('section', { class: 'card' }, [
       h('h2', { text: r.backups }),
       s.backups.length === 0
-        ? h('p', { class: 'empty', text: r.noBackups })
+        ? emptyState({ text: r.noBackups })
         : table(r.backups, [r.file, r.size], s.backups.map((/** @type {{file: string, size: number}} */ b) => [b.file, Math.max(1, Math.round(b.size / 1024))])),
       h('p', { class: 'hint', text: `${r.keep(s.backupKeep)} ${r.backupNote}` }),
     ]),
@@ -628,13 +647,7 @@ async function showTab(tab) {
   try {
     setContent(panel, await TAB_RENDERERS[tab]());
   } catch (err) {
-    setContent(
-      panel,
-      h('div', { class: 'card error-card' }, [
-        h('p', { text: errorText(/** @type {Error} */ (err)) }),
-        h('button', { class: 'btn', type: 'button', onclick: () => void showTab(tab) }, S.retry),
-      ]),
-    );
+    setContent(panel, errorState(errorText(/** @type {Error} */ (err)), () => void showTab(tab)));
   }
   // The panel was rebuilt, so whatever had focus is gone: put it back where the person was working.
   if (focusSelector) {
@@ -655,16 +668,21 @@ function build() {
     h('header', { class: 'admin-head' }, [
       h('h1', { text: S.admin.title }),
       h('div', { class: 'actions' }, [
-        h('a', { class: 'btn small', href: '/' }, S.admin.backToApp),
+        linkButton({ label: S.admin.backToApp, href: '/', small: true }),
         button(S.admin.refresh, () => void showTab(activeTab)),
       ]),
     ]),
-    h('div', { class: 'admin-tabs' }, tabs),
-    panel,
+    // A sidebar of the four sections on a desktop, a 2 by 2 grid on a phone.
+    h('div', { class: 'admin-layout' }, [h('div', { class: 'admin-tabs' }, tabs), h('main', { class: 'admin-main' }, [panel])]),
+    h('div', { class: 'admin-foot' }, [themeControl(toast)]),
   );
 }
 
 async function start() {
+  initTheme();
+  // The kilometre check on the Drives tab lets an admin take back an explanation with "Ongedaan maken" (a deferred delete,
+  // see public/undo.js). Its links open the member app, a full page load: the delete has to be sent when this page goes away.
+  installUndoFlush();
   setUnauthorizedHandler(() => location.replace('/'));
   try {
     session = await get('/api/auth/me');

@@ -1,4 +1,4 @@
-// Generates the PWA icons (PNG) without any dependency: a white car on blue.
+// Generates the PWA icons (PNG) without any dependency: a yellow car on ink (the colours of the app, docs/DESIGN.md).
 // Run `npm run icons` and commit the result; the output is deterministic.
 //   icon-192.png / icon-512.png   rounded square, transparent corners ("any")
 //   icon-maskable-512.png         full bleed, glyph inside the safe zone ("maskable")
@@ -8,8 +8,8 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
-const BG = [11, 92, 171];
-const FG = [255, 255, 255];
+const BG = [29, 27, 23];
+const FG = [242, 194, 48];
 const SAMPLES = 3; // 3x3 supersampling for smooth edges
 
 const circle = (x, y, cx, cy, r) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r;

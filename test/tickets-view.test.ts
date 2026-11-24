@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fmtWhen } from '../public/dom.js';
+import { PRIMARY, SECONDARY, placeOf, titleOf } from '../public/nav.js';
 import { S } from '../public/strings.js';
 import { MAX_AMOUNT_CENTS, REASON_MAX, readAmount, render as renderTickets } from '../public/views/tickets.js';
 import { render as renderUsage } from '../public/views/usage.js';
@@ -342,7 +343,7 @@ test('ticket list: with no tickets it says so', async () => {
   await withClient({ now: NOW, routes: ticketRoutes([]) }, async ({ dom }) => {
     const page = view(dom, await ticketsPage(me));
     assert.equal(all(page, 'article.ticket').length, 0);
-    assert.equal(one(page, 'p.empty').textContent, S.tickets.none);
+    assert.equal(one(page, '.empty p').textContent, S.tickets.none);
   });
 });
 
@@ -468,16 +469,15 @@ test('the Drives view has links to both Fuel and costs and Traffic tickets besid
   });
 });
 
-test('the app shell: tickets is a view, sits under the Drives tab, has its own page title, and the fuel-only title branch is gone', () => {
+test('the app shell: tickets is a view, sits under the Drives place, has its own page title, and is not a place of the bar', () => {
   const app = readSource('public/app.js');
   assert.match(app, /import \* as tickets from '\.\/views\/tickets\.js';/);
   assert.match(app, /const VIEWS = \{[^}]*\btickets\b[^}]*\};/);
-  assert.match(app, /const TAB_OF_ROUTE = \{[^}]*\bfuel: 'usage'[^}]*\btickets: 'usage'[^}]*\};/, 'the Drives tab stays highlighted on both sub-views');
-  assert.match(app, /const SUBVIEW_TITLE = \{[^}]*\bfuel: S\.fuel\.title[^}]*\btickets: S\.tickets\.title[^}]*\};/);
-  assert.doesNotMatch(app, /route\.name === 'fuel'/, 'the title no longer special-cases fuel');
-  assert.match(app, /SUBVIEW_TITLE\)\[route\.name\]/);
-  // The tab bar has seven tabs since the Car tab (tickets is still not one of them).
-  assert.equal([...app.matchAll(/^\s+\['\w+', S\.nav\.\w+\],$/gm)].length, 7);
+  assert.equal(placeOf('tickets'), 'usage', 'the Drives place stays lit on both sub-views');
+  assert.equal(placeOf('fuel'), 'usage');
+  assert.equal(titleOf('tickets'), S.tickets.title);
+  assert.equal(titleOf('fuel'), S.fuel.title);
+  assert.ok(![...PRIMARY, ...SECONDARY].some((item) => item.name === 'tickets'), 'tickets is reached from Drives, not from the bar');
   assert.equal(S.tickets.title, S.usage.ticketsLink, 'the link and the page carry the same name');
 });
 

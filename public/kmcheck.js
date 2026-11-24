@@ -9,6 +9,8 @@
 import { del, post } from './api.js';
 import { field, fmtWhen, h, showFieldErrors } from './dom.js';
 import { S, errorText } from './strings.js';
+import { button, linkButton } from './ui.js';
+import { deferDelete, isPending } from './undo.js';
 
 /** The same zero tolerance as the server (GAP_TOLERANCE_KM in src/odometer.ts): any difference is a finding. */
 export const GAP_TOLERANCE_KM = 0;
@@ -198,19 +200,21 @@ const OPEN_SHOWN = 3;
  * The "Kilometre check" section: findings in the odometer chain, for everybody. Null when there is no
  * reading at all yet (nothing to check). Open findings show newest first, the newest few in full and the
  * rest folded; explained ones fold away under their own heading with the note and who wrote it.
- * @param {Chain} chain
+ * @param {Chain} rawChain
  * @param {object} o
  * @param {number} o.meId
  * @param {boolean} o.isAdmin
  * @param {string} o.tz
  * @param {string} o.hrefBase '' in the member app, '/' on the admin page (links go to the member app)
  * @param {'h2' | 'h3'} [o.heading]
- * @param {(message: string, isError?: boolean) => void} o.toast
+ * @param {import('./api.js').Toast} o.toast
  * @param {() => Promise<unknown>} o.onChange reload the view after an explanation was saved or removed
  * @returns {HTMLElement | null}
  */
-export function kmCheckSection(chain, o) {
-  if (chain.readings.length === 0) return null;
+export function kmCheckSection(rawChain, o) {
+  if (rawChain.readings.length === 0) return null;
+  // An explanation that was taken back a moment ago (and can still be restored) is not shown: its finding is open again.
+  const chain = { ...rawChain, items: rawChain.items.map((i) => (i.explained && isPending(`explanation:${i.explained.id}`) ? { ...i, explained: null } : i)) };
   const K = S.kmcheck;
   const open = chain.items.filter((i) => !i.explained);
   const explainedItems = chain.items.filter((i) => i.explained);
@@ -237,14 +241,14 @@ export function kmCheckSection(chain, o) {
    * @param {string} text
    */
   const editLink = (r, text) =>
-    o.isAdmin || r.userId === o.meId ? h('a', { class: 'btn small', href: `${o.hrefBase}#/${r.source === 'fuel' ? 'fuel' : 'usage'}?edit=${r.id}` }, text) : null;
+    o.isAdmin || r.userId === o.meId ? linkButton({ label: text, href: `${o.hrefBase}#/${r.source === 'fuel' ? 'fuel' : 'usage'}?edit=${r.id}`, small: true }) : null;
 
   /** @param {Item} item */
   const explainForm = (item) => {
     const note = h('input', { type: 'text', maxlength: '500', autocomplete: 'off' });
     const f = field(K.explainLabel, note, K.explainHint);
     const error = h('p', { class: 'form-error', role: 'alert', hidden: true });
-    const save = h('button', { class: 'btn small primary', type: 'submit' }, K.explainSave);
+    const save = button({ label: K.explainSave, small: true, variant: 'primary', type: 'submit' });
     return h(
       'form',
       {
@@ -276,25 +280,30 @@ export function kmCheckSection(chain, o) {
     );
   };
 
-  /** @param {number} id the explanation to remove */
+  /**
+   * Taking an explanation back tells nobody anything, so it needs no question: the finding is open again at once and the
+   * toast offers "Ongedaan maken" for a few seconds (public/undo.js); the DELETE goes out after that.
+   * @param {number} id the explanation to remove
+   */
   const removeButton = (id) =>
-    h(
-      'button',
-      {
-        class: 'btn small',
-        type: 'button',
-        onclick: async () => {
-          if (!confirm(K.confirmRemove)) return;
-          try {
-            await del(`/api/odometer/explained/${id}`);
-            await changed(K.removed);
-          } catch (err) {
+    button({
+      label: K.removeExplanation,
+      small: true,
+      onclick: () => {
+        deferDelete({
+          key: `explanation:${id}`,
+          message: S.undo.explanation,
+          commit: (opts) => del(`/api/odometer/explained/${id}`, opts),
+          onUndo: () => void o.onChange(),
+          onError: (err) => {
             o.toast(errorText(/** @type {Error} */ (err)), true);
-          }
-        },
+            void o.onChange();
+          },
+          toast: o.toast,
+        });
+        return o.onChange();
       },
-      K.removeExplanation,
-    );
+    });
 
   /** @param {Item} item */
   const itemRow = (item) => {
@@ -307,7 +316,7 @@ export function kmCheckSection(chain, o) {
         ? null
         : prevIsDraft
           ? editLink(prev, K.finishDrive)
-          : h('a', { class: 'btn small primary', href: `${o.hrefBase}#/usage?gap=${encodeURIComponent(item.key)}` }, K.addMissing);
+          : linkButton({ label: K.addMissing, href: `${o.hrefBase}#/usage?gap=${encodeURIComponent(item.key)}`, small: true, variant: 'primary' });
     // An open finding is resolved by adding the drive or correcting a reading; an explained one only offers to take the note back.
     const actions = explained ? [item.can.unexplain ? removeButton(explained.id) : null] : [fix, editLink(prev, K.editEarlier), editLink(next, K.editLater)];
     return h('li', { class: `km-item ${item.kind}` }, [

@@ -1,6 +1,7 @@
 import { get } from '../api.js';
 import { h } from '../dom.js';
 import { S } from '../strings.js';
+import { emptyState } from '../ui.js';
 import { reservationCard } from './agenda.js';
 
 export const live = true;
@@ -15,8 +16,8 @@ export async function render(app) {
   const { incoming, outgoing } = await get('/api/inbox');
   return h('div', { class: 'inbox' }, [
     h('h2', { text: S.inbox.incoming }),
-    incoming.length === 0 ? h('p', { class: 'empty', text: S.inbox.nothingIncoming }) : incoming.map((r) => reservationCard(app, r, false)),
+    incoming.length === 0 ? emptyState({ text: S.inbox.nothingIncoming }) : h('div', { class: 'cols' }, incoming.map((r) => reservationCard(app, r, false))),
     h('h2', { text: S.inbox.outgoing }),
-    outgoing.length === 0 ? h('p', { class: 'empty', text: S.inbox.nothingOutgoing }) : outgoing.map((r) => reservationCard(app, r, r.status === 'expired' || r.status === 'declined')),
+    outgoing.length === 0 ? emptyState({ text: S.inbox.nothingOutgoing }) : h('div', { class: 'cols' }, outgoing.map((r) => reservationCard(app, r, r.status === 'expired' || r.status === 'declined'))),
   ]);
 }

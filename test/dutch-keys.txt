@@ -267,8 +267,6 @@ kmcheck.explainSaved
 kmcheck.explainedHeading (function 1)
 kmcheck.explainedBy (function 1)
 kmcheck.removeExplanation
-kmcheck.confirmRemove
-kmcheck.removed
 kmcheck.showMore (function 1)
 kmcheck.stale
 kmcheck.gapForm
@@ -577,3 +575,76 @@ fieldErrors.invalid_date
 fieldErrors.before_noticed
 fieldErrors.too_far_ahead
 fieldErrors.only_when_repaired
+meLabel
+meHead
+nav.home
+nav.more
+nav.label
+ui.close
+ui.confirmTitle
+ui.confirm
+ui.skipToContent
+ui.sortBy (function 1)
+ui.filter
+ui.filterPlaceholder
+ui.noMatches
+ui.rowCount (function 2)
+ui.unsaved
+ui.unsavedClear
+theme.label
+theme.system
+theme.light
+theme.dark
+theme.hint
+theme.notSaved
+undo.action
+undo.restored
+undo.damage
+undo.explanation
+undo.draft
+usage.odometerRange (function 2)
+admin.retention.windowValue (function 2)
+more.title
+more.tabLabel (function 1)
+more.sub.inbox
+more.sub.history
+more.sub.car
+more.sub.account
+more.sub.admin
+home.carNow
+home.driving (function 1)
+home.drivingMe
+home.since (function 1)
+home.hasIt (function 1)
+home.hasItMe
+home.reservedUntil (function 1)
+home.free
+home.nextIs (function 2)
+home.nothingPlanned
+home.finishDrive
+home.kmTitle
+home.answers
+home.answersWaiting (function 1)
+home.answersOpen
+home.mine
+home.mineNone
+home.mineCta
+home.money
+home.youPay
+home.youGet
+home.to (function 1)
+home.from (function 1)
+home.moneyNone
+home.openRequests (function 1)
+home.moneyOpen
+home.damage
+home.damageOpen (function 1)
+home.damageNewest (function 2)
+home.damageNew
+home.toCar
+home.quick
+home.quickFuel
+home.quickFuelSub
+home.quickDamage
+home.quickDamageSub
+home.failed (function 1)

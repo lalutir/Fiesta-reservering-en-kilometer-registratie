@@ -376,22 +376,57 @@ test('a second open drive is refused with a link to the first, and server field 
   });
 });
 
-test('an open draft can be deleted after a question, and not when the person says no', async () => {
+test('my own open draft is deleted at once with "Ongedaan maken": no question, the DELETE goes out after six seconds, and taking it back sends nothing', async () => {
   const me = makeApp(ANNA);
   const running = reservation({ start: at(-90), end: at(60), kmState: 'draft' });
   const routes = driveRoutes({ usage: [draft()], reservations: [running], extra: { 'DELETE /api/usage/9': () => new Reply(null, 204) } });
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
+    const form = view(dom, await driveForm(me));
+    await byText(form, 'button', S.usage.deleteDraft).fire('click');
+    assert.deepEqual(dom.confirms, [], 'nothing is asked: it can be taken back');
+    assert.deepEqual(api.writes(), [], 'nothing is sent yet');
+    assert.deepEqual(me.navigated, ['#/usage'], 'the person is back on the list at once');
+    assert.equal(me.toasts[0]?.message, S.undo.draft);
+    assert.equal(me.toasts[0]?.action?.label, S.undo.action);
+    tick(6000);
+    await until(() => api.writes().length === 1, 'the delete after the window');
+    assert.equal(onlyWrite(api).path, '/api/usage/9');
+  });
+  const again = makeApp(ANNA);
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
+    const form = view(dom, await driveForm(again));
+    await byText(form, 'button', S.usage.deleteDraft).fire('click');
+    again.toasts[0]?.action?.run();
+    assert.equal(again.refreshes(), 1, 'taken back: the list is rebuilt with the draft in it');
+    tick(20_000);
+    assert.deepEqual(api.writes(), [], 'and it was never sent');
+  });
+});
+
+test('a draft that is linked to somebody else\'s reservation, or whose kilometres are not mine, asks first: the other person is told', async () => {
+  const me = makeApp(ANNA);
+  const theirs = reservation({ id: 7, userId: BEN.id, userName: 'Ben', start: at(-90), end: at(60), kmState: 'draft' });
+  const routes = driveRoutes({ usage: [draft()], reservations: [theirs], extra: { 'DELETE /api/usage/9': () => new Reply(null, 204) } });
   await withClient({ now: NOW, routes }, async ({ dom, api }) => {
     const form = view(dom, await driveForm(me));
     const remove = byText(form, 'button', S.usage.deleteDraft);
     dom.answer = false;
     await remove.fire('click');
-    assert.deepEqual(api.writes(), []);
+    assert.deepEqual(api.writes(), [], 'no was no');
     dom.answer = true;
     await remove.fire('click');
     assert.deepEqual(dom.confirms, [S.usage.confirmDeleteDraft, S.usage.confirmDeleteDraft]);
     assert.equal(onlyWrite(api).path, '/api/usage/9');
     assert.deepEqual(me.toasts, [{ message: S.usage.deleted, isError: false }]);
     assert.deepEqual(me.navigated, ['#/usage']);
+  });
+  const notMine = makeApp(ANNA);
+  const forBen = draft({ kmFor: 'person', kmUserId: BEN.id, kmUserName: 'Ben', reservationId: null });
+  await withClient({ now: NOW, routes: driveRoutes({ usage: [forBen], extra: { 'DELETE /api/usage/9': () => new Reply(null, 204) } }) }, async ({ dom, api }) => {
+    const form = view(dom, await driveForm(notMine));
+    await byText(form, 'button', S.usage.deleteDraft).fire('click');
+    assert.deepEqual(dom.confirms, [S.usage.confirmDeleteDraft], 'kilometres for somebody else: the question comes first');
+    await until(() => api.writes().length === 1, 'the delete');
   });
 });
 

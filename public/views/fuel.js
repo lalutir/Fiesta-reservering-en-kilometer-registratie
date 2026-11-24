@@ -4,6 +4,7 @@
 // uses floating point to decide an amount.
 import { del, get, patch, post } from '../api.js';
 import {
+  actionBar,
   dateTimeField,
   driverSelect,
   field,
@@ -19,8 +20,10 @@ import {
   setBusy,
   showFieldErrors,
 } from '../dom.js';
+import { persistForm, restoredLine } from '../drafts.js';
 import { odometerContext, odometerNote } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
+import { button, confirmSheet, emptyState, linkButton } from '../ui.js';
 
 // Contains forms, so it is not re-rendered in the background.
 export const live = false;
@@ -152,19 +155,16 @@ export function carriedRows(fuel, share, nameOf) {
  * "I have paid this request": the debtor's own button, the same on the History screen and on the Fuel card.
  * @param {import('../api.js').Fuel} fuel
  * @param {import('../api.js').FuelShare} share
- * @param {(event: Event, fuelId: number, action: () => Promise<unknown>, done: string) => unknown} run how the caller runs an action (busy buttons, toast, reload)
+ * @param {(bar: Element | null, fuelId: number, action: () => Promise<unknown>, done: string) => unknown} run how the caller runs an action (busy buttons, toast, reload); bar = the row of buttons that was pressed
  * @returns {HTMLElement}
  */
 export function selfPaidButton(fuel, share, run) {
-  return h(
-    'button',
-    {
-      class: 'btn small primary',
-      type: 'button',
-      onclick: (/** @type {Event} */ e) => void run(e, fuel.id, () => post(`/api/fuel/${fuel.id}/requests/${share.userId}/paid`, { paid: true }), S.fuel.iPaidSaved),
-    },
-    S.fuel.iPaid,
-  );
+  return button({
+    label: S.fuel.iPaid,
+    small: true,
+    variant: 'primary',
+    onclick: (/** @type {Event} */ e) => void run(actionBar(e), fuel.id, () => post(`/api/fuel/${fuel.id}/requests/${share.userId}/paid`, { paid: true }), S.fuel.iPaidSaved),
+  });
 }
 
 /**
@@ -227,9 +227,22 @@ export async function render(app, route) {
     kmNote.show(odometerContext(chain?.readings ?? [], when.getIso() ?? existing?.at ?? nowMinute, { fuel: existing?.id ?? null }, true), readNumber(odometer.value));
   when.onInput(showKmNote);
   odometer.addEventListener('input', showKmNote);
-  showKmNote();
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  const submit = h('button', { class: 'btn primary block', type: 'submit' }, S.fuel.save);
+  const submit = button({ label: S.fuel.save, variant: 'primary', block: true, type: 'submit' });
+  // A new fill-up keeps what was typed when the person leaves (to look something up) and comes back; a correction shows what the server has.
+  const unsent = existing
+    ? null
+    : persistForm({
+        userId: me.id,
+        name: 'fuel',
+        controls: { who, whenDate: when.controls.date, whenTime: when.controls.time, litres, total, price, odometer, note },
+        onReset: () => {
+          showWorked();
+          showKmNote();
+        },
+      });
+  // After the restore, so the note follows a restored reading and time too.
+  showKmNote();
 
   const showWorked = () => {
     const d = deriveFuel({ litres: litres.value, total: total.value, price: price.value });
@@ -280,6 +293,7 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/fuel/${existing.id}`, body);
           else await post('/api/fuel', body);
+          unsent?.clear();
           app.toast(note.value.trim() === '' ? `${S.fuel.saved} ${S.noteTip}` : S.fuel.saved);
           app.navigate('#/fuel');
         } catch (err) {
@@ -294,6 +308,7 @@ export async function render(app, route) {
     },
     [
       h('h3', { text: existing ? S.fuel.editTitle : S.fuel.addTitle }),
+      unsent ? restoredLine(unsent) : null,
       odometerOnly ? h('p', { class: 'hint', text: S.fuel.odometerOnlyHint }) : null,
       // The only control that can change in the odometer-only correction comes first, above the locked ones.
       odometerOnly ? fOdometer.row : null,
@@ -307,7 +322,7 @@ export async function render(app, route) {
       fNote.row,
       h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }),
       formError,
-      h('div', { class: 'actions' }, [submit, existing ? h('a', { class: 'btn', href: '#/fuel' }, S.cancel) : null]),
+      h('div', { class: 'actions' }, [submit, existing ? linkButton({ label: S.cancel, href: '#/fuel' }) : null]),
     ],
   );
 
@@ -350,14 +365,12 @@ export async function render(app, route) {
   /**
    * Run an action with its buttons disabled (a double tap cannot send it twice),
    * report the outcome, and reload the view.
-   * @param {Event} event the click that started it
+   * @param {Element | null} bar the row of buttons the click came from (actionBar(event), read before any await)
    * @param {number} fuelId the fill-up the action belongs to
    * @param {() => Promise<unknown>} action
    * @param {string} done
    */
-  const act = async (event, fuelId, action, done) => {
-    const target = event.currentTarget;
-    const bar = target instanceof Element ? target.closest('.actions') : null;
+  const act = async (bar, fuelId, action, done) => {
     if (bar) setBusy(bar, true);
     try {
       await action();
@@ -393,61 +406,53 @@ export async function render(app, route) {
         text,
         h('div', { class: 'actions' }, [
           typeof navigator.share === 'function'
-            ? h('button', { class: 'btn small primary', type: 'button', onclick: () => void navigator.share({ text: request.message }).catch(() => undefined) }, S.fuel.panelShare)
+            ? button({ label: S.fuel.panelShare, small: true, variant: 'primary', onclick: () => void navigator.share({ text: request.message }).catch(() => undefined) })
             : null,
-          h('a', { class: 'btn small', href: links.sms }, S.fuel.panelSms),
-          h('a', { class: 'btn small', href: links.whatsapp, target: '_blank', rel: 'noopener' }, S.fuel.panelWhatsapp),
-          h(
-            'button',
-            {
-              class: 'btn small',
-              type: 'button',
-              onclick: async () => {
-                try {
-                  await navigator.clipboard.writeText(request.message);
-                  copied.textContent = S.fuel.panelCopied;
-                } catch {
-                  text.select();
-                  copied.textContent = S.fuel.panelCopyFailed;
-                }
-              },
+          linkButton({ label: S.fuel.panelSms, href: links.sms, small: true }),
+          linkButton({ label: S.fuel.panelWhatsapp, href: links.whatsapp, small: true, attrs: { target: '_blank', rel: 'noopener' } }),
+          button({
+            label: S.fuel.panelCopy,
+            small: true,
+            onclick: async () => {
+              try {
+                await navigator.clipboard.writeText(request.message);
+                copied.textContent = S.fuel.panelCopied;
+              } catch {
+                text.select();
+                copied.textContent = S.fuel.panelCopyFailed;
+              }
             },
-            S.fuel.panelCopy,
-          ),
+          }),
         ]),
         copied,
       );
     };
     if (share.request) showMessage(share.request);
 
-    const create = h(
-      'button',
-      {
-        class: 'btn small',
-        type: 'button',
-        onclick: async () => {
-          fLink.setError(null);
-          error.hidden = true;
-          create.disabled = true;
-          try {
-            const body = /** @type {Record<string, unknown>} */ ({ debtorId: share.userId });
-            if (link.value.trim() !== '') body['link'] = link.value.trim();
-            /** @type {{ fuel: import('../api.js').Fuel }} */
-            const res = await post(`/api/fuel/${fuel.id}/requests`, body);
-            const request = res.fuel.shares.find((s) => s.userId === share.userId)?.request;
-            if (request) showMessage(request);
-            app.toast(S.fuel.requestSaved);
-          } catch (err) {
-            const apiErr = /** @type {import('../api.js').ApiError} */ (err);
-            showFieldErrors({ link: fLink }, apiErr);
-            error.textContent = errorText(apiErr);
-            error.hidden = false;
-          }
-          create.disabled = false;
-        },
+    const create = button({
+      label: share.request ? S.fuel.panelRedo : S.fuel.panelCreate,
+      small: true,
+      onclick: async () => {
+        fLink.setError(null);
+        error.hidden = true;
+        create.disabled = true;
+        try {
+          const body = /** @type {Record<string, unknown>} */ ({ debtorId: share.userId });
+          if (link.value.trim() !== '') body['link'] = link.value.trim();
+          /** @type {{ fuel: import('../api.js').Fuel }} */
+          const res = await post(`/api/fuel/${fuel.id}/requests`, body);
+          const request = res.fuel.shares.find((s) => s.userId === share.userId)?.request;
+          if (request) showMessage(request);
+          app.toast(S.fuel.requestSaved);
+        } catch (err) {
+          const apiErr = /** @type {import('../api.js').ApiError} */ (err);
+          showFieldErrors({ link: fLink }, apiErr);
+          error.textContent = errorText(apiErr);
+          error.hidden = false;
+        }
+        create.disabled = false;
       },
-      share.request ? S.fuel.panelRedo : S.fuel.panelCreate,
-    );
+    });
     // The panel opens below the whole list of shares, away from the button that was pressed:
     // focus goes to its title so a keyboard or screen reader user lands in it (and it scrolls into view).
     const titleId = `fuel-${fuel.id}-panel-${share.userId}`;
@@ -460,19 +465,15 @@ export async function render(app, route) {
         error,
         h('div', { class: 'actions' }, [
           create,
-          h(
-            'button',
-            {
-              class: 'btn small',
-              type: 'button',
-              // Reloading shows the request that was just made (status and button label) on the card.
-              onclick: async () => {
-                await app.refresh();
-                refocus(fuel.id);
-              },
+          button({
+            label: S.fuel.panelClose,
+            small: true,
+            // Reloading shows the request that was just made (status and button label) on the card.
+            onclick: async () => {
+              await app.refresh();
+              refocus(fuel.id);
             },
-            S.fuel.panelClose,
-          ),
+          }),
         ]),
       ]),
     );
@@ -530,26 +531,24 @@ export async function render(app, route) {
               ? h('div', { class: 'actions' }, [
                   s.can.request
                     ? // One primary action per share: when the person can also say "I have paid", that is the one.
-                      h('button', { class: selfPaid ? 'btn small' : 'btn small primary', type: 'button', onclick: () => openPanel(f, s, panelHost) }, s.request ? S.fuel.shareRequest : S.fuel.request)
+                      button({ label: s.request ? S.fuel.shareRequest : S.fuel.request, small: true, variant: selfPaid ? 'secondary' : 'primary', onclick: () => openPanel(f, s, panelHost) })
                     : null,
                   // Their own share: "I have paid" wins over the fueler's "Mark paid" (an admin who owes money sees only this one).
                   selfPaid
                     ? selfPaidButton(f, s, act)
                     : s.can.markPaid
-                    ? h(
-                        'button',
-                        {
-                          class: 'btn small',
-                          type: 'button',
-                          onclick: (/** @type {Event} */ e) => {
+                      ? button({
+                          label: isPaid ? S.fuel.markUnpaid : S.fuel.markPaid,
+                          small: true,
+                          onclick: async (/** @type {Event} */ e) => {
+                            const bar = actionBar(e);
                             const paid = !isPaid;
-                            if (!paid && !confirm(S.fuel.confirmUnpaid)) return;
-                            void act(e, f.id, () => post(`/api/fuel/${f.id}/requests/${s.userId}/paid`, { paid }), paid ? S.fuel.paidSaved : S.fuel.unpaidSaved);
+                            // Taking the paid mark off tells the other person, so it asks first.
+                            if (!paid && !(await confirmSheet(S.fuel.confirmUnpaid, { confirmLabel: S.fuel.markUnpaid }))) return;
+                            void act(bar, f.id, () => post(`/api/fuel/${f.id}/requests/${s.userId}/paid`, { paid }), paid ? S.fuel.paidSaved : S.fuel.unpaidSaved);
                           },
-                        },
-                        isPaid ? S.fuel.markUnpaid : S.fuel.markPaid,
-                      )
-                    : null,
+                        })
+                      : null,
                 ])
               : null,
           ]);
@@ -558,23 +557,21 @@ export async function render(app, route) {
       panelHost,
       lockedHint ? h('p', { class: 'hint', text: f.hasPaidRequests ? S.fuel.paidLocked : S.fuel.settledLocked }) : null,
       // A payment depends on this fill-up, so only the reading can be corrected (it moves no money).
-      !f.can.edit && f.canOdometer ? h('div', { class: 'actions' }, [h('a', { class: 'btn', href: `#/fuel?edit=${f.id}` }, S.fuel.correctOdometer)]) : null,
+      !f.can.edit && f.canOdometer ? h('div', { class: 'actions' }, [linkButton({ label: S.fuel.correctOdometer, href: `#/fuel?edit=${f.id}` })]) : null,
       f.can.edit || f.can.delete
         ? h('div', { class: 'actions' }, [
-            f.can.edit ? h('a', { class: 'btn', href: `#/fuel?edit=${f.id}` }, S.edit) : null,
+            f.can.edit ? linkButton({ label: S.edit, href: `#/fuel?edit=${f.id}` }) : null,
             f.can.delete
-              ? h(
-                  'button',
-                  {
-                    class: 'btn danger',
-                    type: 'button',
-                    onclick: (/** @type {Event} */ e) => {
-                      if (!confirm(S.fuel.confirmDelete)) return;
-                      void act(e, f.id, () => del(`/api/fuel/${f.id}`), S.fuel.deleted);
-                    },
+              ? button({
+                  label: S.delete,
+                  variant: 'danger',
+                  onclick: async (/** @type {Event} */ e) => {
+                    const bar = actionBar(e);
+                    // A deleted fill-up changes what people owe, and tells them: ask first.
+                    if (!(await confirmSheet(S.fuel.confirmDelete, { confirmLabel: S.delete }))) return;
+                    void act(bar, f.id, () => del(`/api/fuel/${f.id}`), S.fuel.deleted);
                   },
-                  S.delete,
-                )
+                })
               : null,
           ])
         : null,
@@ -583,11 +580,11 @@ export async function render(app, route) {
 
   return h('div', { class: 'fuel-view' }, [
     h('h2', { text: S.fuel.title }),
-    h('p', {}, [h('a', { class: 'btn', href: '#/usage' }, S.fuel.back)]),
-    balances,
-    form,
-    h('h2', { text: S.fuel.list }),
-    h('p', { class: 'hint', text: S.fuel.adminNote }),
-    data.items.length === 0 ? h('p', { class: 'empty', text: S.fuel.none }) : data.items.map(card),
+    h('p', {}, [linkButton({ label: S.fuel.back, href: '#/usage' })]),
+    // On a wide screen the balances and the form sit beside the list of fill-ups.
+    h('div', { class: 'split' }, [
+      h('div', {}, [balances, form]),
+      h('div', {}, [h('h2', { text: S.fuel.list }), h('p', { class: 'hint', text: S.fuel.adminNote }), data.items.length === 0 ? emptyState({ text: S.fuel.none }) : data.items.map(card)]),
+    ]),
   ]);
 }

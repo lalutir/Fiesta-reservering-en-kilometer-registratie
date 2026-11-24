@@ -134,3 +134,12 @@ export function pastSlot(fromHoursAgo: number, toHoursAgo: number): { start: For
     end: utcToLocalInput(now - toHoursAgo * 3_600_000, HOUSEHOLD_TZ),
   };
 }
+
+/**
+ * Go to a place that is not in the bar: open the page Meer (the last tab) and follow its row. The rows are links whose
+ * name starts with the place ("Inbox", then the line that says what is behind it).
+ */
+export async function viaMore(page: Page, place: string): Promise<void> {
+  await page.getByRole('navigation', { name: NAV_NAME }).getByRole('link', { name: /^Meer/ }).click();
+  await page.getByRole('link', { name: new RegExp(`^${place}`) }).click();
+}

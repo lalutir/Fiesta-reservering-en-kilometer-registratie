@@ -847,7 +847,8 @@ test('no API change: every view reads the one list of reservations, once, and a 
         for (const label of [S.agenda.prev, S.agenda.today, S.agenda.next]) await button(one(page, '.cal-nav'), label).fire('click');
       }
       assert.equal(api.calls.length, quiet, `${query || 'list'}: only the address changed`);
-      assert.equal(me.navigated.length >= 5, true);
+      // Every press of a view that is not the current one navigates; the pressed one is a segmented control's no-op (ui.test.ts).
+      assert.equal(me.navigated.length >= 4, true);
       dom.body.replaceChildren();
     }
     assert.deepEqual(api.writes(), [], 'looking at the calendar writes nothing');
@@ -878,8 +879,9 @@ test('the stylesheet has a rule for every class the calendar views use, and ever
   assert.match(css, /\.view-switch \.btn\[aria-pressed='true'\]/, 'the pressed state of the switcher is styled with the attribute the view sets');
   // Every var(--token) of the whole sheet is defined in :root, and the dark theme only redefines tokens the light one has.
   const defined = (block: string): Set<string> => new Set([...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1] as string));
-  const light = defined(/:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? '');
-  const dark = defined(/prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? '');
+  const light = defined(/(?:^|\})\s*:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? '');
+  // The dark theme is written twice (the phone asks for it, or the person chose Donker); test/design.test.ts keeps them equal.
+  const dark = defined(/prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme='light'\]\)\s*\{([^}]*)\}/.exec(css)?.[1] ?? '');
   assert.ok(light.size > 15 && dark.size > 10, `found ${light.size} light and ${dark.size} dark tokens`);
   const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1] as string));
   assert.deepEqual([...used].filter((t) => !light.has(t)), [], 'a colour or size used but never defined');

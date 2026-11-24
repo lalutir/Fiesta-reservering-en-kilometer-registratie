@@ -83,11 +83,16 @@ test('index.html is a complete PWA shell with no inline script, style or handler
   assert.match(html, /<meta name="apple-mobile-web-app-capable" content="yes"/);
   assert.match(html, /<meta name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /<link rel="stylesheet" href="\/style\.css"/);
+  // Two scripts, both files and never inline: the tiny classic theme-init.js first (it puts the chosen theme on <html>
+  // before the first paint, so Licht or Donker never flashes the other one) and then the app as a module.
   const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
-  assert.equal(scripts.length, 1, 'exactly one script');
-  assert.match(scripts[0]?.[1] as string, /type="module"/);
-  assert.match(scripts[0]?.[1] as string, /src="\/app\.js"/);
-  assert.equal(scripts[0]?.[2], '', 'no inline script body');
+  assert.equal(scripts.length, 2, 'exactly two scripts');
+  assert.match(scripts[0]?.[1] as string, /src="\/theme-init\.js"/);
+  assert.doesNotMatch(scripts[0]?.[1] as string, /type="module"/, 'the theme script is a classic script: it must run before the first paint');
+  assert.match(scripts[1]?.[1] as string, /type="module"/);
+  assert.match(scripts[1]?.[1] as string, /src="\/app\.js"/);
+  assert.ok(html.indexOf('/theme-init.js') < html.indexOf('/style.css'), 'the theme is set before the style sheet is applied');
+  for (const script of scripts) assert.equal(script[2], '', 'no inline script body');
   for (const page of ['index.html', 'admin/index.html']) {
     const text = read(publicDir, page);
     assert.doesNotMatch(text, /\sstyle\s*=/i, `${page}: inline style attribute`);
@@ -196,7 +201,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7', 'car-static-v8'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -216,7 +221,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
 test('service worker: the cache name is bumped with the app files, so phones drop the old copy of the shell', () => {
   // A new view file changes what the shell is: without a new name an installed app keeps serving the old one.
   const source = read(publicDir, 'sw.js');
-  assert.match(source, /const CACHE = 'car-static-v7';/);
+  assert.match(source, /const CACHE = 'car-static-v8';/);
   assert.match(source, /'\/views\/tickets\.js',/, 'the tickets view is precached');
   assert.match(source, /'\/views\/car\.js',/, 'the Car view is precached');
   assert.match(source, /'\/kmcheck\.js',/, 'the kilometre check module is precached');
@@ -236,7 +241,7 @@ test('service worker: precaches on install, drops old caches on activate', async
   let activated: Promise<unknown> | undefined;
   (sw.handlers['activate'] as (e: Json) => void)({ waitUntil: (p: Promise<unknown>) => (activated = p) });
   await activated;
-  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6'], 'the previous versions of the shell go, the current one stays');
+  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7'], 'the previous versions of the shell go, the current one stays');
 });
 
 test('service worker never handles /api, /admin, non-GET or cross-origin requests', async () => {

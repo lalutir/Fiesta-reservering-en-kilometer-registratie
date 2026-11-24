@@ -77,3 +77,8 @@ without regard to case, and a "Do not use" term only as a whole word.
 | Change (a saved item) | edit | wijzigen | bewerken | |
 | Delete | delete | verwijderen | wissen | |
 | Cancel (a form, or a reservation) | cancel | annuleren | | |
+| Start screen | home | Start | Home, Thuis | The first place of the bar: the car now, what waits for you, what you owe. A launch with an empty address opens it. |
+| The page for the rest | more | Meer | | The fifth place of the bar and its page: Inbox, Historie, Auto, Account, the theme, Admin, Uitloggen. |
+| Theme | theme | Weergave, Systeem, Licht, Donker | thema | The choice between the phone's own setting (Systeem), always light (Licht) and always dark (Donker). |
+| Unsent input | unsent input | niet-opgeslagen invoer | | What was typed in a form and not sent; it comes back when you return to the form. |
+| Undo | undo | Ongedaan maken | | The button in the toast after a delete that tells nobody anything; it works for six seconds. |

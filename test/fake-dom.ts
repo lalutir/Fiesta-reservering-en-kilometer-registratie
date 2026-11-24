@@ -8,6 +8,7 @@
 import { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type { App, User } from '../public/api.js';
+import { resetUndo } from '../public/undo.js';
 import type { Json } from './helpers.ts';
 
 // ---------------------------------------------------------------- the nodes
@@ -141,33 +142,98 @@ export class FakeElement extends FakeNode {
 
   setAttribute(name: string, value: string): void {
     if (name === 'value' && this.tagName === 'option') this.current = value;
+    // SVG elements take their class through the attribute (className is not a string there), so both spellings are one thing.
+    if (name === 'class') this.className = String(value);
     this.attrs.set(name, String(value));
   }
   getAttribute(name: string): string | null {
+    if (name === 'class') return this.className === '' ? null : this.className;
     return this.attrs.get(name) ?? null;
   }
   hasAttribute(name: string): boolean {
-    return this.attrs.has(name);
+    return name === 'class' ? this.className !== '' : this.attrs.has(name);
   }
   removeAttribute(name: string): void {
+    if (name === 'class') this.className = '';
     this.attrs.delete(name);
   }
+
+  /** The namespace this element was made in (createElementNS); plain elements have none. */
+  namespaceURI: string | null = null;
+  /** A <dialog>: open or not, what close() was given, and the element that had focus when it was opened. */
+  open = false;
+  returnValue = '';
+  private opener: FakeElement | null = null;
 
   addEventListener(type: string, fn: Listener): void {
     const list = this.listeners.get(type) ?? [];
     list.push(fn);
     this.listeners.set(type, list);
   }
+  removeEventListener(type: string, fn: Listener): void {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((l) => l !== fn));
+  }
 
-  /** Runs the listeners like the browser would and waits for the async ones. */
-  async fire(type: string, extra: Json = {}): Promise<void> {
-    const event = { type, target: this, currentTarget: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
-    for (const fn of this.listeners.get(type) ?? []) await fn(event);
+  /**
+   * Runs the listeners like the browser does: all of them, one after the other, up to their first await. Then the
+   * dispatch is over and event.currentTarget is null for whatever an async handler reads after an await (in a
+   * browser it is too, which is how a "read the button after the confirm" bug shows up). Waits for the async ones.
+   */
+  async fire(type: string, extra: Json = {}): Promise<Json> {
+    const event: Json = { type, target: this, currentTarget: this as FakeElement | null, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra };
+    const pending: unknown[] = [];
+    for (const fn of [...(this.listeners.get(type) ?? [])]) {
+      event['currentTarget'] = this;
+      pending.push(fn(event));
+    }
+    event['currentTarget'] = null;
+    for (const p of pending) await p;
+    return event;
+  }
+
+  contains(node: unknown): boolean {
+    for (let n: FakeNode | null = node as FakeNode | null; n; n = n.parent) if (n === this) return true;
+    return false;
+  }
+  remove(): void {
+    const p = this.parent;
+    if (!p) return;
+    p.children = p.children.filter((c) => c !== this);
+    this.parent = null;
+  }
+  blur(): void {
+    const doc = (globalThis as Json)['document'] as FakeDocument;
+    if (doc.activeElement === this) doc.activeElement = null;
+  }
+  scrollIntoView(): void {}
+
+  // ---- <dialog>: showModal() tells the test page what was asked and (by default) answers a confirm sheet
+  showModal(): void {
+    if (this.tagName !== 'dialog') throw new Error('showModal() on something that is not a <dialog>');
+    this.open = true;
+    this.opener = ((globalThis as Json)['document'] as FakeDocument).activeElement;
+    ((globalThis as Json)['__fakeDialogHooks'] as { opened(dialog: FakeElement): void } | undefined)?.opened(this);
+  }
+  show(): void {
+    this.open = true;
+  }
+  close(returnValue = ''): void {
+    if (!this.open) return;
+    this.open = false;
+    this.returnValue = returnValue;
+    void this.fire('close');
+    const back = this.opener;
+    this.opener = null;
+    // The browser puts focus back on what had it before showModal(), when that is still on the page.
+    if (back?.isConnected) back.focus();
   }
 
   appendChild(child: FakeNode): void {
     child.parent = this;
     this.children.push(child);
+  }
+  hasChildNodes(): boolean {
+    return this.children.length > 0;
   }
   replaceChildren(...next: FakeNode[]): void {
     for (const c of this.children) c.parent = null;
@@ -205,15 +271,44 @@ export interface FakeDocument {
   createTextNode(data: string): FakeText;
   getElementById(id: string): FakeElement | null;
   querySelector(selector: string): FakeElement | null;
+  querySelectorAll(selector: string): FakeElement[];
+  createElementNS(ns: string, tag: string): FakeElement;
+  documentElement: FakeElement;
+  head: FakeElement;
+  hidden: boolean;
+  title: string;
+  addEventListener(type: string, fn: Listener): void;
+  removeEventListener(type: string, fn: Listener): void;
 }
 
 // ------------------------------------------------------------ the whole page
 
+/** The browser storage behind localStorage: a map, and switches for the ways it fails in a real browser. */
+export interface FakeStorage {
+  data: Map<string, string>;
+  /** Every access throws (cookies blocked, some private windows). */
+  blocked: boolean;
+  /** Writing throws (quota exceeded) while reading still works. */
+  full: boolean;
+}
+
 export interface FakeDom {
   body: FakeElement;
-  /** What confirm() answers next (true by default) and every question it was asked. */
+  /** What a confirm sheet (a <dialog> with [data-answer] buttons) answers next (true by default), and every message it showed. */
   answer: boolean;
+  /** When false a confirm sheet stays open until the test presses one of its buttons or closes it. */
+  autoAnswer: boolean;
   confirms: string[];
+  /** Every <dialog> opened with showModal() (a sheet, a drawer, a confirm), in order. */
+  dialogs: FakeElement[];
+  storage: FakeStorage;
+  /** The window the page lives in: its listeners, the media queries it answers and where it was scrolled. */
+  window: { emit(type: string, extra?: Json): void; setMedia(query: string, matches: boolean): void; listeners: Map<string, Listener[]>; scrolledTo: Array<[number, number]> };
+  /** Fire an event on the document (visibilitychange) and set document.hidden. */
+  emitDocument(type: string, extra?: Json): void;
+  setHidden(hidden: boolean): void;
+  /** Escape on an open dialog: a cancel event, then close unless that was prevented. */
+  escape(dialog: FakeElement): Promise<void>;
   /** Put a rendered view in the page, so isConnected and getElementById see it. */
   mount(el: unknown): FakeElement;
   /** The element that has keyboard focus (what the last focus() call was on). */
@@ -221,25 +316,115 @@ export interface FakeDom {
   uninstall(): void;
 }
 
-const GLOBALS = ['document', 'Node', 'Element', 'HTMLElement', 'confirm'] as const;
+/** The fake page's document and window, for tests (the real ones do not exist in Node, so the types do not either). */
+export const doc = (): FakeDocument => (globalThis as Json)['document'] as FakeDocument;
+export const win = (): Json => (globalThis as Json)['window'] as Json;
+
+const GLOBALS = ['document', 'Node', 'Element', 'HTMLElement', 'confirm', 'window', 'localStorage', '__fakeDialogHooks'] as const;
 
 export function installFakeDom(): FakeDom {
   const g = globalThis as Json;
   const saved = GLOBALS.map((k) => [k, Object.getOwnPropertyDescriptor(g, k)] as const);
+  const html = new FakeElement('html');
+  html.attached = true;
+  const head = new FakeElement('head');
   const body = new FakeElement('body');
-  body.attached = true;
+  html.appendChild(head);
+  html.appendChild(body);
+  const docListeners = new Map<string, Listener[]>();
   const document: FakeDocument = {
     body,
+    head,
+    documentElement: html,
     activeElement: null,
+    hidden: false,
+    title: '',
     createElement: (tag) => new FakeElement(tag),
+    createElementNS: (ns, tag) => {
+      const el = new FakeElement(tag);
+      el.namespaceURI = ns;
+      return el;
+    },
     createTextNode: (data) => new FakeText(data),
-    getElementById: (id) => body.descendants().find((e) => e.id === id) ?? null,
-    querySelector: (selector) => body.querySelector(selector),
+    getElementById: (id) => html.descendants().find((e) => e.id === id) ?? null,
+    querySelector: (selector) => html.querySelector(selector),
+    querySelectorAll: (selector) => html.querySelectorAll(selector),
+    addEventListener: (type, fn) => {
+      docListeners.set(type, [...(docListeners.get(type) ?? []), fn]);
+    },
+    removeEventListener: (type, fn) => {
+      docListeners.set(type, (docListeners.get(type) ?? []).filter((l) => l !== fn));
+    },
   };
+  const winListeners = new Map<string, Listener[]>();
+  const media = new Map<string, { matches: boolean; listeners: Listener[] }>();
+  const storage: FakeStorage = { data: new Map(), blocked: false, full: false };
+  const localStorage = {
+    getItem: (k: string) => storage.data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      if (storage.full) throw new Error('QuotaExceededError');
+      storage.data.set(k, String(v));
+    },
+    removeItem: (k: string) => void storage.data.delete(k),
+    clear: () => storage.data.clear(),
+    key: (i: number) => [...storage.data.keys()][i] ?? null,
+    get length() {
+      return storage.data.size;
+    },
+  };
+  const scrolledTo: Array<[number, number]> = [];
+  // A window the test already made (installFakeBrowser before this) keeps its push and notification parts.
+  const windowObject: Json = Object.assign((g['window'] as Json | undefined) ?? {}, {
+    addEventListener: (type: string, fn: Listener) => {
+      winListeners.set(type, [...(winListeners.get(type) ?? []), fn]);
+    },
+    removeEventListener: (type: string, fn: Listener) => {
+      winListeners.set(type, (winListeners.get(type) ?? []).filter((l) => l !== fn));
+    },
+    matchMedia: (query: string) => {
+      const entry = media.get(query) ?? { matches: false, listeners: [] };
+      media.set(query, entry);
+      return {
+        media: query,
+        get matches() {
+          return entry.matches;
+        },
+        addEventListener: (_type: string, fn: Listener) => void entry.listeners.push(fn),
+        removeEventListener: (_type: string, fn: Listener) => void (entry.listeners = entry.listeners.filter((l) => l !== fn)),
+      };
+    },
+    scrollTo: (x: number, y: number) => void scrolledTo.push([x, y]),
+  });
   const dom: FakeDom = {
     body,
     answer: true,
+    autoAnswer: true,
     confirms: [],
+    dialogs: [],
+    storage,
+    window: {
+      listeners: winListeners,
+      scrolledTo,
+      emit: (type, extra = {}) => {
+        for (const fn of [...(winListeners.get(type) ?? [])]) void fn({ type, ...extra });
+      },
+      setMedia: (query, matches) => {
+        const entry = media.get(query) ?? { matches, listeners: [] };
+        media.set(query, entry);
+        entry.matches = matches;
+        for (const fn of [...entry.listeners]) void fn({ type: 'change', matches, media: query });
+      },
+    },
+    emitDocument: (type, extra = {}) => {
+      for (const fn of [...(docListeners.get(type) ?? [])]) void fn({ type, ...extra });
+    },
+    setHidden: (hidden) => {
+      document.hidden = hidden;
+    },
+    escape: async (dialog) => {
+      const event = await dialog.fire('cancel');
+      if (!event['defaultPrevented']) dialog.close();
+    },
     mount(el) {
       body.appendChild(el as FakeElement);
       return el as FakeElement;
@@ -261,7 +446,39 @@ export function installFakeDom(): FakeDom {
     dom.confirms.push(question);
     return dom.answer;
   });
+  define('window', windowObject);
+  Object.defineProperty(g, 'localStorage', {
+    configurable: true,
+    get() {
+      // A browser with storage blocked throws on the access itself, not only on getItem.
+      if (storage.blocked) throw new Error('SecurityError: storage is blocked');
+      return localStorage;
+    },
+  });
+  define('__fakeDialogHooks', {
+    opened(dialog: FakeElement) {
+      dom.dialogs.push(dialog);
+      const answers = dialog.querySelectorAll('[data-answer]');
+      if (answers.length === 0) return;
+      // A confirm sheet asks one question and has a yes and a no button.
+      dom.confirms.push((dialog.querySelector('.sheet-message') ?? dialog).textContent);
+      if (!dom.autoAnswer) return;
+      const wanted = answers.find((b) => b.getAttribute('data-answer') === (dom.answer ? 'yes' : 'no'));
+      // After a microtask, so the code that opened the sheet is already waiting for the answer, like with a person.
+      void Promise.resolve().then(() => wanted?.fire('click'));
+    },
+  });
   return dom;
+}
+
+/** Run a test body with the fake DOM installed, and take it away again however the body ends. */
+export async function withDom(fn: (dom: FakeDom) => Promise<void> | void): Promise<void> {
+  const dom = installFakeDom();
+  try {
+    await fn(dom);
+  } finally {
+    dom.uninstall();
+  }
 }
 
 // --------------------------------------------------- the browser's push side
@@ -345,7 +562,8 @@ export function installFakeBrowser(
       return state.permission;
     },
   };
-  const win: Json = {};
+  // Extend the window of the fake page when there is one (its listeners and media queries stay reachable).
+  const win: Json = Object.create((g['window'] as Json | undefined) ?? null);
   if (opts.push !== false) win.PushManager = class {};
   win.Notification = notification;
   const define = (k: string, value: unknown) => Object.defineProperty(g, k, { value, configurable: true, writable: true });
@@ -570,7 +788,8 @@ export const ADMIN: User = { id: 3, username: 'root', displayName: 'Root', role:
 
 export interface TestApp {
   app: App;
-  toasts: Array<{ message: string; isError: boolean }>;
+  /** What the toaster was asked to show; an action (Ongedaan maken) is there only when one was offered. */
+  toasts: Array<{ message: string; isError: boolean; action?: { label: string; run: () => void } }>;
   navigated: string[];
   /** Every call of signedOut(quiet). */
   signedOut: boolean[];
@@ -592,8 +811,8 @@ export function makeApp(me: User = ANNA, users: User[] = [ANNA, BEN, ADMIN]): Te
     refresh: async () => {
       refreshed++;
     },
-    toast: (message: string, isError = false) => {
-      toasts.push({ message, isError });
+    toast: (message: string, isError = false, action?: { label: string; run: () => void }) => {
+      toasts.push({ message, isError, ...(action ? { action } : {}) });
     },
     signedOut: async (quiet = false) => {
       signedOut.push(quiet);
@@ -622,6 +841,8 @@ export async function withClient(
     await fn({ dom, api, tick: (ms) => mock.timers.tick(ms) });
     assert.deepEqual(api.unhandled, [], 'the view asked for something the test did not plan for');
   } finally {
+    // A delete that was still waiting out its "Ongedaan maken" window belongs to this test only.
+    resetUndo();
     api.restore();
     dom.uninstall();
     mock.timers.reset();

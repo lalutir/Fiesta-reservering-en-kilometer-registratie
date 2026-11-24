@@ -1,7 +1,7 @@
 // What the person sees and what the app sends on the Car tab: the APK card (not set, valid, due soon, today,
 // expired) and its date form, the damage form (defaults, exact bodies, validation, server refusals), the lists
 // with the neutral driver hint, Mark repaired, Reopen, Edit and Delete, and the wiring in the app shell
-// (a seventh tab, the page title, the seven-column tab bar, the service worker).
+// (a place under Meer, the page title, the service worker).
 //
 // The real view code runs against the fake DOM, a stubbed fetch and a clock that stands still
 // (test/fake-dom.ts): 12:00 on 15 June 2026 in Amsterdam, so "today" is 2026-06-15. Who was driving before
@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SECONDARY, placeOf, titleOf } from '../public/nav.js';
 import { S } from '../public/strings.js';
 import * as carView from '../public/views/car.js';
 import { APK_SOON_DAYS, APK_YEARS_AHEAD, DESCRIPTION_MAX, REPAIR_NOTE_MAX, apkSummary, dateProblem, hintText, render as renderCar } from '../public/views/car.js';
@@ -519,13 +520,13 @@ test('lists: with no reports it says so, and with only repaired ones it says the
   await withClient({ now: NOW, routes: carRoutes([]) }, async ({ dom }) => {
     const page = view(dom, await carPage(me));
     assert.equal(all(page, 'article.damage').length, 0);
-    assert.equal(one(page, 'p.empty').textContent, S.car.none);
+    assert.equal(one(page, '.empty p').textContent, S.car.none);
     assert.ok(all(page, 'h3').some((h) => h.textContent === S.car.open(0)));
     assert.ok(!all(page, 'h3').some((h) => h.textContent.startsWith('Repaired')), 'no empty "Repaired" heading');
   });
   await withClient({ now: NOW, routes: carRoutes([repairedReport()]) }, async ({ dom }) => {
     const page = view(dom, await carPage(me));
-    assert.equal(one(page, 'p.empty').textContent, S.car.noneOpen);
+    assert.equal(one(page, '.empty p').textContent, S.car.noneOpen);
     assert.equal(all(page, 'article.damage').length, 1);
   });
 });
@@ -762,14 +763,16 @@ test('editing: the form comes right under the page heading, above the APK card; 
   // 320 px phone, so it would look as if Edit did nothing (measured in Chromium at 320x568: the heading sat at y=612).
   const me = makeApp(ANNA);
   await withClient({ now: NOW, routes: carRoutes([report({ id: 1 })]) }, async ({ dom }) => {
+    // The page is the heading and two columns (side by side on a wide screen, one after the other on a phone): the
+    // order of the elements in the page is what a person and a screen reader meet, so that order is what is compared.
     const order = (page: FakeElement) => {
       assert.ok(page.className.split(/\s+/).includes('car-view'), 'the mounted element is the view itself');
-      const kids = page.children;
-      return { form: kids.indexOf(damageForm(page)), apk: kids.indexOf(apkCard(page)), first: (kids[0] as FakeElement).tagName };
+      const all = page.descendants();
+      return { form: all.indexOf(damageForm(page)), apk: all.indexOf(apkCard(page)), heading: all.indexOf(one(page, 'h2')), first: (page.children[0] as FakeElement).tagName };
     };
     const editing = order(view(dom, await carPage(me, 'edit=1')));
-    assert.deepEqual([editing.first, editing.form], ['h2', 1], 'the heading, then the form');
-    assert.ok(editing.apk > editing.form, 'the APK card follows');
+    assert.equal(editing.first, 'h2', 'the heading comes first');
+    assert.ok(editing.form > editing.heading && editing.form < editing.apk, 'then the form, and the APK card follows');
     const blank = order(view(dom, await carPage(me)));
     assert.ok(blank.apk >= 0 && blank.form > blank.apk, 'a blank form stays in its place under the APK card');
     assert.equal(one(damageForm(view(dom, await carPage(me, 'edit=1'))), 'h3').textContent, S.car.editTitle);
@@ -830,9 +833,45 @@ test('editing: a report that cannot be edited, or does not exist, gives the blan
   });
 });
 
-test('deleting: it asks first, does nothing on "no", and on "yes" deletes, says so, reloads and keeps focus on the page', async () => {
+test('deleting my own report asks nothing: it goes at once, "Ongedaan maken" brings it back, and the DELETE goes out after six seconds', async () => {
   const me = makeApp(ANNA);
   const routes = carRoutes([report({ id: 1 })], apkAnswer(null), { 'DELETE /api/damage/1': () => new Reply(null, 204) });
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
+    const page = view(dom, await carPage(me));
+    await byText(damageCard(page, 1), 'button', S.delete).fire('click');
+    assert.deepEqual(dom.confirms, [], 'nothing is asked: it can be taken back');
+    assert.deepEqual(api.writes(), [], 'nothing is sent yet');
+    assert.equal(me.refreshes(), 1, 'the list is rebuilt at once without it');
+    assert.equal(me.toasts[0]?.message, S.undo.damage);
+    assert.equal(me.toasts[0]?.action?.label, S.undo.action);
+    tick(6000);
+    await until(() => api.writes().length === 1, 'the delete after the window');
+    assert.equal(`${onlyWrite(api).method} ${onlyWrite(api).path}`, 'DELETE /api/damage/1');
+  });
+  const again = makeApp(ANNA);
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
+    const page = view(dom, await carPage(again));
+    await byText(damageCard(page, 1), 'button', S.delete).fire('click');
+    again.toasts[0]?.action?.run();
+    tick(20_000);
+    assert.deepEqual(api.writes(), [], 'taken back: never sent');
+    assert.equal(again.refreshes(), 2, 'and the list is rebuilt with the report in it again');
+  });
+  // The server says no when the delete finally goes out: the report comes back and the person is told.
+  const refused = makeApp(ANNA);
+  await withClient({ now: NOW, routes: carRoutes([report({ id: 1 })], apkAnswer(null), { 'DELETE /api/damage/1': () => refuse(403, 'forbidden') }) }, async ({ dom, tick }) => {
+    const page = view(dom, await carPage(refused));
+    await byText(damageCard(page, 1), 'button', S.delete).fire('click');
+    tick(6000);
+    await until(() => refused.toasts.some((t) => t.isError), 'the refusal');
+    assert.equal(refused.toasts.at(-1)?.message, S.errors.forbidden);
+    assert.equal(refused.refreshes(), 2, 'the list is reloaded and shows how things are now');
+  });
+});
+
+test('deleting somebody else\'s report (an admin cleaning up) asks first, does nothing on "no", and on "yes" deletes, says so, reloads and keeps focus on the page', async () => {
+  const me = makeApp(ANNA);
+  const routes = carRoutes([report({ id: 1, reportedBy: { id: BEN.id, name: 'Ben' } })], apkAnswer(null), { 'DELETE /api/damage/1': () => new Reply(null, 204) });
   await withClient({ now: NOW, routes }, async ({ dom, api }) => {
     const page = view(dom, await carPage(me));
     const remove = byText(damageCard(page, 1), 'button', S.delete);
@@ -856,7 +895,7 @@ test('deleting: it asks first, does nothing on "no", and on "yes" deletes, says 
 
 test('a change that the server refuses is shown as an error toast and the list is reloaded, so it shows how things are now', async () => {
   const me = makeApp(ANNA);
-  const routes = carRoutes([report({ id: 1 })], apkAnswer(null), { 'DELETE /api/damage/1': () => refuse(403, 'forbidden') });
+  const routes = carRoutes([report({ id: 1, reportedBy: { id: BEN.id, name: 'Ben' } })], apkAnswer(null), { 'DELETE /api/damage/1': () => refuse(403, 'forbidden') });
   await withClient({ now: NOW, routes }, async ({ dom }) => {
     const page = view(dom, await carPage(me));
     await byText(damageCard(page, 1), 'button', S.delete).fire('click');
@@ -870,7 +909,8 @@ test('a change that the server refuses is shown as an error toast and the list i
 
 test('while a request is on its way the buttons that sent it are disabled, so a second tap cannot send it twice, and they work again afterwards', async () => {
   const me = makeApp(ANNA);
-  const reports = [report({ id: 1 }), report({ id: 3, description: 'Chip in the windscreen', location: 'windows' })];
+  // Report 3 is Ben's, so deleting it asks first (a sheet): the buttons of the report must still be disabled after the question.
+  const reports = [report({ id: 1 }), report({ id: 3, description: 'Chip in the windscreen', location: 'windows', reportedBy: { id: BEN.id, name: 'Ben' } })];
   // The stub answers while the view is waiting for it, so what the buttons look like in that moment can be read here.
   let page: FakeElement | undefined;
   let removeButton: FakeElement | undefined;
@@ -946,30 +986,22 @@ test('the view is not re-rendered in the background while a form may be open', (
   assert.equal(carView.live, false);
 });
 
-test('the app shell: Car is a view and the seventh tab between History and Account, with its own page title', () => {
+test('the app shell: Car is a view under Meer (a row of that page, a link of the rail), with its own page title', () => {
   const app = readSource('public/app.js');
   assert.match(app, /import \* as car from '\.\/views\/car\.js';/);
   assert.match(app, /const VIEWS = \{[^}]*\bcar\b[^}]*\};/);
-  const tabs = [...app.matchAll(/^\s+\['(\w+)', S\.nav\.\w+\],$/gm)].map((m) => m[1]);
-  assert.deepEqual(tabs, ['agenda', 'reserve', 'inbox', 'usage', 'history', 'car', 'account'], 'seven tabs, the existing ones in their order');
+  assert.ok(SECONDARY.some((item) => item.name === 'car' && item.label === S.nav.car && item.href === '#/car'));
+  assert.equal(placeOf('car'), 'more', 'the Meer tab is the one that is lit on the Car page');
+  assert.equal(titleOf('car'), 'Auto', 'the page title comes from the label of the place');
   assert.equal(S.nav.car, 'Auto');
-  // The page title comes from the tab label: Car has no sub-routes of its own, so it needs no entry in TAB_OF_ROUTE.
-  assert.doesNotMatch(app, /TAB_OF_ROUTE = \{[^}]*\bcar\b/);
-  // The tab names the end-to-end suite looks for are unchanged.
-  for (const name of [S.nav.agenda, S.nav.reserve, S.nav.history, S.nav.usage]) assert.ok(name.length > 0);
+  // The names the end-to-end suite looks for are unchanged.
   assert.deepEqual([S.nav.agenda, S.nav.reserve, S.nav.usage, S.nav.history], ['Agenda', 'Boeken', 'Ritten', 'Historie']);
 });
 
-test('the tab bar is seven columns wide, with a smaller label and tighter padding on a narrow phone', () => {
+test('the stylesheet styles the damage reports: open and repaired cards, and a long word in a description cannot widen the page', () => {
   const css = readSource('public/style.css');
-  assert.match(css, /\.tabs \{[^}]*grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/);
-  assert.doesNotMatch(css, /repeat\(6, minmax\(0, 1fr\)\)/, 'no leftover six-column rule');
-  assert.match(css, /@media \(max-width: 420px\) \{\s*\.tab \{[^}]*font-size: [\d.]+rem;/, 'a narrow-width rule for the label');
-  // The bold label of the current tab is the widest; on a narrow phone it is marked by colour and the bar above instead.
-  assert.match(css, /@media \(max-width: 420px\) \{[^@]*\.tab\[aria-current='page'\] \{\s*font-weight: 400;/);
-  const narrow = /@media \(max-width: 420px\) \{\s*\.tab \{[^}]*font-size: ([\d.]+)rem;/.exec(css);
-  assert.ok(narrow && Number(narrow[1]) * 16 >= 10.2, 'the label stays at least 10.2px');
   assert.match(css, /\.card\.damage\.open \{/);
+  assert.match(css, /\.card\.damage\.repaired \{/);
   assert.match(css, /\.damage-text \{[^}]*white-space: pre-wrap;[^}]*overflow-wrap: anywhere;/, 'a long word in a description cannot widen the page');
 });
 

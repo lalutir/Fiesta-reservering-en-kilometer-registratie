@@ -631,13 +631,13 @@ test('a refused explanation shows the reason on the field and the form and lets 
   });
 });
 
-test('explained findings fold away with their note and who wrote it; whoever may can remove the explanation, after asking', async () => {
+test('explained findings fold away with their note and who wrote it; whoever may can remove the explanation, and take that back for six seconds', async () => {
   const me = makeApp(ANNA);
   const explained = { ...gapBen, explained: { id: 11, note: 'An outsider drove it', byId: 2, byName: 'Ben', at: at(-30) }, can: { explain: true, unexplain: true } };
   const routes = driveRoutes({
     extra: { ...odometerRoutes(asChain(odometerChain([benStart, benEnd, annaStart, annaEnd, annaFuel], [gapFuel, explained])) as unknown as Json), 'DELETE /api/odometer/explained/11': () => new Reply(null, 204) },
   });
-  await withClient({ now: NOW, routes }, async ({ dom, api }) => {
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
     const page = mount(dom, await driveForm(me));
     const s = section(page);
     assert.equal(items(s).length, 2, 'the explained one is in the page, folded');
@@ -651,16 +651,30 @@ test('explained findings fold away with their note and who wrote it; whoever may
     assert.equal(all(row, 'details.km-explain').length, 0);
     assert.equal(all(items(s)[0] as FakeElement, 'details.km-explain').length, 1, 'the open one still can be explained');
 
-    dom.answer = false;
+    // Taking an explanation back tells nobody anything: no question, an undo toast, and the DELETE goes out after the window.
     await byText(row, 'button', K.removeExplanation).fire('click');
-    assert.deepEqual(dom.confirms, [K.confirmRemove]);
-    assert.deepEqual(api.writes(), [], 'nothing is removed when the person says no');
-
-    dom.answer = true;
-    await byText(row, 'button', K.removeExplanation).fire('click');
+    assert.deepEqual(dom.confirms, [], 'no question: it can be taken back instead');
+    assert.deepEqual(api.writes(), [], 'nothing is sent yet');
+    assert.equal(me.toasts.length, 1);
+    assert.equal(me.toasts[0]?.message, S.undo.explanation);
+    assert.equal(me.toasts[0]?.action?.label, S.undo.action);
+    assert.equal(me.refreshes(), 1, 'the view is rebuilt at once, with the finding open again');
+    tick(6000);
+    await until(() => api.writes().length === 1, 'the delete after the window');
     assert.deepEqual(onlyWrite(api), { method: 'DELETE', path: '/api/odometer/explained/11', query: '', body: undefined });
-    assert.deepEqual(me.toasts, [{ message: K.removed, isError: false }]);
-    assert.equal(dom.focused(), one(page, 'h3'));
+  });
+
+  // Ongedaan maken: nothing is ever sent.
+  await withClient({ now: NOW, routes }, async ({ dom, api, tick }) => {
+    const again = makeApp(ANNA);
+    const page = mount(dom, await driveForm(again));
+    const row = items(all(section(page), 'details.km-more')[0] as FakeElement)[0] as FakeElement;
+    await byText(row, 'button', K.removeExplanation).fire('click');
+    me.toasts.length = 0;
+    again.toasts[0]?.action?.run();
+    tick(20_000);
+    assert.deepEqual(api.writes(), [], 'taken back: the explanation stays');
+    assert.equal(again.toasts.at(-1)?.message, S.undo.restored);
   });
 
   // Somebody who is not involved sees the note but gets no button.

@@ -1,4 +1,5 @@
 // fetch wrapper for the JSON API plus the shared shapes of its responses.
+import { flushPending } from './undo.js';
 
 /** @typedef {{ id: number, username: string, displayName: string }} UserRef */
 /** @typedef {{ id: number, username: string, displayName: string, role: 'admin' | 'member', active: boolean, createdAt: string }} User */
@@ -163,6 +164,7 @@
  * @property {string} description
  * @property {'front' | 'rear' | 'left' | 'right' | 'roof' | 'interior' | 'wheels_tyres' | 'windows' | 'mechanical' | 'other'} location
  * @property {'open' | 'repaired'} status
+ * @property {string} createdAt when it was reported (UTC ISO)
  * @property {string | null} repairedOn the day it was repaired; null while open
  * @property {string} repairNote '' when there is none
  * @property {{ driver: { id: number, name: string } | null, basis: 'drive' | 'draft' | 'reservation' | 'last_drive' | 'none' }} hint who was driving before the noticed day
@@ -178,6 +180,18 @@
  * @property {string | null} updatedAt UTC ISO
  */
 
+/** @typedef {{ label: string, run: () => void, ms?: number }} ToastAction ms: how long the action works; the toast leaves with it */
+/**
+ * What toaster() (dom.js) makes. dismiss(action) takes the toast away at once when it is the one carrying that action, and
+ * does nothing when another message has replaced it since: the offer ends when what it offered is gone (undo.js).
+ * @typedef {((message: string, isError?: boolean, action?: ToastAction) => void) & { dismiss?: (action: ToastAction) => void }} Toast
+ */
+/**
+ * @typedef {object} ApiOptions
+ * @property {boolean} [keepalive] let the request finish while the page is closing
+ * @property {boolean} [noFlush] do not first send pending deferred deletes (set by the deferred delete itself)
+ */
+
 /**
  * What every view gets: the signed-in session, the user list and a few actions.
  * @typedef {object} App
@@ -186,7 +200,7 @@
  * @property {UserRef[]} users active users (for pickers)
  * @property {(hash: string) => void} navigate
  * @property {() => Promise<void>} refresh re-render the current view
- * @property {(message: string, isError?: boolean) => void} toast
+ * @property {Toast} toast an action adds one button to the message (Ongedaan maken)
  * @property {(quiet?: boolean) => Promise<void>} signedOut show the sign-in screen (quiet = no "session ended" notice)
  */
 
@@ -228,9 +242,13 @@ export function setUnauthorizedHandler(/** @type {() => void} */ fn) {
  * @param {string} method
  * @param {string} path
  * @param {unknown} [body]
+ * @param {ApiOptions} [opts]
  * @returns {Promise<any>} parsed JSON, or null for 204
  */
-export async function api(method, path, body) {
+export async function api(method, path, body, opts = {}) {
+  // A delete that is waiting out its "Ongedaan maken" window is sent before the next write (public/undo.js), so a
+  // deferred delete can never make a following request fail (a new draft while the old one is only hidden).
+  if (method !== 'GET' && !opts.noFlush && !opts.keepalive) await flushPending();
   /** @type {Response} */
   let res;
   try {
@@ -239,6 +257,7 @@ export async function api(method, path, body) {
       credentials: 'same-origin',
       headers: method === 'GET' ? {} : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      ...(opts.keepalive ? { keepalive: true } : {}),
     });
   } catch {
     // The message is the code: people see S.errors.network, never this text.
@@ -267,5 +286,8 @@ export const post = (path, body = {}) => api('POST', path, body);
  * @param {unknown} body
  */
 export const patch = (path, body) => api('PATCH', path, body);
-/** @param {string} path */
-export const del = (path) => api('DELETE', path);
+/**
+ * @param {string} path
+ * @param {ApiOptions} [opts]
+ */
+export const del = (path, opts) => api('DELETE', path, undefined, opts);

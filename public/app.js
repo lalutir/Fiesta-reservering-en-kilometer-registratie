@@ -1,14 +1,21 @@
-// App shell: hash router, tab bar, session handling and the refresh loop.
+// App shell: hash router, the bar of places (nav.js), session handling and the refresh loop.
 import { ApiError, get, setUnauthorizedHandler } from './api.js';
 import { h, setContent, toaster } from './dom.js';
+import { clearAllDrafts } from './drafts.js';
+import { bareLaunch, buildNav, titleOf } from './nav.js';
 import { S, errorText } from './strings.js';
+import { initTheme } from './theme.js';
+import { errorState, overlayOpen, skeleton } from './ui.js';
+import { enterPlace, installUndoFlush, isPending } from './undo.js';
 import * as account from './views/account.js';
 import * as agenda from './views/agenda.js';
 import * as car from './views/car.js';
 import * as fuel from './views/fuel.js';
 import * as history from './views/history.js';
+import * as home from './views/home.js';
 import * as inbox from './views/inbox.js';
 import * as login from './views/login.js';
+import * as more from './views/more.js';
 import * as reserve from './views/reserve.js';
 import * as tickets from './views/tickets.js';
 import * as usage from './views/usage.js';
@@ -22,25 +29,14 @@ import * as usage from './views/usage.js';
 /**
  * @typedef {object} View
  * @property {boolean} live re-render automatically when the page comes back or on a timer
- * @property {(app: import('./api.js').App, route: Route) => Promise<HTMLElement>} render
+ * @property {(app: import('./api.js').App, route: Route, opts?: { silent?: boolean }) => Promise<HTMLElement>} render
  */
 
 /** @type {Record<string, View>} */
-const VIEWS = { agenda, reserve, inbox, usage, fuel, tickets, history, car, account };
-const TABS = [
-  ['agenda', S.nav.agenda],
-  ['reserve', S.nav.reserve],
-  ['inbox', S.nav.inbox],
-  ['usage', S.nav.usage],
-  ['history', S.nav.history],
-  ['car', S.nav.car],
-  ['account', S.nav.account],
-];
-// Routes that live under a tab: Fuel and costs and Traffic tickets are reached from Drives, so that tab stays highlighted.
-const TAB_OF_ROUTE = { fuel: 'usage', tickets: 'usage' };
-// The page title of those routes (they have no tab label of their own).
-const SUBVIEW_TITLE = { fuel: S.fuel.title, tickets: S.tickets.title };
+const VIEWS = { home, more, agenda, reserve, inbox, usage, fuel, tickets, history, car, account };
 const REFRESH_MS = 60_000;
+/** A screen that answers faster than this shows no skeleton at all, so a quick answer does not flash. */
+const SKELETON_DELAY_MS = 120;
 
 const root = /** @type {HTMLElement} */ (document.getElementById('app'));
 
@@ -50,14 +46,8 @@ let app = null;
 let viewHost = null;
 /** @type {HTMLElement | null} */
 let toastEl = null;
-/** @type {HTMLElement | null} */
-let inboxBadgeEl = null;
-/** @type {HTMLElement | null} */
-let drivesBadgeEl = null;
-/** @type {HTMLElement | null} */
-let inboxTabEl = null;
-/** @type {HTMLElement | null} */
-let drivesTabEl = null;
+/** @type {ReturnType<typeof buildNav> | null} */
+let nav = null;
 let renderToken = 0;
 
 /** @returns {Route} */
@@ -75,32 +65,22 @@ function isEditing() {
   return !!viewHost && !!active && viewHost.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
 }
 
-/**
- * @param {HTMLElement | null} badge
- * @param {HTMLElement | null} tab
- * @param {number} count
- * @param {(n: number) => string} label
- */
-function showBadge(badge, tab, count, label) {
-  if (!badge) return;
-  badge.textContent = String(count);
-  badge.hidden = count === 0;
-  // The bare number means nothing to a screen reader: give the tab a name that says what it counts.
-  if (count > 0) tab?.setAttribute('aria-label', label(count));
-  else tab?.removeAttribute('aria-label');
-}
-
 /** Inbox (answers waiting) and Drives (kilometres to register) counts, fetched side by side. */
 async function updateBadge() {
-  if (!app || !inboxBadgeEl) return;
+  if (!app || !nav) return;
   // Each badge is a convenience: if its request fails the other still updates, and the views report real errors.
   const [inbox, pending] = await Promise.allSettled([get('/api/inbox'), get('/api/usage/pending')]);
-  if (inbox.status === 'fulfilled') showBadge(inboxBadgeEl, inboxTabEl, inbox.value.incomingCount, S.inbox.tabLabel);
-  if (pending.status === 'fulfilled') showBadge(drivesBadgeEl, drivesTabEl, pending.value.count, S.usage.tabLabel);
+  if (inbox.status === 'fulfilled') nav.setBadge('inbox', inbox.value.incomingCount);
+  if (pending.status === 'fulfilled') {
+    // A draft that was deleted a moment ago (and can still be taken back) is not waiting for anything: the list leaves it out, so does the count.
+    /** @type {import('./api.js').Usage[]} */
+    const drafts = pending.value.items[0]?.drafts ?? [];
+    nav.setBadge('usage', Math.max(0, pending.value.count - drafts.filter((d) => isPending(`draft:${d.id}`)).length));
+  }
 }
 
 /**
- * After the person moves to another tab: start at the top and put keyboard and
+ * After the person moves to another place: start at the top and put keyboard and
  * screen reader focus on the view's heading, so they know where they landed.
  */
 function landOnView() {
@@ -112,8 +92,8 @@ function landOnView() {
 }
 
 /**
- * @param {{ silent?: boolean, navigated?: boolean }} [opts] silent = background refresh: keep what is shown on errors;
- *   navigated = the route changed (not a reload of the same view)
+ * @param {{ silent?: boolean, navigated?: boolean, retry?: boolean }} [opts] silent = background refresh: keep what is shown
+ *   on errors; navigated = the route changed (not a reload of the same view); retry = "Opnieuw proberen" on an error page
  */
 async function renderCurrent(opts = {}) {
   if (!app || !viewHost) return;
@@ -124,28 +104,34 @@ async function renderCurrent(opts = {}) {
     return;
   }
   const token = ++renderToken;
-  const tabName = /** @type {Record<string, string>} */ (TAB_OF_ROUTE)[route.name] ?? route.name;
-  document.querySelectorAll('.tabs a').forEach((a) => {
-    if (a.getAttribute('data-tab') === tabName) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
-  });
-  const tabLabel = /** @type {Record<string, string>} */ (SUBVIEW_TITLE)[route.name] ?? TABS.find(([name]) => name === route.name)?.[1];
-  document.title = tabLabel ? `${tabLabel} - ${S.appName}` : S.appName;
+  // Walking to another place sends a delete that is waiting out its "Ongedaan maken" window, before the next screen asks for
+  // the list it was in. Drawing the same place again (refresh(), the background render, #/usage?edit=9 back to #/usage) must
+  // not: the lists leave out what is pending, and the toast is still offering to take it back.
+  await enterPlace(route.name);
+  if (token !== renderToken) return;
+  nav?.setCurrent(route.name);
+  const title = titleOf(route.name);
+  document.title = title ? `${title} - ${S.appName}` : S.appName;
+  const host = viewHost;
+  // The old page gives way to a skeleton once the answer is slow, never sooner, and only where it has nothing left to show:
+  // on a place the person walked to, on a retry after an error, and while the shell is still empty. Redrawing the same place
+  // after an action (app.refresh(): approve, decline, cancel, delete) keeps what is on screen until the new page is ready.
+  // A long list swapped for a short skeleton shrinks the document and the browser then clamps the scroll position, so the
+  // page would come back at the top.
+  const timer =
+    !opts.silent && (opts.navigated || opts.retry || !host.hasChildNodes())
+      ? setTimeout(() => token === renderToken && setContent(host, skeleton()), SKELETON_DELAY_MS)
+      : undefined;
   try {
-    const el = await view.render(app, route);
+    const el = await view.render(app, route, { silent: opts.silent === true });
     if (token !== renderToken) return;
-    setContent(viewHost, el);
+    setContent(host, el);
     if (opts.navigated) landOnView();
   } catch (err) {
     if (token !== renderToken || opts.silent) return;
-    const e = /** @type {ApiError} */ (err);
-    setContent(
-      viewHost,
-      h('div', { class: 'card error-card' }, [
-        h('p', { text: errorText(e) }),
-        h('button', { class: 'btn', type: 'button', onclick: () => void renderCurrent() }, S.retry),
-      ]),
-    );
+    setContent(host, errorState(errorText(/** @type {ApiError} */ (err)), () => void renderCurrent({ retry: true })));
+  } finally {
+    clearTimeout(timer);
   }
   void updateBadge();
 }
@@ -155,37 +141,26 @@ async function refresh() {
 }
 
 function backgroundRefresh() {
-  if (!app || document.hidden || isEditing()) return;
+  // A sheet or a drawer is open, or a field has the keyboard: the page under it stays as it is.
+  if (!app || document.hidden || isEditing() || overlayOpen()) return;
   const view = VIEWS[currentRoute().name];
   if (view?.live) void renderCurrent({ silent: true });
   else void updateBadge();
 }
 
-/** Build the tab bar and view host once per sign-in. */
+/** Build the bar and the view host once per sign-in. */
 function buildShell(/** @type {import('./api.js').Session} */ session) {
-  inboxBadgeEl = h('span', { class: 'badge', hidden: true }, '0');
-  drivesBadgeEl = h('span', { class: 'badge', hidden: true }, '0');
   toastEl = h('div', { class: 'toast', role: 'status', 'aria-live': 'polite' });
-  viewHost = h('main', { class: 'view', id: 'view' });
-  const tabs = TABS.map(([name, label]) => {
-    const link = h('a', { class: 'tab', href: `#/${name === 'agenda' ? '' : name}`, 'data-tab': name }, [
-      h('span', { class: 'tab-label' }, label),
-      name === 'inbox' ? inboxBadgeEl : name === 'usage' ? drivesBadgeEl : null,
-    ]);
-    if (name === 'inbox') inboxTabEl = link;
-    if (name === 'usage') drivesTabEl = link;
-    return link;
-  });
+  viewHost = h('main', { class: 'view', id: 'view', tabindex: '-1' });
+  const main = viewHost;
+  nav = buildNav({ user: session.user, toast, onSignOut: () => void account.signOut(/** @type {import('./api.js').App} */ (app)) });
   setContent(
     root,
     h('div', { class: 'shell' }, [
-      h('header', { class: 'topbar' }, [
-        h('h1', { class: 'title', text: S.appName }),
-        h('span', { class: 'who', text: session.user.displayName }),
-        session.user.role === 'admin' ? h('a', { class: 'admin-link', href: '/admin/' }, S.nav.admin) : null,
-      ]),
+      // The link must not change the hash: the hash is the router.
+      h('a', { class: 'skip-link', href: '#view', onclick: (/** @type {Event} */ e) => (e.preventDefault(), main.focus()) }, S.ui.skipToContent),
+      nav.rail,
       viewHost,
-      h('nav', { class: 'tabs', 'aria-label': S.nav.label }, tabs),
       toastEl,
     ]),
   );
@@ -195,9 +170,10 @@ function buildShell(/** @type {import('./api.js').Session} */ session) {
 function showLogin(notice) {
   app = null;
   viewHost = null;
-  inboxTabEl = null;
-  drivesTabEl = null;
+  nav = null;
   renderToken++;
+  // Whatever was typed and not sent belongs to the person who is gone: a shared phone must not show it to the next one.
+  clearAllDrafts();
   document.title = `${S.login.title} - ${S.appName}`;
   setContent(root, login.render({ notice, onSuccess: () => void start() }));
 }
@@ -209,7 +185,7 @@ async function signedOut(quiet = false) {
 
 async function start() {
   // Something to look at while the first requests run (also right after signing in).
-  setContent(root, h('p', { class: 'empty', role: 'status', text: S.loading }));
+  setContent(root, skeleton());
   /** @type {import('./api.js').Session} */
   let session;
   /** @type {import('./api.js').UserRef[]} */
@@ -222,13 +198,7 @@ async function start() {
       showLogin();
       return;
     }
-    setContent(
-      root,
-      h('div', { class: 'card error-card' }, [
-        h('p', { text: errorText(/** @type {ApiError} */ (err)) }),
-        h('button', { class: 'btn', type: 'button', onclick: () => void start() }, S.retry),
-      ]),
-    );
+    setContent(root, errorState(errorText(/** @type {ApiError} */ (err)), () => void start()));
     return;
   }
   buildShell(session);
@@ -244,9 +214,13 @@ async function start() {
     toast,
     signedOut,
   };
+  // A launch with nothing after the address opens Start. replaceState does not fire hashchange: one render, not two.
+  if (bareLaunch(location.hash)) window.history.replaceState(null, '', '#/home');
   await renderCurrent();
 }
 
+initTheme();
+installUndoFlush();
 setUnauthorizedHandler(() => {
   if (app) void signedOut();
 });

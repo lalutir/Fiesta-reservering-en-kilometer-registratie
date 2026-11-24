@@ -2,14 +2,14 @@
 // sign in, reserve the car, register the kilometres from the reservation card, look at the
 // History, see the Kilometre check on the Drives tab, find that a fill-up needs its odometer
 // reading, see the APK prompt and the damage form on the Car tab, and load the admin page (Users,
-// Reservations and Drives). All seven tabs must fit the bar. Every step also asserts the page does not scroll sideways;
+// Reservations and Drives). All five places must fit the bar (the others are one tap further, on the page Meer). Every step also asserts the page does not scroll sideways;
 // the guard in ./fixtures.ts fails the test on console errors, uncaught errors, failed requests
 // and error responses.
 //
 // Only getByRole, getByLabel and getByText are used (never CSS or XPath), so the suite survives a
 // rebuilt frontend as long as people still see the same words. All the words are in UI below (the
 // interface is Dutch).
-import { NAV_NAME, expect, expectNoHorizontalScroll, expectTabsFit, pastSlot, test } from './fixtures.ts';
+import { NAV_NAME, expect, expectNoHorizontalScroll, expectTabsFit, pastSlot, test, viaMore } from './fixtures.ts';
 
 /** What a person reads on screen (see public/strings.js). When the wording changes, change it here only. */
 const UI = {
@@ -18,6 +18,8 @@ const UI = {
   password: 'Wachtwoord',
   signIn: 'Inloggen',
   mainNav: NAV_NAME,
+  tabHome: 'Start',
+  tabMore: 'Meer',
   tabAgenda: 'Agenda',
   tabReserve: 'Boeken',
   tabHistory: 'Historie',
@@ -60,8 +62,8 @@ const UI = {
   adminDrives: 'Ritten',
 } as const;
 
-/** The seven tabs of the bar, by the words on them (a count may follow the name; see expectTabsFit). */
-const ALL_TABS = [UI.tabAgenda, UI.tabReserve, 'Inbox', 'Ritten', UI.tabHistory, UI.tabCar, UI.tabAccount];
+/** The five places of the bar, by the words on them (a count may follow the name; see expectTabsFit). */
+const ALL_TABS = [UI.tabHome, UI.tabAgenda, UI.tabReserve, 'Ritten', UI.tabMore];
 
 /**
  * Both projects use the same database, and two reservations may not overlap, so each project
@@ -98,13 +100,13 @@ test('the other screens fit the phone: Inbox, Account, Traffic tickets and the a
   await expect(mainNav).toBeVisible();
 
   await test.step('Inbox', async () => {
-    await mainNav.getByRole('link', { name: SCREENS.inboxTab }).click();
+    await viaMore(page, SCREENS.inboxTab);
     await expect(page.getByRole('heading', { name: SCREENS.inboxIncoming })).toBeVisible();
     await expectNoHorizontalScroll(page, 'inbox');
   });
 
   await test.step('Account', async () => {
-    await mainNav.getByRole('link', { name: UI.tabAccount, exact: true }).click();
+    await viaMore(page, UI.tabAccount);
     await expect(page.getByRole('heading', { name: SCREENS.accountTitle, exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: SCREENS.signOut })).toBeVisible();
     await expectNoHorizontalScroll(page, 'account');
@@ -156,7 +158,7 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await expect(mainNav).toBeVisible();
   });
 
-  await test.step('all seven tabs fit in the bar', async () => {
+  await test.step('all five places fit in the bar', async () => {
     await expectTabsFit(page, 'tab bar', ALL_TABS);
     await expectNoHorizontalScroll(page, 'tab bar');
   });
@@ -200,7 +202,7 @@ test('sign in, reserve, register km from the card, open History and the admin pa
   });
 
   await test.step('open History', async () => {
-    await mainNav.getByRole('link', { name: UI.tabHistory, exact: true }).click();
+    await viaMore(page, UI.tabHistory);
     await expect(page.getByRole('heading', { name: UI.history })).toBeVisible();
     await expect(reservationCard()).toContainText(UI.drivenByMe);
     await expectNoHorizontalScroll(page, 'history');
@@ -233,7 +235,7 @@ test('sign in, reserve, register km from the card, open History and the admin pa
 
   await test.step('the Car tab asks for the APK date and offers the damage form (nothing is saved here)', async () => {
     // Nothing is created: both projects share one database, and the APK date and the damage list are shared by everybody.
-    await mainNav.getByRole('link', { name: UI.tabCar, exact: true }).click();
+    await viaMore(page, UI.tabCar);
     await expect(page.getByRole('heading', { name: UI.car, exact: true })).toBeVisible();
     await expect(page.getByText(UI.apkNotSet, { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: UI.reportDamage })).toBeVisible();
@@ -241,8 +243,8 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await expect(page.getByLabel(UI.whereOnCar)).toBeVisible();
     await expect(page.getByLabel(UI.damageDescription, { exact: true })).toBeVisible();
     await expect(page.getByText(UI.noDamage, { exact: true })).toBeVisible();
-    // With the Car tab current, every label still fits its tab.
-    await expect(mainNav.getByRole('link', { name: UI.tabCar, exact: true })).toHaveAttribute('aria-current', 'page');
+    // The Car page is under Meer, so Meer is the place that is lit, and every label still fits its tab.
+    await expect(mainNav.getByRole('link', { name: /^Meer/ })).toHaveAttribute('aria-current', 'page');
     await expectTabsFit(page, 'tab bar on the Car tab', ALL_TABS);
     await expectNoHorizontalScroll(page, 'car');
   });

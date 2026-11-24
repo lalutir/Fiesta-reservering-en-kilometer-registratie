@@ -131,6 +131,17 @@ export function setBusy(container, busy) {
   for (const button of container.querySelectorAll('button')) button.disabled = busy;
 }
 
+/**
+ * The row of buttons (.actions) that a click came from. Read it from the event FIRST: after the first await,
+ * for instance a confirm sheet, a browser has already cleared event.currentTarget.
+ * @param {Event} event
+ * @returns {Element | null}
+ */
+export function actionBar(event) {
+  const target = event.currentTarget;
+  return target instanceof Element ? target.closest('.actions') : null;
+}
+
 let fieldSeq = 0;
 
 /**
@@ -195,7 +206,7 @@ export function field(label, control, hint) {
  * @param {string | null} iso initial instant (UTC ISO) or null for empty
  * @param {string} tz
  * @param {{ optional?: boolean, hint?: string }} [opts] optional = may be left empty (isEmpty() tells)
- * @returns {Field & { getIso: () => string | null, setIso: (iso: string) => void, isEmpty: () => boolean, onInput: (fn: () => void) => void }}
+ * @returns {Field & { getIso: () => string | null, setIso: (iso: string) => void, isEmpty: () => boolean, onInput: (fn: () => void) => void, controls: { date: HTMLInputElement, time: HTMLInputElement } }}
  */
 export function dateTimeField(label, iso, tz, opts = {}) {
   const required = !opts.optional;
@@ -229,6 +240,7 @@ export function dateTimeField(label, iso, tz, opts = {}) {
     getIso: () => localInputToUtc(date.value, time.value, tz),
     setIso,
     isEmpty: () => date.value === '' && time.value === '',
+    controls: { date, time },
     onInput: (fn) => {
       date.addEventListener('input', fn);
       time.addEventListener('input', fn);
@@ -504,23 +516,56 @@ export function driverSelect(users, meId, disabled) {
 }
 
 /**
- * A toast function that writes into the element `getEl` returns (null: nothing to show yet).
+ * A toast function that writes into the element `getEl` returns (null: nothing to show yet). An action adds one
+ * button after the message (Ongedaan maken): the toast then stays long enough to reach it and can be pressed, and
+ * no longer than the action works (action.ms), so the button is never on screen after it has stopped doing anything.
+ * The function also has dismiss(action): whoever made the offer calls it the moment the offer stops being true (undo.js,
+ * when the delete is sent early). It removes the toast only when that toast is still the one carrying the action.
  * @param {() => HTMLElement | null} getEl
- * @returns {(message: string, isError?: boolean) => void}
+ * @returns {import('./api.js').Toast}
  */
 export function toaster(getEl) {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
-  return (message, isError = false) => {
+  /** The action of the toast that is on screen (undefined: nothing, or a message without one). */
+  let shown = /** @type {import('./api.js').ToastAction | undefined} */ (undefined);
+  const hide = () => {
+    shown = undefined;
+    getEl()?.classList.remove('show');
+  };
+  /** @type {import('./api.js').Toast} */
+  const toast = (message, isError = false, action) => {
     const el = getEl();
     if (!el) return;
-    el.textContent = message;
-    el.className = isError ? 'toast show error' : 'toast show';
+    el.replaceChildren(h('span', { class: 'toast-text', text: message }));
+    if (action) {
+      el.appendChild(
+        h('button', {
+          class: 'toast-action',
+          type: 'button',
+          onclick: () => {
+            clearTimeout(timer);
+            hide();
+            action.run();
+          },
+          text: action.label,
+        }),
+      );
+    }
+    el.className = `toast show${isError ? ' error' : ''}${action ? ' has-action' : ''}`;
+    shown = action;
     clearTimeout(timer);
     // An error says what to fix, so it stays long enough to read and act on. A longer
     // message (a saved note with the note tip added) gets more time, about 70 ms a character.
-    timer = setTimeout(() => getEl()?.classList.remove('show'), isError ? 8000 : Math.max(4000, message.length * 70));
+    timer = setTimeout(hide, isError ? 8000 : (action?.ms ?? Math.max(action ? 6500 : 4000, message.length * 70)));
   };
+  toast.dismiss = (action) => {
+    // Another message has replaced the offer (or it was pressed or has timed out): that toast is not ours to take away.
+    if (shown !== action) return;
+    clearTimeout(timer);
+    hide();
+  };
+  return toast;
 }
 
 /**

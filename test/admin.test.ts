@@ -164,9 +164,10 @@ test('admin page: km state and notes per reservation, the pending km per person,
       // ------------------- register km for someone else, from the row of their reservation
       const bensRow = all(pendingTable(), 'tbody tr').find((tr) => all(tr, 'td')[1]?.textContent === `${P.pendingReservation} #10`) as FakeElement;
       await byText(bensRow, 'button', P.newRecord).fire('click');
-      await until(() => all(root, 'form.editor').length === 1, 'the drive editor');
-      const editor = one(root, 'form.editor');
-      assert.equal(one(editor, 'h2').textContent, P.newRecord);
+      await until(() => all(dom.body, 'form.editor').length === 1, 'the drive editor');
+      const editor = one(dom.body, 'form.editor');
+      // The editor is a drawer: the title is the drawer's, and the form is inside it.
+      assert.equal(one(dom.body, 'dialog.drawer .sheet-title').textContent, P.newRecord);
       assert.equal(control(fieldRow(editor, S.usage.driver)).value, String(BEN.id), 'the person of that reservation is the driver');
       assert.equal(control(fieldRow(editor, `${S.usage.reservation} #`)).value, '10', 'linked to it');
       assert.deepEqual([dateTime(fieldRow(editor, S.usage.start)).date.value, dateTime(fieldRow(editor, S.usage.start)).time.value], ['2026-06-14', '19:20'], "the reservation's own start");
@@ -191,14 +192,14 @@ test('admin page: km state and notes per reservation, the pending km per person,
         userId: BEN.id,
         reservationId: 10,
       });
-      await until(() => all(root, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close');
+      await until(() => all(dom.body, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close');
 
       // -------------------------------------- finish someone's open drive from the list
       const draftRow = all(pendingTable(), 'tbody tr').find((tr) => all(tr, 'td')[1]?.textContent === P.pendingDraft) as FakeElement;
       await byText(draftRow, 'button', S.edit).fire('click');
-      await until(() => all(root, 'form.editor').length === 1, 'the editor for the open drive');
-      const finish = one(root, 'form.editor');
-      assert.equal(one(finish, 'h2').textContent, `${P.editTitle} #9`);
+      await until(() => all(dom.body, 'form.editor').length === 1, 'the editor for the open drive');
+      const finish = one(dom.body, 'form.editor');
+      assert.equal(one(dom.body, 'dialog.drawer .sheet-title').textContent, `${P.editTitle} #9`);
       assert.equal(control(fieldRow(finish, S.usage.odometerStart)).value, '41120');
       const end = dateTime(fieldRow(finish, S.usage.end));
       assert.deepEqual([end.date.value, end.time.value], ['', ''], 'the end is still open');
@@ -219,7 +220,7 @@ test('admin page: km state and notes per reservation, the pending km per person,
         userId: ANNA.id,
         reservationId: 7,
       });
-      await until(() => all(root, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close after finishing');
+      await until(() => all(dom.body, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close after finishing');
 
       // ------------------------ whose kilometres: shown in the Drives table, and the admin can change it
       const usageRows = (): FakeElement[] => {
@@ -236,8 +237,8 @@ test('admin page: km state and notes per reservation, the pending km per person,
       assert.equal(cells(13)[5], `${S.usage.km(120)} · ${S.usage.kmOwnerTogether}`);
 
       await byText(rowOf(12), 'button', S.edit).fire('click');
-      await until(() => all(root, 'form.editor').length === 1, 'the editor for the drive');
-      const owned = one(root, 'form.editor');
+      await until(() => all(dom.body, 'form.editor').length === 1, 'the editor for the drive');
+      const owned = one(dom.body, 'form.editor');
       assert.equal(one(owned, 'label.check input').checked, true);
       assert.equal(control(fieldRow(owned, S.usage.kmWhose)).value, `person:${ANNA.id}`);
       assert.ok(fieldRow(owned, S.usage.noteRequired), 'the note is required while the kilometres are not the driver\'s own');
@@ -253,7 +254,7 @@ test('admin page: km state and notes per reservation, the pending km per person,
       // The server refuses (say the person was deactivated meanwhile): the editor stays open and the refusal shows
       // on the choice itself and in the form message, not as a silent failure.
       await until(() => !one(owned, 'p.form-error').hidden, 'the refusal to show');
-      assert.equal(all(root, 'form.editor').length, 1, 'the editor stays open');
+      assert.equal(all(dom.body, 'form.editor').length, 1, 'the editor stays open');
       assert.equal(errorOf(fieldRow(owned, S.usage.kmWhose)), S.fieldErrors.unknown_user);
       assert.equal(one(owned, 'p.form-error').textContent, S.errors.validation_failed);
 
@@ -264,12 +265,12 @@ test('admin page: km state and notes per reservation, the pending km per person,
       const changed = api.writes()[4] as Json;
       assert.equal(`${changed.method} ${changed.path}`, 'PATCH /api/usage/12');
       assert.deepEqual(changed.body, refused.body, 'the second attempt sends the same change');
-      await until(() => all(root, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close after the accepted change');
+      await until(() => all(dom.body, 'form.editor').length === 0 && toastEl.textContent === A.usage.saved, 'the editor to close after the accepted change');
 
       // Giving the kilometres back to the driver has to be said in the request, since "self" is otherwise left out of it.
       await byText(rowOf(12), 'button', S.edit).fire('click');
-      await until(() => all(root, 'form.editor').length === 1, 'the editor for the drive once more');
-      const handBack = one(root, 'form.editor');
+      await until(() => all(dom.body, 'form.editor').length === 1, 'the editor for the drive once more');
+      const handBack = one(dom.body, 'form.editor');
       const notMine = one(handBack, 'label.check input');
       assert.equal(notMine.checked, true, 'the list still says these are Anna\'s kilometres');
       notMine.checked = false;
@@ -279,7 +280,7 @@ test('admin page: km state and notes per reservation, the pending km per person,
       const back = api.writes()[5] as Json;
       assert.equal(`${back.method} ${back.path}`, 'PATCH /api/usage/12');
       assert.deepEqual([back.body.kmFor, back.body.kmUserId, back.body.userId], ['self', null, BEN.id]);
-      await until(() => all(root, 'form.editor').length === 0, 'the editor to close after the hand-back');
+      await until(() => all(dom.body, 'form.editor').length === 0, 'the editor to close after the hand-back');
     } finally {
       delete (globalThis as Json)['location'];
     }
