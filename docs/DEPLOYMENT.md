@@ -940,6 +940,35 @@ rules apply as for the earlier upgrades, with another copy,
   and with Verdana as a wide stand-in), and the installed app picking up
   `car-static-v6`.
 
+### Frontend redesign (no database change)
+
+The member app and the admin page were redesigned (see [DESIGN.md](DESIGN.md)). Nothing on the server changed: no
+migration, no new setting, no new route, no change to the Docker image, the compose file or the Caddyfile, and no
+`pre-migrate-v*.db` copy is written for this update. What a phone notices:
+
+- The service worker cache is now `car-static-v8` (it was `car-static-v7`). The first visit after the update fetches the
+  new shell (the worker is network first) and the old cache is deleted when the new worker activates. A phone that is
+  offline at that moment keeps the old shell until the next visit that has a connection.
+- The fonts are the system fonts: there is no font file to serve, no `.woff2` type to configure and no request to a font
+  host. The Content-Security-Policy is unchanged.
+- The manifest no longer locks the orientation, and its colours (and the icons) have the new paper and ink look. An
+  installed app may keep the old icon until it is installed again; that does not affect how it works.
+- The theme choice (Systeem, Licht, Donker) and unsent form input are kept in the browser of the phone (`localStorage`,
+  keys `car:theme` and `draft:v1:*`). Nothing of that is on the server or in a backup; signing out clears the unsent input.
+- A launch with an empty address opens Start (`#/home`); every other address, including every notification, opens what it
+  opened before.
+
+**Going back:** deploy the previous image. The previous worker restores `car-static-v7` and drops `car-static-v8` on its
+first activation, and the phones fetch the old shell (network first). The two entries in `localStorage` are ignored by the old
+app, and the database is untouched, so there is nothing to restore.
+
+**Checklist after the update:** [ ] open the app on a phone: Start shows who has the car; [ ] Boeken is in the bar and
+opens the reservation form; [ ] Meer lists Inbox, Historie, Auto and Account; [ ] choose Donker and reload: it stays dark
+without a white flash; [ ] open `/admin/` on a computer: four sections in a sidebar.
+
+**Not verified:** the installed app on a real Android or iOS phone, the shell served by Caddy with a real certificate, real
+push delivery, a screen reader, and Docker (it runs in CI only).
+
 ### Switching things off
 
 - Reminders and every other push (a new fill-up, and everything somebody else does on your behalf):

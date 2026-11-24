@@ -83,7 +83,7 @@ plus an admin page for the person who manages it.
   cleared by *Add the missing drive*, by correcting a reading, or by **explaining** it with a note
   (the driver or fueler at either end, or an admin). A fill-up now needs its odometer reading.
   It is information only: the fuel split, the kilometre totals and every save are unchanged.
-- **Car tab.** A seventh tab for the car itself. **Damage reports:** anybody files one with the
+- **Car tab.** The car itself has its own page, Auto, under *Meer*. **Damage reports:** anybody files one with the
   day it was first noticed, who noticed it (you by default, somebody else, or unknown), where on
   the car (a fixed list) and a description. Everybody sees every report; the person who filed it or
   an admin edits and deletes it; **anybody can mark one repaired** (with the day and an optional
@@ -117,6 +117,11 @@ plus an admin page for the person who manages it.
 - **Zero runtime dependencies.** One Node 22 process using `node:http` and the built-in
   `node:sqlite`; TypeScript and ESLint are the only (dev) dependencies. This keeps it small
   enough for the cheapest cloud server and easy to keep up to date.
+- **A frontend without a build step.** The member app and the admin page are plain ES modules with one stylesheet of
+  custom properties (paper, ink and one signal yellow, light and dark, with a Systeem / Licht / Donker choice), the system
+  fonts, one inline-SVG icon set and a small set of shared components (`public/ui.js`). The bar has five places and a page
+  *Meer*, Start shows what matters right now, and from 768 px the bar is a rail. [docs/DESIGN.md](docs/DESIGN.md) says why
+  each choice was made, how the generated-UI look is avoided and which targets are smaller than 44 px.
 - **SQLite** in WAL mode on a volume: no database server, and a backup is a file copy.
 - **A draft is a normal drive row** with `status = 'draft'` and the start time as a placeholder end
   (the API shows `end: null`); database checks keep that placeholder from leaking into a finished
@@ -245,9 +250,13 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
 shared/     time.js: time zone, DST, calendar-month and calendar-date maths, and the Dutch date display;
             format.js: euro, litres, price per litre and kilometres as integers written the Dutch way.
             Both are used by the server and the browser
-public/     the PWA (vanilla JavaScript modules; calendar.js is the pure date maths of the Agenda views,
-            kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab)
-            and public/admin/ (admin page)
+public/     the PWA (vanilla JavaScript modules, no build step; calendar.js is the pure date maths of the Agenda
+            views, kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab;
+            nav.js the five places of the bar and the rail; ui.js and icons.js the shared components and the one
+            icon set; theme.js, drafts.js, undo.js and storage.js the theme choice, unsent form input and
+            "Ongedaan maken"; views/home.js the Start screen, views/more.js the page Meer)
+            and public/admin/ (admin page: admin.js, and table.js the sortable and filterable table)
+docs/       DEPLOYMENT.md, DESIGN.md (the design decisions), GLOSSARY.md (the Dutch vocabulary), third-party.md (the icon licence)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
@@ -305,8 +314,9 @@ npx playwright show-report          # after a failure: the report with traces an
 
 `e2e/` holds the suite. It signs in, creates a reservation, registers the kilometres from the
 reservation card, opens History, opens the Car tab (the APK prompt and the damage form; nothing is
-saved there) and loads `/admin/`, once at 390 px and once at 320 px wide. All seven tabs of the
-bar must be readable: each label has to lie inside its own tab (`expectTabsFit` in
+saved there) and loads `/admin/`, once at 390 px and once at 320 px wide; `e2e/layout.spec.ts` also looks at the
+rail and the admin dashboard at 768 and 1280 px. The page Meer is how the places that are not in the bar are
+reached (`viaMore` in `e2e/fixtures.ts`). All five places of the bar must be readable: each label has to lie inside its own tab (`expectTabsFit` in
 `e2e/fixtures.ts`; a failure there is a font size or padding to fix in `public/style.css`, not a
 check to loosen; it also runs on the Linux fonts of CI, which could not be tried locally). In
 every step the page must not scroll sideways, and the whole run must have no console errors,
@@ -322,6 +332,21 @@ cannot stay green because the guard went quiet. `scripts/container-check.mjs`, t
 `Docker` job runs against the container, is tested the same way by `test/container-check.test.ts`
 (inside `npm test`): it must pass against the real app and fail, naming the check, when the
 server breaks one promise.
+
+Four more specs look at what the design promises, in a real browser, at both phone widths. `e2e/touch-targets.spec.ts` measures
+every link, button and field on every key screen and on the four admin sections: at least 44 by 44 CSS px, apart from the
+exceptions that `docs/DESIGN.md` lists (the month cells, the checkbox, links inside text, the skip link), no text cut off by
+its own box, nothing past the right edge, and a long unbroken word in a ticket wraps instead of widening the page.
+`e2e/pwa.spec.ts` turns the service worker on (the rest of the suite blocks it): the shell is precached under the cache name of
+`public/sw.js`, the browser reads the manifest without a complaint, with the network gone the shell opens from the worker with the
+app's own message and *Opnieuw proberen* brings it back, and Systeem, Licht and Donker change the page and both `theme-color` metas.
+Chromium's installability verdict is deliberately not used: in the headless browser it answers "no errors" even for a manifest
+without icons, so `test/pwa.test.ts` pins what makes the app installable and only a phone can say whether it is offered.
+`e2e/states.spec.ts` makes the server fail or answer slowly on purpose (so it uses Playwright's plain test, not the guard, and checks
+for uncaught errors and requests to other sites by hand): every list screen shows what went wrong with *Opnieuw proberen*, one failing
+request on Start costs only its own block, and a slow screen shows a loading status first. `e2e/undo.spec.ts` files a damage report and
+deletes it: it leaves the screen at once without a request, *Ongedaan maken* brings it back (and a reload still shows it), and the
+delete is sent when the person walks to another place. They share `e2e/session.ts` for signing in.
 
 The suite uses its own port (4173) and data folder. If the browser Playwright wants cannot be
 installed, `E2E_CHROMIUM_PATH` can point at a Chromium or Chrome you already have (a local escape
@@ -445,7 +470,7 @@ backups, updates and a monthly cost estimate (about $4-6).
   are simply not in the chain. A phone that still runs an old copy of the app needs one reload before
   it can save a fill-up (the old form does not send the reading). The odometer of a fill-up that a
   payment depends on can still be corrected, since no money moves; its other fields stay locked.
-- **Car tab.** The tab bar now has seven tabs, so on a phone narrower than 420 px the labels are a
+- **Car tab.** (Superseded by the redesign: the bar has five places and a page Meer, see [docs/DESIGN.md](docs/DESIGN.md).) The tab bar then had seven tabs, so on a phone narrower than 420 px the labels are a
   little smaller (10.6 px) and the tab you are on is marked by colour and the bar above it, not by
   bold text (a bold label is the widest one; checked at 320 to 390 px in the system font and in
   Verdana, never on a real phone). It is a stop-gap until the navigation is redesigned. There is no

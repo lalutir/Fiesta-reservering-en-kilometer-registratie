@@ -18,8 +18,12 @@ import {
   saveErrorText,
   showFieldErrors,
 } from '../dom.js';
+import { persistForm, restoredLine } from '../drafts.js';
+import { icon } from '../icons.js';
 import { gapDefaults, kmCheckSection, kmMarkers, odometerContext, odometerNote, readingBefore } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
+import { button, confirmSheet, emptyState, linkButton } from '../ui.js';
+import { deferDelete, isPending, pendingIds } from '../undo.js';
 
 // Contains a form, so it is not re-rendered in the background.
 export const live = false;
@@ -122,6 +126,9 @@ export async function render(app, route) {
   ]);
   /** @type {import('../api.js').OdometerChain} */
   const chain = odometer ?? { window: { from: '', to: '' }, readings: [], items: [], latest: null };
+  // A draft that was deleted a moment ago (and can still be taken back) is not on the screen, and does not stand in the way of a new drive.
+  const goneDrafts = pendingIds('draft');
+  list.items = list.items.filter((u) => !(u.status === 'draft' && goneDrafts.has(u.id)));
 
   // A drive I started and have not finished is what this form is for: open it in finish mode.
   const openDraft = list.items.find((u) => u.userId === me.id && u.status === 'draft') ?? null;
@@ -199,9 +206,35 @@ export async function render(app, route) {
   });
   linkNoteToOwner(kmOwner, fNote, note);
   driver.addEventListener('change', () => kmOwner.setDriver(Number(driver.value)));
-  const submit = h('button', { class: 'btn primary block', type: 'submit' });
+  const submit = button({ label: S.usage.submit, variant: 'primary', block: true, type: 'submit' });
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  const draftLink = h('a', { class: 'btn small', href: '#/usage', hidden: true }, S.usage.pending.finish);
+  const draftLink = linkButton({ label: S.usage.pending.finish, href: '#/usage', small: true });
+  draftLink.hidden = true;
+  // A drive that arrives prefilled (from a reservation card or a gap) or that edits something shows what the link and the server say.
+  // Only a blank new drive keeps what was typed when the person leaves and comes back.
+  const prefilled = odoStart.value;
+  const unsent =
+    mode === 'new' && !gap && presetId === null
+      ? persistForm({
+          userId: me.id,
+          name: 'drive',
+          controls: {
+            driver,
+            reservation,
+            startDate: start.controls.date,
+            startTime: start.controls.time,
+            endDate: end.controls.date,
+            endTime: end.controls.time,
+            odometerStart: odoStart,
+            odometerEnd: odoEnd,
+            note,
+          },
+          onReset: () => {
+            syncSubmit();
+            showKmNote();
+          },
+        })
+      : null;
 
   const syncSubmit = () => {
     submit.textContent = submitLabel(mode, !end.isEmpty(), readNumber(odoEnd.value) !== null);
@@ -212,7 +245,7 @@ export async function render(app, route) {
 
   const showKmNote = () => kmNote.show(odometerContext(chain.readings, start.getIso() ?? existing?.start ?? nowIso, { drive: existing?.id ?? null }), readNumber(odoStart.value));
   // A new drive follows its start time: the prefilled reading is replaced only while nobody has typed over it.
-  let autoFilled = odoStart.value;
+  let autoFilled = prefilled;
   start.onInput(() => {
     if (mode === 'new' && !gap && odoStart.value === autoFilled) {
       const iso = start.getIso();
@@ -223,6 +256,46 @@ export async function render(app, route) {
   });
   odoStart.addEventListener('input', showKmNote);
   showKmNote();
+
+  /**
+   * Can a delete of this drive be taken back? Only when it tells nobody anything: my own drive that has not ended, with
+   * kilometres that are mine, and either no reservation or one of mine. Anything else asks first, because the person it
+   * concerns is told (see test/notify.test.ts).
+   * @param {import('../api.js').Usage} u
+   */
+  const undoable = (u) =>
+    u.status === 'draft' && u.userId === me.id && (u.kmFor ?? 'self') === 'self' && (u.reservationId === null || offered.find((r) => r.id === u.reservationId)?.userId === me.id);
+
+  /**
+   * Delete a drive: my own unfinished one disappears at once with "Ongedaan maken"; any other asks in a sheet first.
+   * @param {import('../api.js').Usage} u
+   * @param {() => void} afterwards what to show now that it is gone (back to the list, or the list again)
+   */
+  const removeDrive = async (u, afterwards) => {
+    if (undoable(u)) {
+      deferDelete({
+        key: `draft:${u.id}`,
+        message: S.undo.draft,
+        commit: (o) => del(`/api/usage/${u.id}`, o),
+        onUndo: () => void app.refresh(),
+        onError: (err) => {
+          app.toast(errorText(/** @type {Error} */ (err)), true);
+          void app.refresh();
+        },
+        toast: app.toast,
+      });
+      afterwards();
+      return;
+    }
+    if (!(await confirmSheet(u.status === 'draft' ? S.usage.confirmDeleteDraft : S.usage.confirmDelete, { confirmLabel: S.delete }))) return;
+    try {
+      await del(`/api/usage/${u.id}`);
+      app.toast(S.usage.deleted);
+    } catch (err) {
+      app.toast(errorText(/** @type {Error} */ (err)), true);
+    }
+    afterwards();
+  };
 
   const form = h(
     'form',
@@ -274,6 +347,7 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/usage/${existing.id}`, body);
           else await post('/api/usage', body);
+          unsent?.clear();
           const done = built.status === 'draft' ? S.usage.savedDraft : mode === 'draft' ? S.usage.finished : S.usage.saved;
           // A note is recommended, never required: an empty one only earns a friendly tip.
           app.toast(note.value.trim() === '' ? `${done} ${S.noteTip}` : done);
@@ -298,6 +372,7 @@ export async function render(app, route) {
       },
     },
     [
+      unsent ? restoredLine(unsent) : null,
       mode === 'draft' && existing
         ? h('p', { class: 'hint', text: S.usage.openDraft(fmtWhen(existing.start, app.tz)) })
         : null,
@@ -316,26 +391,13 @@ export async function render(app, route) {
       draftLink,
       h('div', { class: 'actions' }, [
         submit,
-        existing ? h('a', { class: 'btn', href: '#/usage' }, S.cancel) : null,
+        existing ? linkButton({ label: S.cancel, href: '#/usage' }) : null,
         mode === 'draft' && existing
-          ? h(
-              'button',
-              {
-                class: 'btn danger',
-                type: 'button',
-                onclick: async () => {
-                  if (!confirm(S.usage.confirmDeleteDraft)) return;
-                  try {
-                    await del(`/api/usage/${existing.id}`);
-                    app.toast(S.usage.deleted);
-                    app.navigate('#/usage');
-                  } catch (err) {
-                    app.toast(errorText(/** @type {Error} */ (err)), true);
-                  }
-                },
-              },
-              S.usage.deleteDraft,
-            )
+          ? button({
+              label: S.usage.deleteDraft,
+              variant: 'danger',
+              onclick: () => removeDrive(existing, () => app.navigate('#/usage')),
+            })
           : null,
       ]),
     ],
@@ -359,27 +421,8 @@ export async function render(app, route) {
       u.fuelLocked ? h('p', { class: 'hint', text: S.usage.fuelLocked }) : null,
       u.can.edit || u.can.delete
         ? h('div', { class: 'actions' }, [
-            u.can.edit ? h('a', { class: 'btn', href: `#/usage?edit=${u.id}` }, u.status === 'draft' ? S.usage.pending.finish : S.edit) : null,
-            u.can.delete
-              ? h(
-                  'button',
-                  {
-                    class: 'btn danger',
-                    type: 'button',
-                    onclick: async () => {
-                      if (!confirm(u.status === 'draft' ? S.usage.confirmDeleteDraft : S.usage.confirmDelete)) return;
-                      try {
-                        await del(`/api/usage/${u.id}`);
-                        app.toast(S.usage.deleted);
-                      } catch (err) {
-                        app.toast(errorText(/** @type {Error} */ (err)), true);
-                      }
-                      await app.refresh();
-                    },
-                  },
-                  S.delete,
-                )
-              : null,
+            u.can.edit ? linkButton({ label: u.status === 'draft' ? S.usage.pending.finish : S.edit, href: `#/usage?edit=${u.id}` }) : null,
+            u.can.delete ? button({ label: S.delete, variant: 'danger', onclick: () => removeDrive(u, () => void app.refresh()) }) : null,
           ])
         : null,
     ]);
@@ -388,32 +431,36 @@ export async function render(app, route) {
     // Fuel and costs and Traffic tickets are further places to go from here, so they sit next to the title where they are seen without scrolling past the form.
     h('div', { class: 'view-head' }, [
       h('h2', { text: mode === 'draft' ? S.usage.finishTitle : existing ? S.usage.editTitle : S.usage.logTitle }),
-      h('div', { class: 'actions' }, [
-        h('a', { class: 'btn small', href: '#/fuel' }, S.usage.fuelLink),
-        h('a', { class: 'btn small', href: '#/tickets' }, S.usage.ticketsLink),
-      ]),
+      h('div', { class: 'actions' }, [linkButton({ label: S.usage.fuelLink, href: '#/fuel', small: true }), linkButton({ label: S.usage.ticketsLink, href: '#/tickets', small: true })]),
     ]),
     pendingBanner(app, pending),
-    form,
-    // After the form, not before it: the findings can run to a screenful, and every link in them ("Add the missing drive",
-    // "Edit the earlier reading", "Finish the drive") opens this form, which must be what the person sees when it opens.
-    kmCheckSection(chain, { meId: me.id, isAdmin, tz: app.tz, hrefBase: '', toast: (message, isError) => app.toast(message, isError), onChange: () => app.refresh() }),
-    summary.items.length > 0 || (summary.together?.km ?? 0) > 0
-      ? h('section', { class: 'card' }, [
-          h('h3', { text: S.usage.kmTotals }),
-          h('ul', { class: 'totals' }, [
-            summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.meHead : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
-            // The shared pool is not anybody's: it is shown on its own line (split in the same ratio as the personal kilometres when fuel is paid).
-            summary.together && summary.together.km > 0
-              ? h('li', {}, [h('span', { text: S.usage.kmTogetherTotal }), h('span', { text: `${S.usage.km(summary.together.km)} · ${S.usage.trips(summary.together.trips)}` })])
-              : null,
-          ]),
-          h('p', { class: 'hint', text: S.usage.kmNote }),
-          summary.together && summary.together.km > 0 ? h('p', { class: 'hint', text: S.usage.kmTogetherNote }) : null,
-        ])
-      : null,
-    h('h2', { text: S.usage.recent }),
-    list.items.length === 0 ? h('p', { class: 'empty', text: S.usage.none }) : list.items.slice(0, 30).map(row),
+    // On a wide screen the form (with the kilometre check) and the drives are side by side; on a phone they follow each other.
+    h('div', { class: 'split' }, [
+      h('div', {}, [
+        form,
+        // After the form, not before it: the findings can run to a screenful, and every link in them ("Add the missing drive",
+        // "Edit the earlier reading", "Finish the drive") opens this form, which must be what the person sees when it opens.
+        kmCheckSection(chain, { meId: me.id, isAdmin, tz: app.tz, hrefBase: '', toast: app.toast, onChange: () => app.refresh() }),
+      ]),
+      h('div', {}, [
+        summary.items.length > 0 || (summary.together?.km ?? 0) > 0
+          ? h('section', { class: 'card' }, [
+              h('h3', { text: S.usage.kmTotals }),
+              h('ul', { class: 'totals' }, [
+                summary.items.map((s) => h('li', {}, [h('span', { text: s.userId === me.id ? S.meHead : s.userName }), h('span', { text: `${S.usage.km(s.km)} · ${S.usage.trips(s.trips)}` })])),
+                // The shared pool is not anybody's: it is shown on its own line (split in the same ratio as the personal kilometres when fuel is paid).
+                summary.together && summary.together.km > 0
+                  ? h('li', {}, [h('span', { text: S.usage.kmTogetherTotal }), h('span', { text: `${S.usage.km(summary.together.km)} · ${S.usage.trips(summary.together.trips)}` })])
+                  : null,
+              ]),
+              h('p', { class: 'hint', text: S.usage.kmNote }),
+              summary.together && summary.together.km > 0 ? h('p', { class: 'hint', text: S.usage.kmTogetherNote }) : null,
+            ])
+          : null,
+        h('h2', { text: S.usage.recent }),
+        list.items.length === 0 ? emptyState({ text: S.usage.none }) : list.items.slice(0, 30).map(row),
+      ]),
+    ]),
   ]);
 }
 
@@ -428,33 +475,37 @@ export function pendingBanner(app, pending) {
   const mine = pending.items[0];
   if (!mine || pending.count === 0) return null;
   const P = S.usage.pending;
+  // A draft that was deleted a moment ago (and can still be taken back) is not waiting for anything.
+  const drafts = mine.drafts.filter((d) => !isPending(`draft:${d.id}`));
+  const count = pending.count - (mine.drafts.length - drafts.length);
+  if (count <= 0) return null;
   // A reservation that already has a draft is the same piece of work as the draft: only the draft is listed.
   const reservations = mine.reservations.filter((r) => r.kmState !== 'draft');
   // A named region, not a live region: it is there when the page opens and does not change under the reader.
-  return h('section', { class: 'banner', 'aria-labelledby': 'pending-title' }, [
-    h('h3', { id: 'pending-title', text: P.title(pending.count) }),
-    h('p', { class: 'hint', text: P.intro }),
-    h('ul', { class: 'pending' }, [
-      mine.drafts.map((d) =>
-        h('li', { class: 'pending-row' }, [
-          h('div', { text: P.draft(fmtWhen(d.start, app.tz), d.odometerStart) }),
-          h('div', { class: 'actions' }, [h('a', { class: 'btn small primary', href: `#/usage?edit=${d.id}` }, P.finish)]),
-        ]),
-      ),
-      reservations.map((r) =>
-        h('li', { class: 'pending-row' }, [
-          h('div', { text: P.reservation(fmtRange(r.start, r.end, app.tz)) }),
-          r.note ? h('div', { class: 'note', text: r.note }) : null,
-          h('div', { class: 'actions' }, [
-            h('a', { class: 'btn small primary', href: `#/usage?res=${r.id}` }, P.register),
-            r.can.cancel
-              ? h(
-                  'button',
-                  {
-                    class: 'btn small',
-                    type: 'button',
+  return h('section', { class: 'banner warn', 'aria-labelledby': 'pending-title' }, [
+    icon('alert', 'banner-icon'),
+    h('div', { class: 'banner-body' }, [
+      h('h3', { id: 'pending-title', text: P.title(count) }),
+      h('p', { class: 'hint', text: P.intro }),
+      h('ul', { class: 'pending' }, [
+        drafts.map((d) =>
+          h('li', { class: 'pending-row' }, [
+            h('div', { text: P.draft(fmtWhen(d.start, app.tz), d.odometerStart) }),
+            h('div', { class: 'actions' }, [linkButton({ label: P.finish, href: `#/usage?edit=${d.id}`, small: true, variant: 'primary' })]),
+          ]),
+        ),
+        reservations.map((r) =>
+          h('li', { class: 'pending-row' }, [
+            h('div', { text: P.reservation(fmtRange(r.start, r.end, app.tz)) }),
+            r.note ? h('div', { class: 'note', text: r.note }) : null,
+            h('div', { class: 'actions' }, [
+              linkButton({ label: P.register, href: `#/usage?res=${r.id}`, small: true, variant: 'primary' }),
+              r.can.cancel
+                ? button({
+                    label: P.cancelUnused,
+                    small: true,
                     onclick: async () => {
-                      if (!confirm(P.confirmCancelUnused)) return;
+                      if (!(await confirmSheet(P.confirmCancelUnused, { confirmLabel: P.cancelUnused }))) return;
                       try {
                         await del(`/api/reservations/${r.id}`);
                         app.toast(P.cancelled);
@@ -463,13 +514,12 @@ export function pendingBanner(app, pending) {
                       }
                       await app.refresh();
                     },
-                  },
-                  P.cancelUnused,
-                )
-              : null,
+                  })
+                : null,
+            ]),
           ]),
-        ]),
-      ),
+        ),
+      ]),
     ]),
   ]);
 }

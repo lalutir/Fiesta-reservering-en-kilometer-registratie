@@ -3,8 +3,10 @@
 // drive log and the reservations; nothing here decides it. Reached from the Drives tab (it is not
 // a tab itself). Money is whole cents; nothing here uses floating point to decide an amount.
 import { del, get, patch, post } from '../api.js';
-import { dateTimeField, field, fmtWhen, focusFirstInvalid, formatCentsInput, formatEuro, h, setBusy, showFieldErrors } from '../dom.js';
+import { actionBar, dateTimeField, field, fmtWhen, focusFirstInvalid, formatCentsInput, formatEuro, h, setBusy, showFieldErrors } from '../dom.js';
+import { persistForm, restoredLine } from '../drafts.js';
 import { S, errorText } from '../strings.js';
+import { button, confirmSheet, emptyState, linkButton } from '../ui.js';
 import { parseDecimal } from './fuel.js';
 
 // Contains a form, so it is not re-rendered in the background.
@@ -56,7 +58,9 @@ export async function render(app, route) {
   const fAmount = field(S.tickets.amount, amount, S.tickets.amountHint);
   const fReason = field(S.tickets.reason, reason, S.tickets.reasonHint);
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  const submit = h('button', { class: 'btn primary block', type: 'submit' }, S.tickets.save);
+  const submit = button({ label: S.tickets.save, variant: 'primary', block: true, type: 'submit' });
+  // A new ticket keeps what was typed when the person leaves and comes back; an edit shows what the server has.
+  const unsent = existing ? null : persistForm({ userId: me.id, name: 'ticket', controls: { whenDate: when.controls.date, whenTime: when.controls.time, amount, reason } });
 
   /** After the view is rebuilt, focus goes back to the page heading rather than to nowhere. */
   const focusHeading = () => {
@@ -89,6 +93,7 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/tickets/${existing.id}`, body);
           else await post('/api/tickets', body);
+          unsent?.clear();
           app.toast(S.tickets.saved);
           if (existing) app.navigate('#/tickets');
           else {
@@ -107,25 +112,27 @@ export async function render(app, route) {
     },
     [
       h('h3', { text: existing ? S.tickets.editTitle : S.tickets.addTitle }),
+      unsent ? restoredLine(unsent) : null,
       when.row,
       fAmount.row,
       fReason.row,
       h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }),
       formError,
-      h('div', { class: 'actions' }, [submit, existing ? h('a', { class: 'btn', href: '#/tickets' }, S.cancel) : null]),
+      h('div', { class: 'actions' }, [submit, existing ? linkButton({ label: S.cancel, href: '#/tickets' }) : null]),
     ],
   );
 
   // --------------------------------------------------------------- the list
   /**
-   * Delete after asking, with the buttons disabled while the request runs, then reload the list.
+   * Delete after asking, with the buttons disabled while the request runs, then reload the list. A ticket delete tells the
+   * person who was named as the driver, and a notification cannot be taken back, so it asks (it is not an "Ongedaan maken").
    * @param {Event} event the click that started it
    * @param {import('../api.js').Ticket} ticket
    */
   const remove = async (event, ticket) => {
-    if (!confirm(S.tickets.confirmDelete)) return;
-    const target = event.currentTarget;
-    const bar = target instanceof Element ? target.closest('.actions') : null;
+    // Read before the question: afterwards the browser has cleared event.currentTarget.
+    const bar = actionBar(event);
+    if (!(await confirmSheet(S.tickets.confirmDelete, { confirmLabel: S.delete }))) return;
     if (bar) setBusy(bar, true);
     try {
       await del(`/api/tickets/${ticket.id}`);
@@ -156,10 +163,8 @@ export async function render(app, route) {
       h('div', { class: 'sub', text: S.tickets.enteredBy(t.createdBy === me.id ? S.you : t.createdByName) }),
       t.can.edit || t.can.delete
         ? h('div', { class: 'actions' }, [
-            t.can.edit ? h('a', { class: 'btn', href: `#/tickets?edit=${t.id}`, 'aria-label': S.tickets.editLabel(whenText) }, S.edit) : null,
-            t.can.delete
-              ? h('button', { class: 'btn danger', type: 'button', 'aria-label': S.tickets.deleteLabel(whenText), onclick: (/** @type {Event} */ e) => void remove(e, t) }, S.delete)
-              : null,
+            t.can.edit ? linkButton({ label: S.edit, href: `#/tickets?edit=${t.id}`, attrs: { 'aria-label': S.tickets.editLabel(whenText) } }) : null,
+            t.can.delete ? button({ label: S.delete, variant: 'danger', attrs: { 'aria-label': S.tickets.deleteLabel(whenText) }, onclick: (/** @type {Event} */ e) => remove(e, t) }) : null,
           ])
         : null,
     ]);
@@ -167,11 +172,12 @@ export async function render(app, route) {
 
   return h('div', { class: 'tickets-view' }, [
     h('h2', { text: S.tickets.title }),
-    h('p', {}, [h('a', { class: 'btn', href: '#/usage' }, S.tickets.back)]),
+    h('p', {}, [linkButton({ label: S.tickets.back, href: '#/usage' })]),
     h('p', { class: 'hint', text: S.tickets.intro }),
-    form,
-    h('h2', { text: S.tickets.list }),
-    h('p', { class: 'hint', text: S.tickets.followsLog }),
-    data.items.length === 0 ? h('p', { class: 'empty', text: S.tickets.none }) : data.items.map(card),
+    // On a wide screen the form is beside the list.
+    h('div', { class: 'split' }, [
+      h('div', {}, [form]),
+      h('div', {}, [h('h2', { text: S.tickets.list }), h('p', { class: 'hint', text: S.tickets.followsLog }), data.items.length === 0 ? emptyState({ text: S.tickets.none }) : data.items.map(card)]),
+    ]),
   ]);
 }

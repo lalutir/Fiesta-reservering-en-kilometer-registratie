@@ -28,6 +28,7 @@ export const S = {
   noteTip: 'Tip: een korte notitie helpt de anderen.',
 
   nav: {
+    home: 'Start',
     agenda: 'Agenda',
     reserve: 'Boeken',
     inbox: 'Inbox',
@@ -36,8 +37,97 @@ export const S = {
     car: 'Auto',
     account: 'Account',
     admin: 'Admin',
+    more: 'Meer',
     // The accessible name of the tab bar.
     label: 'Hoofdmenu',
+  },
+
+  /** The parts every screen is made of (public/ui.js): sheets, the confirm question, the sortable tables. */
+  ui: {
+    close: 'Sluiten',
+    confirmTitle: 'Weet je het zeker?',
+    confirm: 'Ja, doorgaan',
+    skipToContent: 'Naar de inhoud',
+    sortBy: (/** @type {string} */ column) => `Sorteren op ${column}`,
+    filter: 'Filteren',
+    filterPlaceholder: 'Zoek in de tabel',
+    noMatches: 'Niets gevonden met dit filter.',
+    rowCount: (/** @type {number} */ shown, /** @type {number} */ total) => (shown === total ? `${total} rijen` : `${shown} van ${total} rijen`),
+    unsaved: 'Niet-opgeslagen invoer teruggezet.',
+    unsavedClear: 'Opnieuw beginnen',
+  },
+
+  /** The choice between the phone's own theme and always light or dark (Meer and Account). */
+  theme: {
+    label: 'Weergave',
+    system: 'Systeem',
+    light: 'Licht',
+    dark: 'Donker',
+    hint: 'Systeem volgt de instelling van je telefoon.',
+    notSaved: 'Deze keuze kon niet worden onthouden en geldt tot je de pagina sluit.',
+  },
+
+  /** Deleting that can be taken back for a few seconds (public/undo.js). */
+  undo: {
+    action: 'Ongedaan maken',
+    restored: 'Teruggezet.',
+    damage: 'Schademelding verwijderd.',
+    explanation: 'Uitleg verwijderd.',
+    draft: 'Concept verwijderd.',
+  },
+
+  /** Start: what matters right now, in the order it matters. */
+  home: {
+    carNow: 'De auto nu',
+    driving: (/** @type {string} */ name) => `${name} is onderweg`,
+    drivingMe: 'Jij bent onderweg',
+    since: (/** @type {string} */ when) => `Sinds ${when}`,
+    hasIt: (/** @type {string} */ name) => `${name} heeft de auto`,
+    hasItMe: 'Jij hebt de auto',
+    reservedUntil: (/** @type {string} */ when) => `Gereserveerd tot ${when}`,
+    free: 'De auto is vrij',
+    nextIs: (/** @type {string} */ name, /** @type {string} */ when) => `Daarna: ${name}, ${when}`,
+    nothingPlanned: 'Er staat niets gepland.',
+    finishDrive: 'Rit afronden',
+    kmTitle: 'Kilometers te registreren',
+    answers: 'Antwoorden',
+    answersWaiting: (/** @type {number} */ n) => (n === 1 ? '1 voorstel wacht op jouw antwoord' : `${n} voorstellen wachten op jouw antwoord`),
+    answersOpen: 'Naar Inbox',
+    mine: 'Jouw volgende reservering',
+    mineNone: 'Je hebt niets gepland.',
+    mineCta: 'Reserveren',
+    money: 'Betalen en ontvangen',
+    youPay: 'Jij betaalt',
+    youGet: 'Jij krijgt',
+    to: (/** @type {string} */ name) => `Aan ${name}`,
+    from: (/** @type {string} */ name) => `Van ${name}`,
+    moneyNone: 'Je hebt niets open staan.',
+    openRequests: (/** @type {number} */ n) => (n === 1 ? '1 betaalverzoek staat open' : `${n} betaalverzoeken staan open`),
+    moneyOpen: 'Naar Historie',
+    damage: 'Schade',
+    damageOpen: (/** @type {number} */ n) => (n === 1 ? '1 openstaande schademelding' : `${n} openstaande schademeldingen`),
+    damageNewest: (/** @type {string} */ where, /** @type {string} */ date) => `Nieuwste: ${where}, gemeld op ${date}`,
+    damageNew: 'Nieuw',
+    toCar: 'Naar Auto',
+    quick: 'Snel erbij',
+    quickFuel: 'Tanken',
+    quickFuelSub: 'Leg een tankbeurt vast',
+    quickDamage: 'Schade melden',
+    quickDamageSub: 'Zodat de anderen het weten',
+    failed: (/** @type {string} */ what) => `${what} kon niet worden geladen.`,
+  },
+
+  /** The page Meer: the places that do not fit in the bar. */
+  more: {
+    title: 'Meer',
+    tabLabel: (/** @type {number} */ n) => `Meer, ${n} ${n === 1 ? 'wacht' : 'wachten'} op jouw antwoord`,
+    sub: {
+      inbox: 'Voorstellen en antwoorden',
+      history: 'Wie reed wanneer, en wat je nog moet betalen',
+      car: 'APK en schademeldingen',
+      account: 'Wachtwoord, herinneringen en installeren',
+      admin: 'Gebruikers, correcties en bewaartermijn',
+    },
   },
 
   login: {
@@ -327,8 +417,6 @@ export const S = {
     explainedHeading: (/** @type {number} */ n) => `Toegelicht (${n})`,
     explainedBy: (/** @type {string} */ who) => `Toegelicht door ${who}`,
     removeExplanation: 'Toelichting verwijderen',
-    confirmRemove: 'Deze toelichting verwijderen? Het item staat dan weer open.',
-    removed: 'Toelichting verwijderd.',
     showMore: (/** @type {number} */ n) => `Nog ${n} tonen`,
     // The link to add a missing drive pointed at a stretch that is not flagged any more (a reading changed since).
     stale: 'Dat stuk is niet meer gemarkeerd: er is ondertussen een stand gewijzigd. Het formulier is leeg.',

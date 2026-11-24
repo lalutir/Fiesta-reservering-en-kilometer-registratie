@@ -1,7 +1,8 @@
 import { del, get, post } from '../api.js';
 import { VIEWS, calendarHash, clampKey, keyLabel, keysBetween, monthGrid, monthLabel, parseCalendar, reservationDays, stepTarget, viewRange, windowKeys } from '../calendar.js';
-import { fmtRange, groupByDay, h, kmOwnerLabel, localDateKey, setBusy } from '../dom.js';
+import { actionBar, fmtRange, groupByDay, h, kmOwnerLabel, localDateKey, setBusy } from '../dom.js';
 import { S, errorText } from '../strings.js';
+import { button, confirmSheet, emptyState, linkButton, segmented } from '../ui.js';
 
 export const live = true;
 
@@ -62,13 +63,11 @@ export function reservationCard(app, r, past) {
 
   /**
    * Runs one action; the card's buttons stay disabled until the list is reloaded.
-   * @param {Event} event the click that started it
+   * @param {Element | null} bar the row of buttons the click came from (actionBar(event), read before any await)
    * @param {() => Promise<unknown>} action
    * @param {string} done
    */
-  const act = async (event, action, done) => {
-    const target = event.currentTarget;
-    const bar = target instanceof Element ? target.closest('.actions') : null;
+  const act = async (bar, action, done) => {
     if (bar) setBusy(bar, true);
     try {
       await action();
@@ -98,39 +97,31 @@ export function reservationCard(app, r, past) {
     r.note ? h('div', { class: 'note', text: r.note }) : null,
     km.line ? h('div', { class: `km-line ${km.state}`, text: km.line }) : null,
     h('div', { class: 'actions' }, [
-      r.can.approve
-        ? h('button', { class: 'btn primary', type: 'button', onclick: (/** @type {Event} */ e) => void act(e, () => post(`/api/reservations/${r.id}/approve`), S.agenda.approved) }, S.agenda.approve)
-        : null,
+      r.can.approve ? button({ label: S.agenda.approve, variant: 'primary', onclick: (/** @type {Event} */ e) => void act(actionBar(e), () => post(`/api/reservations/${r.id}/approve`), S.agenda.approved) }) : null,
       r.can.decline
-        ? h(
-            'button',
-            {
-              class: 'btn',
-              type: 'button',
-              onclick: (/** @type {Event} */ e) => {
-                // Declining cannot be undone and sits right next to Approve: ask first.
-                if (!confirm(S.agenda.confirmDecline)) return;
-                void act(e, () => post(`/api/reservations/${r.id}/decline`), S.agenda.declined);
-              },
+        ? button({
+            label: S.agenda.decline,
+            onclick: async (/** @type {Event} */ e) => {
+              const bar = actionBar(e);
+              // Declining tells the other person, cannot be undone and sits right next to Approve: ask first.
+              if (!(await confirmSheet(S.agenda.confirmDecline, { confirmLabel: S.agenda.decline }))) return;
+              void act(bar, () => post(`/api/reservations/${r.id}/decline`), S.agenda.declined);
             },
-            S.agenda.decline,
-          )
+          })
         : null,
-      km.action ? h('a', { class: 'btn primary', href: km.action.href }, km.action.label) : null,
-      r.can.edit ? h('a', { class: 'btn', href: `#/reserve/${r.id}` }, S.edit) : null,
+      km.action ? linkButton({ label: km.action.label, href: km.action.href, variant: 'primary' }) : null,
+      r.can.edit ? linkButton({ label: S.edit, href: `#/reserve/${r.id}` }) : null,
       r.can.cancel
-        ? h(
-            'button',
-            {
-              class: 'btn danger',
-              type: 'button',
-              onclick: (/** @type {Event} */ e) => {
-                if (!confirm(withdrawing ? S.agenda.confirmWithdraw : S.agenda.confirmCancel)) return;
-                void act(e, () => del(`/api/reservations/${r.id}`), withdrawing ? S.agenda.withdrawn : S.agenda.cancelled);
-              },
+        ? button({
+            label: withdrawing ? S.agenda.withdraw : S.agenda.cancelReservation,
+            variant: 'danger',
+            onclick: async (/** @type {Event} */ e) => {
+              const bar = actionBar(e);
+              // Cancelling takes the reservation away from everybody: a sheet with the action's own name on the yes button.
+              if (!(await confirmSheet(withdrawing ? S.agenda.confirmWithdraw : S.agenda.confirmCancel, { confirmLabel: withdrawing ? S.agenda.withdraw : S.agenda.cancelReservation }))) return;
+              void act(bar, () => del(`/api/reservations/${r.id}`), withdrawing ? S.agenda.withdrawn : S.agenda.cancelled);
             },
-            withdrawing ? S.agenda.withdraw : S.agenda.cancelReservation,
-          )
+          })
         : null,
     ]),
   ]);
@@ -158,17 +149,13 @@ function dayGroups(app, items, past) {
  * @param {import('../calendar.js').CalendarState} state
  */
 function viewSwitcher(app, state) {
-  return h(
-    'div',
-    { class: 'view-switch', role: 'group', 'aria-label': S.agenda.viewSwitchLabel },
-    VIEWS.map((view) =>
-      h(
-        'button',
-        { class: 'btn', type: 'button', 'aria-pressed': view === state.view ? 'true' : 'false', onclick: () => app.navigate(calendarHash(view, state.anchor)) },
-        S.agenda.views[view],
-      ),
-    ),
-  );
+  return segmented({
+    label: S.agenda.viewSwitchLabel,
+    value: state.view,
+    options: VIEWS.map((view) => ({ value: view, label: S.agenda.views[view] })),
+    extraClass: 'view-switch',
+    onChange: (view) => app.navigate(calendarHash(/** @type {import('../calendar.js').ViewName} */ (view), state.anchor)),
+  }).el;
 }
 
 /**
@@ -184,23 +171,14 @@ function periodNav(app, view, anchor, win, today) {
   /** @param {-1 | 1} direction */
   const step = (direction) => {
     const target = stepTarget(view, anchor, direction, win);
-    return h(
-      'button',
-      {
-        class: 'btn',
-        type: 'button',
-        disabled: target.disabled,
-        'aria-label': S.agenda.stepLabel[direction < 0 ? 'prev' : 'next'][view],
-        onclick: () => app.navigate(calendarHash(view, target.key)),
-      },
-      direction < 0 ? S.agenda.prev : S.agenda.next,
-    );
+    return button({
+      label: direction < 0 ? S.agenda.prev : S.agenda.next,
+      disabled: target.disabled,
+      attrs: { 'aria-label': S.agenda.stepLabel[direction < 0 ? 'prev' : 'next'][view] },
+      onclick: () => app.navigate(calendarHash(view, target.key)),
+    });
   };
-  return h('div', { class: 'cal-nav' }, [
-    step(-1),
-    h('button', { class: 'btn', type: 'button', onclick: () => app.navigate(calendarHash(view, today)) }, S.agenda.today),
-    step(1),
-  ]);
+  return h('div', { class: 'cal-nav' }, [step(-1), button({ label: S.agenda.today, onclick: () => app.navigate(calendarHash(view, today)) }), step(1)]);
 }
 
 /**
@@ -245,14 +223,19 @@ function daysView(app, view, state, items, win, today, nowIso) {
   return [
     h('h2', { class: 'cal-title', text: title }),
     periodNav(app, view, state.anchor, win, today),
-    keys.map((key) => {
-      const list = byDay.get(key) ?? [];
-      return h('section', { class: `day cal-day${key === today ? ' today' : ''}` }, [
-        // A single day is named by the h2 already.
-        view === 'day' ? null : h('h3', { class: 'day-heading', text: S.agenda.dayHeading(keyLabel(key, 'day'), key === today) }),
-        list.length === 0 ? h('p', { class: 'hint', text: S.agenda.nothingThisDay }) : list.map((r) => reservationCard(app, r, r.end < nowIso)),
-      ]);
-    }),
+    // The days of a week sit in two columns on a wide screen.
+    h(
+      'div',
+      { class: view === 'day' ? '' : 'cols' },
+      keys.map((key) => {
+        const list = byDay.get(key) ?? [];
+        return h('section', { class: `day cal-day${key === today ? ' today' : ''}` }, [
+          // A single day is named by the h2 already.
+          view === 'day' ? null : h('h3', { class: 'day-heading', text: S.agenda.dayHeading(keyLabel(key, 'day'), key === today) }),
+          list.length === 0 ? h('p', { class: 'hint', text: S.agenda.nothingThisDay }) : list.map((r) => reservationCard(app, r, r.end < nowIso)),
+        ]);
+      }),
+    ),
   ];
 }
 
@@ -324,8 +307,8 @@ export async function render(app, route) {
     switcher,
     h('h2', { text: S.agenda.upcoming }),
     upcoming.length === 0
-      ? h('div', { class: 'empty' }, [h('p', { text: S.agenda.nothingUpcoming }), h('a', { class: 'btn primary', href: '#/reserve' }, S.agenda.reserveCta)])
-      : dayGroups(app, upcoming, false),
+      ? emptyState({ text: S.agenda.nothingUpcoming, action: linkButton({ label: S.agenda.reserveCta, href: '#/reserve', variant: 'primary' }) })
+      : h('div', { class: 'cols' }, dayGroups(app, upcoming, false)),
     earlier.length > 0
       ? h('details', { class: 'earlier' }, [h('summary', { text: `${S.agenda.past} (${earlier.length})` }), dayGroups(app, earlier, true)])
       : null,

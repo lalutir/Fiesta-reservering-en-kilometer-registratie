@@ -244,9 +244,9 @@ test('every S.path the browser code reads exists in the dictionary', () => {
 
 // ------------------------------------------------------------------ tab bar
 
-test('every tab label is short enough for seven columns at 320 px (at most 8 characters)', () => {
-  for (const key of ['agenda', 'reserve', 'inbox', 'usage', 'history', 'car', 'account'] as const) {
-    assert.ok([...S.nav[key]].length <= 8, `S.nav.${key} "${S.nav[key]}" is longer than 8 characters`);
+test('every label of the bar is short enough for five columns at 320 px (at most 8 characters)', () => {
+  for (const key of ['home', 'agenda', 'reserve', 'usage', 'more'] as const) {
+    assert.ok([...S.nav[key]].length <= 8, S.nav[key] + ' (S.nav.' + key + ') is longer than 8 characters');
   }
   assert.ok(S.nav.label.length > 0, 'the tab bar has a Dutch accessible name');
 });

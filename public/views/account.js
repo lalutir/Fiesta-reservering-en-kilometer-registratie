@@ -1,6 +1,8 @@
 import { get, post } from '../api.js';
 import { field, h } from '../dom.js';
 import { S, errorText } from '../strings.js';
+import { themeCard } from '../theme.js';
+import { button as uiButton } from '../ui.js';
 
 export const live = false;
 
@@ -61,6 +63,19 @@ async function unsubscribeThisDevice() {
     if ('serviceWorker' in navigator && 'PushManager' in window) await dropSubscription();
   } catch {
     // signing out must always work
+  }
+}
+
+/**
+ * Sign out: stop reminders on this device first (while the server still knows whose it is), end the session, show the sign-in screen.
+ * @param {import('../api.js').App} app
+ */
+export async function signOut(app) {
+  try {
+    await Promise.race([unsubscribeThisDevice(), new Promise((resolve) => setTimeout(resolve, SIGN_OUT_WAIT_MS))]);
+    await post('/api/auth/logout');
+  } finally {
+    await app.signedOut(true);
   }
 }
 
@@ -138,7 +153,7 @@ async function remindersCard(app) {
 
   /** @param {string} label @param {() => Promise<void>} action @param {boolean} [primary] */
   const button = (label, action, primary = false) => {
-    const el = h('button', { class: primary ? 'btn primary' : 'btn', type: 'button', onclick: () => void guarded(el, action) }, label);
+    const el = uiButton({ label, variant: primary ? 'primary' : 'secondary', onclick: () => void guarded(el, action) });
     return el;
   };
 
@@ -194,7 +209,7 @@ export async function render(app) {
   const fCurrent = field(S.account.currentPassword, current);
   const fNext = field(S.account.newPassword, next);
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  const submit = h('button', { class: 'btn primary block', type: 'submit' }, S.account.savePassword);
+  const submit = uiButton({ label: S.account.savePassword, variant: 'primary', block: true, type: 'submit' });
 
   const form = h(
     'form',
@@ -227,23 +242,7 @@ export async function render(app) {
     [h('h3', { text: S.account.changePassword }), fCurrent.row, fNext.row, formError, submit],
   );
 
-  const signOut = h(
-    'button',
-    {
-      class: 'btn block',
-      type: 'button',
-      onclick: async () => {
-        try {
-          // Before the session ends, so the server still knows whose device this is.
-          await Promise.race([unsubscribeThisDevice(), new Promise((resolve) => setTimeout(resolve, SIGN_OUT_WAIT_MS))]);
-          await post('/api/auth/logout');
-        } finally {
-          await app.signedOut(true);
-        }
-      },
-    },
-    S.account.signOut,
-  );
+  const signOutButton = uiButton({ label: S.account.signOut, block: true, onclick: () => signOut(app) });
 
   const reminders = await remindersCard(app);
 
@@ -254,11 +253,13 @@ export async function render(app) {
       h('p', { class: 'hint', text: S.account.timeZone(app.tz) }),
       h('p', { class: 'hint', text: S.account.window(app.session.windowMonths) }),
     ]),
+    // The choice of Systeem, Licht or Donker (also on the page Meer and in the rail).
+    themeCard(app.toast),
     reminders,
     // Shown wherever the server has notifications on, also on a phone that cannot get them (it says why in the card above).
     reminders ? notificationsCard() : null,
     form,
-    signOut,
+    signOutButton,
     h('section', { class: 'card' }, [
       h('h3', { text: S.account.installTitle }),
       h('p', { text: S.account.installAndroid }),

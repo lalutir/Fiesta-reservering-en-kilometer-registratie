@@ -1,51 +1,153 @@
-/* Mobile-first styles for the app and the admin page. No inline styles anywhere (CSP). */
+/*
+ * Styles for the app and the admin page (one sheet, one set of tokens; docs/DESIGN.md says why).
+ * No inline styles anywhere: the CSP forbids them, so every look is a class here.
+ *
+ * Order: tokens, base, shell and navigation, components (buttons, fields, rows, banners, sheets, toast, tables),
+ * the screens, the admin dashboard, the wider layouts, reduced motion. Widths are rem, % or minmax(): nothing here
+ * is a fixed pixel width above a phone's (test/pwa.test.ts), except the data table that scrolls in its own box.
+ */
+
+/* ---- tokens ------------------------------------------------------------ */
 
 :root {
   color-scheme: light dark;
-  --bg: #f3f5f8;
-  --surface: #ffffff;
-  --text: #17202b;
-  --muted: #5a6677;
-  --border: #d3dae4;
+
+  /* colour: paper and ink, one signal yellow */
+  --bg: #f6f3ee;
+  --surface: #fffdf9;
+  --surface-2: #ece7dd;
+  --text: #1d1b17;
+  --muted: #5a5447;
+  --border: #d8d1c3;
   /* Edge of inputs and buttons: at least 3:1 against the surface (WCAG 1.4.11). */
-  --field-border: #7a8696;
-  --primary: #0b5cab;
-  --on-primary: #ffffff;
-  --danger: #b3261e;
+  --field-border: #857d6c;
+  --primary: #1d1b17;
+  --on-primary: #fffdf9;
+  /* The primary button under the pointer and while pressed: ink and paper are the same colour as the text, so it needs its own step. */
+  --primary-press: #3f3a30;
+  /* The signal colour: only the Boeken button and "the car is out". Never text on paper (1.5:1), always with ink on it. */
+  --accent: #f2c230;
+  --on-accent: #1d1b17;
+  --accent-edge: #1d1b17;
+  --danger: #a3261c;
   --on-danger: #ffffff;
-  --ok-bg: #dff3e4;
-  --ok-text: #14532d;
-  --warn-bg: #fdf0c8;
-  --warn-text: #6b4a00;
-  --bad-bg: #fbe0de;
-  --bad-text: #7a1712;
-  --off-bg: #e6e9ee;
-  --off-text: #3f4957;
-  --tabs-h: 60px;
+  --ok-bg: #e2eee0;
+  --ok-text: #1d5c31;
+  --warn-bg: #f8e9be;
+  --warn-text: #7a4a00;
+  --bad-bg: #f7ddd9;
+  --bad-text: #a3261c;
+  --off-bg: #e4dfd3;
+  --off-text: #4a453a;
+  --focus: #1d1b17;
+  --link: #1d1b17;
+  --scrim: rgb(29 27 23 / 0.5);
+
+  /* type */
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.875rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: 1.75rem;
+
+  /* space, radius, motion */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --r-1: 4px;
+  --r-2: 8px;
+  --r-3: 12px;
+  --r-pill: 999px;
+  --tap: 2.75rem;
+  --tabs-h: 3.75rem;
+  --rail-w: 13rem;
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* elevation: hairlines carry the structure; only what floats over the page has a shadow */
+  --shadow-sheet: 0 -6px 24px rgb(29 27 23 / 0.18);
+  --shadow-toast: 0 6px 18px rgb(29 27 23 / 0.22);
 }
 
+/* Dark: the phone asks for it (and the person did not choose Licht) ... */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f141b;
-    --surface: #182029;
-    --text: #e8edf3;
-    --muted: #9aa7b6;
-    --border: #2c3744;
-    --field-border: #6b7a8c;
-    --primary: #5aa2ee;
-    --on-primary: #08121e;
-    --danger: #ff8a80;
-    --on-danger: #2b0b09;
-    --ok-bg: #173a24;
-    --ok-text: #b6e8c4;
-    --warn-bg: #3d3210;
+  :root:not([data-theme='light']) {
+    --bg: #14130f;
+    --surface: #1e1c17;
+    --surface-2: #2a2720;
+    --text: #f1ede4;
+    --muted: #aaa392;
+    --border: #37332b;
+    --field-border: #8d8573;
+    --primary: #f1ede4;
+    --on-primary: #14130f;
+    --primary-press: #d5cfc0;
+    --accent: #f2c230;
+    --on-accent: #1d1b17;
+    --accent-edge: #f2c230;
+    --danger: #ffc4bc;
+    --on-danger: #3a0d09;
+    --ok-bg: #1b3322;
+    --ok-text: #b3e2bf;
+    --warn-bg: #3a2f10;
     --warn-text: #f1d98b;
-    --bad-bg: #4a1f1c;
-    --bad-text: #ffc9c4;
-    --off-bg: #2a3340;
-    --off-text: #c3ccd8;
+    --bad-bg: #43201c;
+    --bad-text: #ffc4bc;
+    --off-bg: #2f2b24;
+    --off-text: #c9c2b2;
+    --focus: #f2c230;
+    --link: #f1ede4;
+    --scrim: rgb(0 0 0 / 0.62);
+    --shadow-sheet: 0 -6px 24px rgb(0 0 0 / 0.5);
+    --shadow-toast: 0 6px 18px rgb(0 0 0 / 0.5);
   }
 }
+
+/* ... or the person chose Donker (the same values; test/design.test.ts keeps the two blocks equal). */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #14130f;
+  --surface: #1e1c17;
+  --surface-2: #2a2720;
+  --text: #f1ede4;
+  --muted: #aaa392;
+  --border: #37332b;
+  --field-border: #8d8573;
+  --primary: #f1ede4;
+  --on-primary: #14130f;
+  --primary-press: #d5cfc0;
+  --accent: #f2c230;
+  --on-accent: #1d1b17;
+  --accent-edge: #f2c230;
+  --danger: #ffc4bc;
+  --on-danger: #3a0d09;
+  --ok-bg: #1b3322;
+  --ok-text: #b3e2bf;
+  --warn-bg: #3a2f10;
+  --warn-text: #f1d98b;
+  --bad-bg: #43201c;
+  --bad-text: #ffc4bc;
+  --off-bg: #2f2b24;
+  --off-text: #c9c2b2;
+  --focus: #f2c230;
+  --link: #f1ede4;
+  --scrim: rgb(0 0 0 / 0.62);
+  --shadow-sheet: 0 -6px 24px rgb(0 0 0 / 0.5);
+  --shadow-toast: 0 6px 18px rgb(0 0 0 / 0.5);
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+/* ---- base -------------------------------------------------------------- */
 
 *,
 *::before,
@@ -66,57 +168,63 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font: 400 var(--fs-md) / 1.5 var(--font);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
   overflow-x: hidden;
 }
 
 h1,
 h2,
-h3 {
+h3,
+h4 {
   line-height: 1.2;
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--s-2);
+  font-weight: 700;
+  /* Headings and labels break between words (and at a hyphen they already have), never inside a Dutch word. */
+  hyphens: manual;
 }
 h2 {
-  font-size: 1.2rem;
-  margin-top: 1.2rem;
+  font-size: var(--fs-xl);
+  letter-spacing: -0.01em;
+  margin-top: var(--s-5);
 }
 h3 {
-  font-size: 1rem;
+  font-size: var(--fs-md);
 }
 p {
-  margin: 0.4rem 0;
+  margin: var(--s-2) 0;
+}
+/* Running text in Dutch is hyphenated at the syllable ("verkeers-boete") when a line is too short for the word. */
+p,
+.note,
+.sub,
+.hint,
+.damage-text,
+.row-sub {
+  hyphens: auto;
 }
 a {
-  color: var(--primary);
+  color: var(--link);
+  text-underline-offset: 0.18em;
 }
 img {
   max-width: 100%;
 }
+strong {
+  font-weight: 700;
+}
 
 .hint {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 .center {
   text-align: center;
 }
-.empty {
-  color: var(--muted);
-  text-align: center;
-  padding: 1rem 0;
-}
-.empty .btn {
-  margin-top: 8px;
-}
 .noscript {
-  padding: 1rem;
+  padding: var(--s-4);
   text-align: center;
-}
-/* Direct children of #app are the loading line and the start-up error card, shown before the shell exists. */
-.app > .card,
-.app > .empty {
-  margin: 16px;
 }
 .sr-only {
   position: absolute;
@@ -129,10 +237,24 @@ img {
   white-space: nowrap;
   border: 0;
 }
+/* The first thing a keyboard reaches: jumps over the navigation to the content. */
+.skip-link {
+  position: absolute;
+  left: var(--s-2);
+  top: -4rem;
+  z-index: 40;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-2);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.skip-link:focus {
+  top: var(--s-2);
+}
 
 /* One visible focus ring for everything that can take keyboard focus. */
 :focus-visible {
-  outline: 3px solid var(--primary);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 /* Programmatic landing spots (a view heading after navigation) are not controls: no ring. */
@@ -140,22 +262,37 @@ img {
   outline: none;
 }
 
-/* ---- shell ---------------------------------------------------------- */
+.icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+}
+
+/* Direct children of #app are the loading line and the start-up error card, shown before the shell exists. */
+.app > .card,
+.app > .empty,
+.app > .skeleton {
+  margin: var(--s-4);
+}
+
+/* ---- shell and navigation ------------------------------------------------ */
 
 .shell {
   min-height: 100dvh;
-  max-width: 640px;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
+}
+/* On a phone the rail is only a wrapper: the top bar and the tab bar are laid out on their own. */
+.rail {
+  display: contents;
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: calc(56px + env(safe-area-inset-top));
-  padding: calc(8px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) 8px calc(16px + env(safe-area-inset-left));
+  gap: var(--s-3);
+  min-height: calc(3.25rem + env(safe-area-inset-top));
+  padding: calc(var(--s-2) + env(safe-area-inset-top)) calc(var(--s-4) + env(safe-area-inset-right)) var(--s-2) calc(var(--s-4) + env(safe-area-inset-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -163,7 +300,7 @@ img {
   z-index: 5;
 }
 .topbar .title {
-  font-size: 1.1rem;
+  font-size: var(--fs-lg);
   margin: 0;
   /* The name of the app wraps between words only: next to a long name of a person it must not break inside "Gedeelde". */
   flex: 0 1 auto;
@@ -172,27 +309,16 @@ img {
 }
 .topbar .who {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
   min-width: 0;
-  /* Pushed to the right; a long name takes what is left and wraps. */
   margin-left: auto;
   text-align: right;
-}
-.admin-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 40px;
-  font-size: 0.85rem;
-  padding: 0 12px;
-  border: 1px solid var(--field-border);
-  border-radius: 8px;
-  text-decoration: none;
 }
 
 .view {
   flex: 1;
   min-width: 0;
-  padding: 4px calc(16px + env(safe-area-inset-right)) calc(var(--tabs-h) + 24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  padding: var(--s-1) calc(var(--s-4) + env(safe-area-inset-right)) calc(var(--tabs-h) + var(--s-6) + env(safe-area-inset-bottom)) calc(var(--s-4) + env(safe-area-inset-left));
 }
 
 .tabs {
@@ -200,120 +326,347 @@ img {
   left: 0;
   right: 0;
   bottom: 0;
-  max-width: 640px;
-  margin: 0 auto;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   z-index: 10;
 }
 .tab {
   position: relative;
   min-height: var(--tabs-h);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px 2px;
+  gap: 2px;
+  padding: var(--s-1) 2px;
   font-size: 0.72rem;
+  line-height: 1.2;
   text-align: center;
   text-decoration: none;
   color: var(--muted);
-  border-top: 3px solid transparent;
   min-width: 0;
 }
+.tab .icon {
+  width: 1.375rem;
+  height: 1.375rem;
+}
 .tab-label {
-  white-space: nowrap; /* never split "Inbox" over two lines on a 320px phone */
+  white-space: nowrap; /* never split "Agenda" over two lines on a 320px phone */
+  hyphens: manual;
 }
 .tab[aria-current='page'] {
-  color: var(--primary);
-  border-top-color: var(--primary);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 700;
+  box-shadow: inset 0 3px 0 var(--primary);
 }
+/* The one action that is always one tap away: reserve. It stands out of the bar, in the signal colour. */
+.tab-book {
+  color: var(--text);
+}
+.tab-book .tab-mark {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  margin-top: -1.25rem;
+  border-radius: var(--r-3);
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 2px solid var(--accent-edge);
+}
+.tab-book[aria-current='page'] {
+  box-shadow: none;
+}
+.tab-book[aria-current='page'] .tab-mark {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+.tab:focus-visible {
+  outline-offset: -3px; /* keep the ring inside the screen edge and the bar */
+}
+.tab-secondary,
+.rail-foot {
+  display: none;
+}
+@media (hover: hover) {
+  .tab:hover {
+    color: var(--text);
+  }
+}
+
 .badge {
   display: inline-block;
   min-width: 1.3em;
   padding: 0 0.35em;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--danger);
   color: var(--on-danger);
   font-size: 0.7rem;
+  font-weight: 700;
   line-height: 1.5;
   text-align: center;
 }
-/* The count floats at the top right of the label so it never squeezes the label in a narrow tab. */
+/* The count floats at the top right of the icon so it never squeezes the label in a narrow tab. */
 .tab .badge {
   position: absolute;
-  top: 6px;
-  left: calc(50% + 12px);
+  top: 0.3rem;
+  left: calc(50% + 0.6rem);
   white-space: nowrap; /* "12" must not break into two lines in a narrow tab */
 }
-/* Seven tabs: on a narrow phone each is under 56 px wide (45.7 px at 320), so the label is a little smaller and the
-   count sits closer in. The tab you are on is marked by its colour and the bar above it, not by a heavier weight: a bold
-   label is the widest one, and on a phone whose font is wide (measured with Verdana at 320 px) it would not fit. */
-@media (max-width: 420px) {
-  .tab {
-    padding: 4px 0;
-    font-size: 0.66rem;
+
+/* ---- buttons ------------------------------------------------------------ */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: var(--tap);
+  /* Vertical padding and centred text only matter for a label that wraps on a narrow phone. */
+  padding: 6px var(--s-4);
+  text-align: center;
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  hyphens: manual;
+  /* A label breaks between words, never inside one (the page default lets a long name break anywhere). */
+  overflow-wrap: normal;
+  transition: background-color var(--dur-1) var(--ease);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: progress; /* a disabled button means a request is in flight */
+}
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.btn.block {
+  display: flex;
+  width: 100%;
+}
+.btn.small {
+  min-height: 2.25rem;
+  padding: 4px var(--s-3);
+  font-size: var(--fs-sm);
+}
+.btn.icon-btn {
+  min-width: var(--tap);
+  padding: 0;
+}
+/* Hover only where there is a real pointer, so a tap does not leave a sticky hover on phones. */
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    background: var(--surface-2);
   }
-  .tab[aria-current='page'] {
-    font-weight: 400;
+  .btn.primary:hover:not(:disabled) {
+    background: var(--primary-press);
+    border-color: var(--primary-press);
   }
-  .tab .badge {
-    left: calc(50% + 8px);
+  .btn.ghost:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+}
+/* After the hover rules, so pressing always wins over hovering. */
+.btn:active:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn.primary:active:not(:disabled) {
+  background: var(--primary-press);
+  border-color: var(--primary-press);
+}
+/* On a touch screen every control gets a full-size target, including the compact buttons. */
+@media (pointer: coarse) {
+  .btn.small {
+    min-height: var(--tap);
   }
 }
 
-.toast {
-  position: fixed;
-  left: 16px;
-  right: 16px;
-  bottom: calc(var(--tabs-h) + 12px + env(safe-area-inset-bottom));
-  max-width: 608px;
-  margin: 0 auto;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--text);
-  color: var(--bg);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-  z-index: 20;
+/* A row of buttons of which exactly one is pressed. Its box clips (overflow: hidden), so the focus ring of a segment is
+   drawn inside the edge; on the pressed segment, which is filled with the primary colour, it takes the colour of the label. */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  background: var(--surface);
 }
-.toast.show {
-  opacity: 1;
+.segmented .btn.seg {
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
-.toast.error {
-  background: var(--danger);
-  color: var(--on-danger);
+.segmented .btn.seg + .btn.seg {
+  border-left: 1px solid var(--border);
+}
+.segmented .btn.seg[aria-pressed='true'],
+.view-switch .btn[aria-pressed='true'],
+.admin-tabs .btn[aria-pressed='true'] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+  font-weight: 700;
+}
+.segmented .btn.seg:focus-visible {
+  outline-offset: -3px;
+}
+.segmented .btn.seg[aria-pressed='true']:focus-visible {
+  outline-color: var(--on-primary);
 }
 
-/* ---- cards and lists ------------------------------------------------- */
+/* ---- fields ------------------------------------------------------------- */
+
+.field {
+  margin-bottom: var(--s-4);
+  min-width: 0;
+}
+.field label,
+.field .label {
+  display: block;
+  margin-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  hyphens: manual;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--tap);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* 16px stops iOS Safari from zooming into the field */
+}
+input:disabled,
+select:disabled {
+  background: var(--bg);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline-offset: 0;
+}
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--s-2);
+}
+textarea {
+  resize: vertical;
+}
+.field.invalid input,
+.field.invalid select,
+.field.invalid textarea {
+  border-color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger); /* a thicker edge, so the state is not only a colour change */
+}
+.field-error,
+.form-error {
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+/* Its own line: under a hint the message would otherwise run on from it ("Last known reading: 12075 kmRequired."). */
+.field-error {
+  display: block;
+}
+.field-error:empty {
+  display: none;
+}
+.form-error {
+  margin: var(--s-2) 0;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: var(--tap);
+  margin-bottom: var(--s-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.check input[type='checkbox'] {
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--primary);
+}
+/* Unsent input that came back after leaving the form: one line and a way to start over. */
+.restored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin: var(--s-2) 0;
+  padding: var(--s-2) var(--s-3);
+  border-left: 4px solid var(--warn-text);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--fs-sm);
+}
+
+/* ---- cards, rows, chips ---------------------------------------------------- */
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin: 10px 0;
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-3) 0;
 }
 .card h2,
 .card h3 {
   margin-top: 0;
 }
 .card h2 {
-  font-size: 1rem; /* the admin cards: h2 for the outline, same look as the h3 cards in the app */
+  font-size: var(--fs-md);
 }
 .error-card {
-  text-align: center;
+  text-align: left;
 }
-
 .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--s-2);
   flex-wrap: wrap;
 }
 .when {
@@ -323,11 +676,424 @@ img {
 .sub,
 .note {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: var(--fs-sm);
 }
 .note {
   font-style: italic;
 }
+
+/* A list of rows: one hairline box, rows separated by hairlines. */
+.list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+  margin: var(--s-3) 0;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  min-height: 3.5rem;
+  padding: var(--s-2) var(--s-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+.list-row:last-child {
+  border-bottom: 0;
+}
+a.list-row,
+button.list-row {
+  cursor: pointer;
+}
+.row-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  color: var(--muted);
+}
+.row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.row-title {
+  font-weight: 600;
+  hyphens: manual;
+}
+.row-sub {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.row-chevron {
+  color: var(--muted);
+}
+.list-row.warn .row-sub {
+  color: var(--warn-text);
+}
+.list-row.bad .row-sub {
+  color: var(--bad-text);
+}
+@media (hover: hover) {
+  a.list-row:hover,
+  button.list-row:hover {
+    background: var(--surface-2);
+  }
+}
+/* The list box clips (overflow: hidden): a ring drawn outside the row would be cut off on every side. */
+.list-row:focus-visible {
+  outline-offset: -3px;
+}
+
+/* A status is a marker and a word, never only a colour. */
+.badge-status,
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px var(--s-2);
+  border-radius: var(--r-1);
+  background: var(--off-bg);
+  color: var(--off-text);
+  white-space: nowrap;
+}
+.badge-status::before,
+.chip::before {
+  content: '';
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+}
+.badge-status.confirmed,
+.chip.paid,
+.chip.settled {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+.badge-status.pending,
+.chip.requested {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+.badge-status.declined,
+.chip.changed {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+}
+
+.notice {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  padding: var(--s-3);
+  border-radius: var(--r-2);
+}
+
+/* ---- banner, empty, error, skeleton ----------------------------------------- */
+
+.banner {
+  display: flex;
+  gap: var(--s-3);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-left: 4px solid currentColor;
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  margin: var(--s-3) 0;
+}
+.banner.info,
+.banner.ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+.banner.info {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.banner.bad {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+}
+.banner-icon {
+  margin-top: 2px;
+}
+.banner-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.banner h3 {
+  margin-top: 0;
+}
+.banner p {
+  margin: 0 0 var(--s-1);
+}
+.banner .hint,
+.banner .note {
+  color: inherit;
+}
+.banner .btn {
+  color: var(--text);
+}
+.banner .btn.primary {
+  color: var(--on-primary);
+}
+
+.empty {
+  color: var(--muted);
+  padding: var(--s-4) 0;
+}
+.empty .empty-title {
+  display: block;
+  color: var(--text);
+}
+.empty .btn {
+  margin-top: var(--s-2);
+}
+
+.skeleton {
+  margin: var(--s-3) 0;
+}
+.skel-row {
+  height: 3.5rem;
+  margin: var(--s-2) 0;
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ---- sheet and drawer --------------------------------------------------------- */
+
+dialog.sheet {
+  width: 100%;
+  max-width: 100%;
+  max-height: 90dvh;
+  margin: auto 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-3) var(--r-3) 0 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sheet);
+  overflow: hidden;
+  animation: sheet-in var(--dur-2) var(--ease);
+}
+dialog.sheet[open] {
+  display: flex;
+  flex-direction: column;
+}
+dialog.sheet::backdrop {
+  background: var(--scrim);
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(1.5rem);
+    opacity: 0;
+  }
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.sheet-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+.sheet-body {
+  padding: var(--s-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sheet-message {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+.sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4) calc(var(--s-3) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+}
+.sheet-foot .btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-danger);
+}
+
+/* ---- toast ------------------------------------------------------------------ */
+
+.toast {
+  position: fixed;
+  left: var(--s-4);
+  right: var(--s-4);
+  bottom: calc(var(--tabs-h) + var(--s-3) + env(safe-area-inset-bottom));
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-2);
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: var(--shadow-toast);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-2);
+  z-index: 50;
+}
+.toast.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Faded out is gone for the keyboard and for assistive technology too: no invisible button to land on (the text stays,
+   it is the live region that announces the next message). */
+.toast:not(.show) .toast-action {
+  visibility: hidden;
+}
+.toast.error {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.toast-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.toast-action {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 var(--s-3);
+  border: 1px solid currentColor;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- tables ------------------------------------------------------------------- */
+
+.table-wrap {
+  /* On a phone the table scrolls inside this box (focusable, so the keyboard can scroll it);
+     the page itself never scrolls sideways. position: relative keeps the visually hidden column
+     headings (.sr-only is absolutely positioned) inside this box instead of widening the page. */
+  position: relative;
+  overflow-x: auto;
+  overflow-wrap: normal;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+table.data {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+table.data th,
+table.data td {
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+table.data tr:last-child td {
+  border-bottom: 0;
+}
+table.data th {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+table.data .actions {
+  margin-top: 0;
+}
+table.data th .sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+table.data th[aria-sort] .sort {
+  color: var(--text);
+}
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--s-2) var(--s-4);
+  margin: var(--s-3) 0;
+}
+.table-tools .field {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+.table-tools .hint {
+  margin: 0;
+}
+
+/* ---- the screens -------------------------------------------------------------- */
+
+/* A view title with one secondary link beside it; the link drops below the title when there is no room. */
+.view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--s-3);
+}
+.view-head h2 {
+  min-width: 0;
+}
+.view-head .actions {
+  margin-top: 0;
+}
+
+.login {
+  max-width: 26rem;
+  margin: 0 auto;
+  padding: calc(var(--s-6) + env(safe-area-inset-top)) var(--s-4) var(--s-5);
+}
+.login .logo {
+  border-radius: var(--r-3);
+}
+.login h1 {
+  margin-top: var(--s-3);
+  font-size: var(--fs-2xl);
+}
+.login .card {
+  padding: var(--s-4);
+}
+
+/* Reservations: a hairline card with a rule on the left that says what state it is in (and the words say it too). */
 .reservation.pending {
   border-left: 4px solid var(--warn-text);
 }
@@ -343,79 +1109,84 @@ img {
 .history.unused .when {
   font-weight: 400;
 }
-
-.badge-status {
-  font-size: 0.75rem;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--off-bg);
-  color: var(--off-text);
-  white-space: nowrap;
-}
-.badge-status.confirmed {
-  background: var(--ok-bg);
-  color: var(--ok-text);
-}
-.badge-status.pending {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-}
-.badge-status.declined {
-  background: var(--bad-bg);
-  color: var(--bad-text);
-}
-
 .day-heading {
-  margin: 1rem 0 0;
+  margin: var(--s-4) 0 0;
   color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-transform: none;
+}
+details.earlier {
+  margin-top: var(--s-4);
+}
+details.earlier summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: var(--s-3) 0;
+  min-height: var(--tap);
+}
+.totals {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.totals li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.totals li:last-child {
+  border-bottom: 0;
 }
 
-/* ---- agenda views: switcher, day / 3 days / week sections, month grid ---- */
-
-/* Five equal columns down to 320 px; a label that does not fit ("3 days") wraps instead of widening the page. */
+/* Agenda views: switcher, day / 3 days / week sections, month grid. */
 .view-switch {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  margin: 12px 0 0;
+  margin: var(--s-3) 0 0;
+  max-width: 36rem;
 }
 .view-switch .btn {
   min-width: 0;
   padding: 6px 2px;
-  font-size: 0.85rem;
+  font-size: var(--fs-sm);
 }
 .cal-title {
-  margin-top: 0.9rem;
+  margin-top: var(--s-3);
 }
 .cal-nav {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--s-2);
+  max-width: 36rem;
 }
 .cal-nav .btn,
 .cal-cell {
   min-width: 0;
 }
+.cal-nav .btn {
+  padding-left: var(--s-1);
+  padding-right: var(--s-1);
+  font-size: var(--fs-sm);
+}
 .cal-nav .btn:disabled,
 .cal-cell:disabled {
   cursor: default;
 }
-/* Today is also said in words in its heading ("(today)"); the colour only adds to it. */
+/* Today is also said in words in its heading ("(vandaag)"); the colour only adds to it. */
 .cal-day.today .day-heading {
   color: var(--text);
 }
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
-  margin-top: 10px;
+  gap: var(--s-1);
+  margin-top: var(--s-3);
 }
 .cal-head {
-  padding: 4px 0;
+  padding: var(--s-1) 0;
   text-align: center;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 .cal-cell {
@@ -424,26 +1195,24 @@ img {
   align-items: center;
   justify-content: space-between;
   gap: 2px;
-  min-height: 52px;
-  padding: 4px 0;
+  min-height: 3.25rem;
+  padding: var(--s-1) 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-2);
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 @media (hover: hover) {
   .cal-cell:hover:not(:disabled) {
-    background: var(--off-bg);
+    background: var(--surface-2);
   }
 }
-/* After the hover rule, like .btn:active: a tap shows at once that the day was hit, also on a touch screen without hover. */
 .cal-cell:active:not(:disabled) {
-  background: var(--off-bg);
+  background: var(--surface-2);
 }
-/* The days of the neighbouring months: quieter through the muted text colour, not through opacity. */
 .cal-cell.out {
   background: transparent;
   color: var(--muted);
@@ -462,10 +1231,10 @@ img {
   min-width: 1.4em;
   padding: 0 5px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--ok-bg);
   color: var(--ok-text);
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   line-height: 1.4;
 }
 .cal-cell.has-pending .cal-count {
@@ -474,248 +1243,32 @@ img {
   background: var(--warn-bg);
   color: var(--warn-text);
 }
-details.earlier {
-  margin-top: 1.2rem;
-}
-details.earlier summary {
-  cursor: pointer;
-  color: var(--muted);
-  padding: 12px 0;
-}
-.totals {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.totals li {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--border);
-}
-.totals li:last-child {
-  border-bottom: 0;
-}
 
-/* ---- buttons and forms ---------------------------------------------- */
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  /* Vertical padding and centred text only matter for a label that wraps on a narrow phone
-     ("Car not used? Cancel the reservation"): without them the lines touch the border. */
-  padding: 6px 14px;
-  text-align: center;
-  border: 1px solid var(--field-border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  text-decoration: none;
-  cursor: pointer;
-}
-.btn:disabled {
-  opacity: 0.6;
-  cursor: progress; /* a disabled button means a request is in flight */
-}
-/* Hover only where there is a real pointer, so a tap does not leave a sticky hover on phones. */
-@media (hover: hover) {
-  .btn:hover:not(:disabled) {
-    background: var(--off-bg);
-  }
-  .btn.primary:hover:not(:disabled) {
-    background: var(--primary);
-    filter: brightness(1.12);
-  }
-  .btn.danger:hover:not(:disabled) {
-    background: var(--bad-bg);
-  }
-  .tab:hover {
-    color: var(--text);
-  }
-}
-/* After the hover rules, so pressing always wins over hovering. */
-.btn:active:not(:disabled) {
-  background: var(--off-bg);
-}
-.btn.primary:active:not(:disabled) {
-  background: var(--primary);
-  filter: brightness(0.9);
-}
-.btn.danger:active:not(:disabled) {
-  background: var(--bad-bg);
-}
-.btn.primary {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--on-primary);
-  font-weight: 600;
-}
-.btn.danger {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-.btn.block {
-  display: flex;
-  width: 100%;
-}
-.btn.small {
-  min-height: 34px;
-  padding: 4px 10px;
-  font-size: 0.9rem;
-}
-
-.field {
-  margin-bottom: 14px;
-  min-width: 0;
-}
-.field label,
-.field .label {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-input,
-select,
-textarea {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  min-height: 44px;
-  padding: 8px 10px;
-  border: 1px solid var(--field-border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 16px; /* 16px stops iOS Safari from zooming into the field */
-}
-input:disabled,
-select:disabled {
-  background: var(--bg);
-  color: var(--muted);
-  cursor: not-allowed;
-}
-.tab:focus-visible {
-  outline-offset: -3px; /* keep the ring inside the screen edge and the bar */
-}
-.pair {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 8px;
-}
-textarea {
-  resize: vertical;
-}
-.field.invalid input,
-.field.invalid select,
-.field.invalid textarea {
-  border-color: var(--danger);
-  box-shadow: inset 0 0 0 1px var(--danger); /* a thicker edge, so the state is not only a colour change */
-}
-.field-error,
-.form-error {
-  color: var(--danger);
-  font-size: 0.85rem;
-}
-/* Its own line: under a hint the message would otherwise run on from it ("Last known reading: 12075 kmRequired."). */
-.field-error {
-  display: block;
-}
-.field-error:empty {
-  display: none;
-}
-.form-error {
-  margin: 8px 0;
-}
-.notice {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  padding: 10px 12px;
-  border-radius: 10px;
-}
-
-.login {
-  max-width: 420px;
-  margin: 0 auto;
-  padding: calc(32px + env(safe-area-inset-top)) 16px 24px;
-  text-align: center;
-}
-.login .logo {
-  border-radius: 16px;
-}
-.login .card {
-  text-align: left;
-}
-
-/* ---- kilometres to register, fuel and costs ---------------------------- */
-
-/* A view title with one secondary link beside it; the link drops below the title when there is no room. */
-.view-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0 12px;
-}
-.view-head h2 {
-  min-width: 0;
-}
-/* The group of links beside the title sits on the title's line, not 10px below it. */
-.view-head .actions {
-  margin-top: 0;
-}
-
-/* The "kilometres to register" box at the top of the Drives tab. */
-.banner {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  border: 1px solid var(--warn-text);
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin: 10px 0;
-}
-.banner h3 {
-  margin-top: 0;
-}
-.banner .hint,
-.banner .note {
-  color: inherit;
-}
+/* Kilometres to register, fuel and costs. */
 ul.notify-list {
-  margin: 8px 0;
-  padding-left: 20px;
+  margin: var(--s-2) 0;
+  padding-left: 1.25rem;
 }
 ul.notify-list li {
-  margin-bottom: 6px;
+  margin-bottom: var(--s-1);
 }
 ul.pending,
 ul.shares {
   list-style: none;
-  margin: 8px 0 0;
+  margin: var(--s-2) 0 0;
   padding: 0;
 }
 .pending-row,
 .share {
-  padding: 8px 0;
+  padding: var(--s-2) 0;
   border-top: 1px solid var(--border);
 }
 .banner .pending-row {
-  border-top-color: var(--warn-text);
+  border-top-color: currentColor;
 }
 .pending-row .actions,
 .share .actions {
-  margin-top: 6px;
+  margin-top: var(--s-2);
 }
 /* Name, amount, status: the amounts line up from one share to the next, the status sits at the right edge. */
 .share .row > strong {
@@ -724,40 +1277,17 @@ ul.shares {
 .share .row .chip {
   margin-left: auto;
 }
-/* On the History screen the header of a share is a sentence ("Anna fuelled, Tuesday 17 November, 22:31"), not a name column. */
+/* On the History screen the header of a share is a sentence, not a name column. */
 .share .row.owed-head > strong {
   flex: 1 1 12em;
 }
-
-/* What the debtor has to pay once earlier amounts ride along: the one figure that matters on the card. */
 .sub.due {
   color: var(--text);
   font-weight: 600;
 }
-
-/* "I drove, but the kilometres aren't mine": a checkbox row that reveals the choice below it. */
-.check {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  margin-bottom: 6px;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-.check input[type='checkbox'] {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  min-height: 0;
-  padding: 0;
-  accent-color: var(--primary);
-}
-
-/* One line on a reservation card about its kilometres. */
 .km-line {
-  margin-top: 4px;
-  font-size: 0.9rem;
+  margin-top: var(--s-1);
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 .km-line.registered {
@@ -767,128 +1297,290 @@ ul.shares {
 .km-line.missing {
   color: var(--warn-text);
 }
-
-/* A small status pill next to a person's share of a fill-up. */
-.chip {
-  font-size: 0.75rem;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--off-bg);
-  color: var(--off-text);
-  white-space: nowrap;
-}
-.chip.requested {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-}
-.chip.paid,
-.chip.settled {
-  background: var(--ok-bg);
-  color: var(--ok-text);
-}
-.chip.changed {
-  background: var(--bad-bg);
-  color: var(--bad-text);
-}
-
-/* The payment request of one share: message, ways to send it, optional link. */
 .panel-box {
-  margin-top: 10px;
-  padding: 10px 12px;
+  margin-top: var(--s-3);
+  padding: var(--s-3);
   border: 1px dashed var(--field-border);
-  border-radius: 10px;
+  border-radius: var(--r-2);
 }
 .panel-box h4 {
-  margin: 0 0 6px;
-  font-size: 1rem;
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-md);
 }
 .panel-box textarea {
   resize: vertical;
-  margin-bottom: 4px;
+  margin-bottom: var(--s-1);
 }
 
-/* ---- admin page (desktop friendly, same tokens) ----------------------- */
+/* The kilometre check: findings in the odometer chain, the note under a reading field and the lines under a drive. */
+.km-check h2,
+.km-check h3 {
+  margin-top: 0;
+}
+ul.km-list {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+}
+.km-item {
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.km-item .km-headline {
+  display: block;
+  margin-bottom: 2px;
+}
+.km-item.mismatch {
+  border-left: 4px solid var(--warn-text);
+  padding-left: var(--s-3);
+}
+.km-item .actions {
+  margin-top: var(--s-2);
+}
+.km-ok {
+  margin: var(--s-2) 0 0;
+}
+.km-check details {
+  margin-top: var(--s-3);
+}
+.km-check summary {
+  cursor: pointer;
+  padding: var(--s-3) 0;
+  min-height: var(--tap);
+  font-weight: 700;
+}
+.km-explain form {
+  margin-top: var(--s-2);
+}
+.sub.km-flag {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-radius: var(--r-2);
+  padding: var(--s-1) var(--s-2);
+  margin-top: var(--s-2);
+  overflow-wrap: anywhere;
+}
+.sub.km-flag.explained {
+  background: var(--off-bg);
+  color: var(--off-text);
+}
+.km-note {
+  margin-top: var(--s-1);
+}
+/* A polite live region: always in the page, so it is empty (and takes no room) until there is something to say. */
+.km-warn {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-2);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: var(--fs-sm);
+}
+.km-warn:empty {
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+
+/* The Car tab: the APK card and the damage reports. */
+.apk-card .apk-state {
+  margin: var(--s-2) 0 var(--s-3);
+}
+.apk-card .notice {
+  margin-bottom: var(--s-3);
+}
+/* A description is typed by a person: keep their line breaks, and never let one long word widen the page. */
+.damage-text {
+  margin: var(--s-2) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.card.damage.open {
+  border-left: 4px solid var(--warn-text);
+}
+.card.damage.repaired {
+  border-left: 4px solid var(--ok-text);
+}
+.damage .sub {
+  overflow-wrap: anywhere;
+}
+.damage .damage-hint {
+  margin-top: var(--s-2);
+}
+.card.damage.repaired .when {
+  font-weight: 400;
+}
+.repair-form {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Start (home) ------------------------------------------------------------- */
+
+.home {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: var(--s-3);
+}
+.home > * {
+  min-width: 0;
+}
+.home-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+}
+.home-block h2,
+.home-block h3 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--muted);
+}
+.home-block .big {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.home-block .actions {
+  margin-top: var(--s-3);
+}
+/* Who has the car right now: the one place the signal colour says something about the car itself. */
+.car-now {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+}
+.car-now.out {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent-edge);
+}
+.car-now.out h2,
+.car-now.out h3,
+.car-now.out .sub {
+  color: var(--on-accent);
+}
+/* The ring is ink on this yellow block in both themes: in Donker it would be yellow on yellow, which is no ring at all. */
+.car-now.out :focus-visible {
+  outline-color: var(--on-accent);
+}
+.car-now .icon {
+  width: 2rem;
+  height: 2rem;
+  margin-top: 2px;
+}
+.car-now-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.home-slot:empty {
+  display: none;
+}
+.home-block h4 {
+  margin: var(--s-2) 0 0;
+  font-size: var(--fs-sm);
+}
+/* The reservation card inside a block brings its own frame: the block's is enough. */
+.home-block.flat > .card {
+  border: 0;
+  border-left: 4px solid var(--ok-text);
+  border-radius: 0;
+  padding: 0 0 0 var(--s-3);
+  margin: 0;
+}
+.home-block .list {
+  border: 0;
+  margin: 0;
+  background: none;
+}
+.home-block .list-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ---- Meer (more) and Account ---------------------------------------------------- */
+
+.more .list {
+  margin-top: var(--s-2);
+}
+.more-user {
+  display: flex;
+  flex-direction: column;
+  margin: var(--s-3) 0;
+}
+.theme-card .segmented {
+  margin-top: var(--s-2);
+}
+
+/* ---- the admin page -------------------------------------------------------------- */
 
 .admin-wrap {
-  max-width: 1000px;
+  max-width: 64rem;
   margin: 0 auto;
-  padding: 12px 16px 48px;
+  padding: var(--s-3) var(--s-4) var(--s-7);
+}
+.admin-head h1 {
+  margin: 0;
+  font-size: var(--fs-xl);
 }
 .admin-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--s-3);
   flex-wrap: wrap;
+}
+/* A desktop dashboard from 1024 px (the sections in a sidebar); on a phone the four sections are a 2 by 2 grid above the panel. */
+.admin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-3);
 }
 .admin-tabs {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin: 12px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2);
+  margin: var(--s-3) 0 0;
 }
-/* Same weight as the .btn hover/active rules above and later in the file, so the current tab (or Agenda view) keeps its colours. */
-.admin-tabs .btn[aria-pressed='true'],
-.view-switch .btn[aria-pressed='true'] {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--on-primary);
+.admin-main {
+  min-width: 0;
 }
-.table-wrap {
-  /* On a phone the table scrolls inside this box (focusable, so the keyboard can scroll it);
-     the page itself never scrolls sideways. position: relative keeps the visually hidden column
-     headings (.sr-only is absolutely positioned) inside this box instead of widening the page. */
-  position: relative;
-  overflow-x: auto;
-  overflow-wrap: normal;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
+.admin-foot {
+  max-width: 24rem;
+  margin-top: var(--s-5);
 }
-table.data {
-  width: 100%;
-  min-width: 640px;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+/* Forms in a drawer are a single column: the drawer is narrow, whatever the screen. */
+.sheet-body .inline-form {
+  grid-template-columns: minmax(0, 1fr);
 }
-table.data th,
-table.data td {
-  padding: 8px 10px;
-  text-align: left;
-  vertical-align: top;
-  border-bottom: 1px solid var(--border);
-}
-table.data tr:last-child td {
-  border-bottom: 0;
-}
-table.data th {
-  color: var(--muted);
-  font-weight: 600;
-  white-space: nowrap;
-}
-table.data .actions {
-  margin-top: 0;
+.sheet-body .actions {
+  margin-top: var(--s-4);
 }
 .inline-form {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s-2);
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   align-items: end;
 }
-/* One-line labels with hints underneath (the add-user form): line the inputs up at the top instead. */
 .inline-form.top {
   align-items: start;
 }
 .filters {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  margin: 10px 0;
+  gap: var(--s-2);
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  margin: var(--s-3) 0;
 }
 .kv {
   display: grid;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
-  gap: 4px 14px;
+  gap: var(--s-1) var(--s-4);
   margin: 0;
 }
 .kv dt {
@@ -904,150 +1596,260 @@ table.data .actions {
     gap: 0;
   }
   .kv dt {
-    margin-top: 8px;
-    font-size: 0.85rem;
+    margin-top: var(--s-2);
+    font-size: var(--fs-sm);
   }
 }
 .secret {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 1.05rem;
-  background: var(--off-bg);
-  padding: 4px 8px;
-  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  background: var(--surface-2);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-1);
   user-select: all;
 }
 .secret-card {
   border: 2px solid var(--primary);
 }
 
-/*
- * The kilometre check: findings in the odometer chain, the note under a reading field and the lines under a
- * drive or fill-up. The warning colours carry a message in words too, so the state is never only a colour.
- */
-.km-check h2,
-.km-check h3 {
-  margin-top: 0;
-}
-ul.km-list {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-}
-.km-item {
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  overflow-wrap: anywhere;
-}
-.km-item .km-headline {
-  display: block;
-  margin-bottom: 2px;
-}
-.km-item.mismatch {
-  border-left: 4px solid var(--warn-text);
-  padding-left: 10px;
-}
-.km-item .actions {
-  margin-top: 8px;
-}
-.km-ok {
-  margin: 8px 0 0;
-}
-.km-check details {
-  margin-top: 10px;
-}
-/* Same shape as details.earlier: the native marker stays, so it shows that the line opens and whether it is open. */
-.km-check summary {
-  cursor: pointer;
-  padding: 12px 0;
-  color: var(--primary);
-  font-weight: 600;
-}
-.km-explain form {
-  margin-top: 6px;
-}
-.sub.km-flag {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  border-radius: 8px;
-  padding: 4px 8px;
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-}
-/* An explained finding is settled: it keeps its note but must not look like an open warning. */
-.sub.km-flag.explained {
-  background: var(--off-bg);
-  color: var(--off-text);
-}
-.km-note {
-  margin-top: 4px;
-}
-/* A polite live region: always in the page, so it is empty (and takes no room) until there is something to say. */
-.km-warn {
-  margin: 6px 0 0;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  font-size: 0.9rem;
-}
-.km-warn:empty {
-  margin: 0;
-  padding: 0;
-  background: none;
-}
+/* ---- wider screens: a rail instead of the tab bar, content in columns ---------------- */
 
-/* ---- the Car tab: the APK card and the damage reports ----------------------- */
-
-.apk-card .apk-state {
-  margin: 6px 0 12px;
-}
-.apk-card .notice {
-  margin-bottom: 12px;
-}
-/* A description is typed by a person: keep their line breaks, and never let one long word widen the page. */
-.damage-text {
-  margin: 6px 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.card.damage.open {
-  border-left: 4px solid var(--warn-text);
-}
-.card.damage.repaired {
-  border-left: 4px solid var(--ok-text);
-}
-.damage .sub {
-  overflow-wrap: anywhere;
-}
-/* The driver hint is a different kind of line from "Reported by": set it apart so the two do not read as one. */
-.damage .damage-hint {
-  margin-top: 6px;
-}
-/* A repaired report recedes through lighter type, like a finished reservation (not opacity: that drops below 4.5:1). */
-.card.damage.repaired .when {
-  font-weight: 400;
-}
-.repair-form {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-@media (min-width: 700px) {
+@media (min-width: 48rem) {
+  .shell {
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    align-items: start;
+  }
+  .rail {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    overflow-y: auto;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+  }
+  .topbar {
+    position: static;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    border-bottom: 0;
+    padding: var(--s-4) var(--s-4) var(--s-2);
+  }
+  .topbar .who {
+    display: none;
+  }
+  .tabs {
+    position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 0;
+    padding: var(--s-2);
+  }
+  .tab {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: var(--s-3);
+    min-height: var(--tap);
+    padding: var(--s-2) var(--s-3);
+    border-radius: var(--r-2);
+    font-size: var(--fs-sm);
+    text-align: left;
+  }
+  .tab .icon {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+  .tab[aria-current='page'] {
+    background: var(--surface-2);
+    box-shadow: none;
+  }
+  /* The Boeken tab is a yellow button at its place in the list. */
+  .tab-book {
+    margin: var(--s-2) 0;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: 2px solid var(--accent-edge);
+    font-weight: 700;
+  }
+  .tab-book .tab-mark {
+    display: contents;
+  }
+  .tab-book .tab-mark {
+    width: auto;
+    height: auto;
+    margin: 0;
+    background: none;
+    border: 0;
+  }
+  .tab-book[aria-current='page'] {
+    background: var(--accent);
+    color: var(--on-accent);
+    outline: 3px solid var(--primary);
+    outline-offset: 2px;
+  }
+  .tab-book[aria-current='page'] .tab-mark {
+    outline: 0;
+  }
+  /* The ring on the yellow button in the rail is ink too (yellow on yellow in Donker); the current page keeps its own ring above. */
+  .tab-book:not([aria-current='page']):focus-visible {
+    outline-color: var(--on-accent);
+  }
+  .tab-more {
+    display: none;
+  }
+  .tab-secondary {
+    display: flex;
+  }
+  .tab .badge {
+    position: static;
+    margin-left: auto;
+  }
+  .rail-foot {
+    display: block;
+    margin-top: auto;
+    padding: var(--s-3) var(--s-4) var(--s-4);
+    border-top: 1px solid var(--border);
+  }
+  .rail-foot .btn {
+    margin-top: var(--s-2);
+  }
+  .rail-foot .who {
+    display: block;
+    margin-bottom: var(--s-2);
+    font-size: var(--fs-sm);
+    color: var(--muted);
+  }
   .view {
-    padding-bottom: 96px;
+    padding: var(--s-2) var(--s-6) var(--s-7);
+    max-width: 52rem;
+    width: 100%;
+  }
+  .toast {
+    left: calc(var(--rail-w) + var(--s-5));
+    right: auto;
+    bottom: var(--s-5);
+    max-width: 30rem;
+  }
+  dialog.sheet {
+    margin: auto;
+    width: min(32rem, calc(100% - var(--s-6)));
+    max-height: 85dvh;
+    border-radius: var(--r-3);
+  }
+  dialog.sheet.drawer {
+    margin: 0 0 0 auto;
+    width: min(30rem, 100%);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .home {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home .wide {
+    grid-column: 1 / -1;
   }
 }
 
-/* Touch screens: every control gets a full-size target, including the compact admin buttons. */
-@media (pointer: coarse) {
-  .btn.small {
-    min-height: 44px;
+@media (min-width: 64rem) {
+  :root {
+    --rail-w: 15rem;
+  }
+  .admin-wrap {
+    max-width: 96rem;
+    padding: var(--s-4) var(--s-5) var(--s-7);
+  }
+  /* A desktop table has the room for tighter cells. */
+  table.data th,
+  table.data td {
+    padding: 6px var(--s-2);
+  }
+  .admin-layout {
+    grid-template-columns: 11rem minmax(0, 1fr);
+    gap: var(--s-4);
+    align-items: start;
+  }
+  .admin-tabs {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: var(--s-4);
+    margin: 0;
+  }
+  .admin-tabs .btn {
+    justify-content: flex-start;
+  }
+  .view {
+    max-width: 72rem;
+  }
+  /* A list and the form that adds to it side by side (drives, fuel, tickets, car). */
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--s-5);
+    align-items: start;
+  }
+  .split > * {
+    min-width: 0;
+  }
+  /* Cards of a list in two columns. */
+  .cols {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 var(--s-4);
+    align-items: start;
+  }
+  .cols > .day-heading,
+  .cols > h2,
+  .cols > .wide {
+    grid-column: 1 / -1;
+  }
+  .cal-cell {
+    min-height: 4.5rem;
   }
 }
+
+@media (min-width: 80rem) {
+  .home {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .view {
+    max-width: 78rem;
+  }
+}
+
+/* ---- reduced motion and forced colours (one block each, at the end) ---------------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .toast {
-    transition: none;
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .btn,
+  .list,
+  .card,
+  .home-block,
+  .banner,
+  dialog.sheet {
+    border: 1px solid CanvasText;
+  }
+  .tab[aria-current='page'],
+  .btn.primary,
+  .btn.primary:hover:not(:disabled),
+  .btn.primary:active:not(:disabled),
+  .segmented .btn.seg[aria-pressed='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
   }
 }

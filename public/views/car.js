@@ -7,8 +7,11 @@
 //     noticed day. This view only words it, and neutrally: it is information, not blame.
 // A date here is a day of the calendar ('YYYY-MM-DD'), never an instant: the date inputs hold it as it is.
 import { del, get, patch, post } from '../api.js';
-import { addDateKeyYears, daysBetween, field, focusFirstInvalid, formatDateKey, h, isCalendarDate, localDateKey, setBusy, showFieldErrors } from '../dom.js';
+import { actionBar, addDateKeyYears, daysBetween, field, focusFirstInvalid, formatDateKey, h, isCalendarDate, localDateKey, setBusy, showFieldErrors } from '../dom.js';
+import { persistForm, restoredLine } from '../drafts.js';
 import { S, errorText } from '../strings.js';
+import { button, confirmSheet, emptyState, linkButton } from '../ui.js';
+import { deferDelete, pendingIds } from '../undo.js';
 
 // Contains forms, so it is not re-rendered in the background.
 export const live = false;
@@ -74,8 +77,10 @@ export async function render(app, route) {
   const [apkData, damageData] = await Promise.all([get('/api/car/apk'), get('/api/damage')]);
   /** @type {import('../api.js').Apk} */
   const apk = apkData.apk;
+  // A report that was deleted a moment ago (and can still be taken back) is not on the screen.
+  const goneReports = pendingIds('damage');
   /** @type {import('../api.js').DamageReport[]} */
-  const reports = damageData.items;
+  const reports = damageData.items.filter((/** @type {import('../api.js').DamageReport} */ r) => !goneReports.has(r.id));
   const today = localDateKey(Date.now(), app.tz);
   const apkMax = addDateKeyYears(today, APK_YEARS_AHEAD);
   const editId = Number(route.query.get('edit') ?? 0) || null;
@@ -113,7 +118,7 @@ export async function render(app, route) {
   const apkError = h('p', { class: 'form-error', role: 'alert', hidden: true });
   // One main action per view: the date is the thing to do only while it is missing; once it is set, the main action of
   // the page is the damage form's Save report, and Update date is a plain button.
-  const apkSubmit = h('button', { class: apk.expiresOn ? 'btn' : 'btn primary', type: 'submit' }, apk.expiresOn ? S.car.apk.update : S.car.apk.save);
+  const apkSubmit = button({ label: apk.expiresOn ? S.car.apk.update : S.car.apk.save, variant: apk.expiresOn ? 'secondary' : 'primary', type: 'submit' });
   const apkForm = h(
     'form',
     {
@@ -191,7 +196,9 @@ export async function render(app, route) {
   const fRepairNoteEdit = field(S.car.repairNote, repairNoteEdit, S.car.repairNoteHint);
 
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-  const submit = h('button', { class: 'btn primary block', type: 'submit' }, S.car.save);
+  const submit = button({ label: S.car.save, variant: 'primary', block: true, type: 'submit' });
+  // A new report keeps what was typed when the person leaves and comes back; an edit shows what the server has.
+  const unsent = existing ? null : persistForm({ userId: me.id, name: 'damage', controls: { noticedOn, noticedBy, location, description } });
   const form = h(
     'form',
     {
@@ -233,6 +240,7 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/damage/${existing.id}`, body);
           else await post('/api/damage', body);
+          unsent?.clear();
           app.toast(S.car.saved);
           if (existing) app.navigate('#/car');
           else {
@@ -247,13 +255,14 @@ export async function render(app, route) {
     },
     [
       h('h3', { text: existing ? S.car.editTitle : S.car.addTitle }),
+      unsent ? restoredLine(unsent) : null,
       fNoticedOn.row,
       fNoticedBy.row,
       fLocation.row,
       fDescription.row,
       editsRepair ? [fRepairedOnEdit.row, fRepairNoteEdit.row] : null,
       formError,
-      h('div', { class: 'actions' }, [submit, existing ? h('a', { class: 'btn', href: '#/car' }, S.cancel) : null]),
+      h('div', { class: 'actions' }, [submit, existing ? linkButton({ label: S.cancel, href: '#/car' }) : null]),
     ],
   );
 
@@ -278,8 +287,32 @@ export async function render(app, route) {
     focusHeading();
   };
 
-  /** @param {Event} event @returns {Element | null} */
-  const barOf = (event) => (event.currentTarget instanceof Element ? event.currentTarget.closest('.actions') : null);
+  /**
+   * Take a report away. Deleting a damage report tells nobody anything, so the person's own disappears at once with
+   * "Ongedaan maken" and the DELETE goes out after the window; somebody else's (an admin cleaning up) asks first.
+   * @param {import('../api.js').DamageReport} r
+   * @param {Element | null} bar the buttons of the report, read from the click before anything is awaited
+   */
+  const removeReport = async (r, bar) => {
+    if (r.reportedBy.id === me.id) {
+      deferDelete({
+        key: `damage:${r.id}`,
+        message: S.undo.damage,
+        commit: (o) => del(`/api/damage/${r.id}`, o),
+        onUndo: () => void app.refresh(),
+        onError: (err) => {
+          app.toast(errorText(/** @type {Error} */ (err)), true);
+          void app.refresh();
+        },
+        toast: app.toast,
+      });
+      await app.refresh();
+      focusHeading();
+      return;
+    }
+    if (!(await confirmSheet(S.car.confirmDelete, { confirmLabel: S.delete }))) return;
+    await change(bar, () => del(`/api/damage/${r.id}`), S.car.deleted);
+  };
 
   /** @param {import('../api.js').DamageReport} r */
   const card = (r) => {
@@ -293,7 +326,7 @@ export async function render(app, route) {
     const repairNote = h('textarea', { rows: '2', maxlength: String(REPAIR_NOTE_MAX), autocomplete: 'off' });
     const fRepairNote = field(S.car.repairNote, repairNote, S.car.repairNoteHint);
     const repairError = h('p', { class: 'form-error', role: 'alert', hidden: true });
-    const repairSubmit = h('button', { class: 'btn primary', type: 'submit' }, S.car.confirmRepaired);
+    const repairSubmit = button({ label: S.car.confirmRepaired, variant: 'primary', type: 'submit' });
     const repairForm = h(
       'form',
       {
@@ -336,39 +369,28 @@ export async function render(app, route) {
         repairError,
         h('div', { class: 'actions' }, [
           repairSubmit,
-          h(
-            'button',
-            {
-              class: 'btn',
-              type: 'button',
-              onclick: () => {
-                repairForm.hidden = true;
-                // The button that opened the form says it is closed again, and keyboard focus goes back to it.
-                repairButton?.setAttribute('aria-expanded', 'false');
-                repairButton?.focus();
-              },
+          button({
+            label: S.cancel,
+            onclick: () => {
+              repairForm.hidden = true;
+              // The button that opened the form says it is closed again, and keyboard focus goes back to it.
+              repairButton?.setAttribute('aria-expanded', 'false');
+              repairButton?.focus();
             },
-            S.cancel,
-          ),
+          }),
         ]),
       ],
     );
     const repairButton = r.can.repair
-      ? h(
-          'button',
-          {
-            class: 'btn',
-            type: 'button',
-            'aria-label': S.car.repairLabel(place, day),
-            'aria-expanded': 'false',
-            onclick: (/** @type {Event} */ e) => {
-              repairForm.hidden = !repairForm.hidden;
-              if (e.currentTarget instanceof Element) e.currentTarget.setAttribute('aria-expanded', String(!repairForm.hidden));
-              if (!repairForm.hidden) repairedOn.focus();
-            },
+      ? button({
+          label: S.car.markRepaired,
+          attrs: { 'aria-label': S.car.repairLabel(place, day), 'aria-expanded': 'false' },
+          onclick: (/** @type {Event} */ e) => {
+            repairForm.hidden = !repairForm.hidden;
+            if (e.currentTarget instanceof Element) e.currentTarget.setAttribute('aria-expanded', String(!repairForm.hidden));
+            if (!repairForm.hidden) repairedOn.focus();
           },
-          S.car.markRepaired,
-        )
+        })
       : null;
 
     return h('article', { class: `card damage ${r.status}`, id: `damage-${r.id}` }, [
@@ -389,32 +411,20 @@ export async function render(app, route) {
         ? h('div', { class: 'actions' }, [
             repairButton,
             r.status === 'repaired' && r.can.edit
-              ? h(
-                  'button',
-                  {
-                    class: 'btn',
-                    type: 'button',
-                    'aria-label': S.car.reopenLabel(place, day),
-                    onclick: (/** @type {Event} */ e) => void change(barOf(e), () => patch(`/api/damage/${r.id}`, { status: 'open' }), S.car.reopened),
-                  },
-                  S.car.reopen,
-                )
+              ? button({
+                  label: S.car.reopen,
+                  attrs: { 'aria-label': S.car.reopenLabel(place, day) },
+                  onclick: (/** @type {Event} */ e) => void change(actionBar(e), () => patch(`/api/damage/${r.id}`, { status: 'open' }), S.car.reopened),
+                })
               : null,
-            r.can.edit ? h('a', { class: 'btn', href: `#/car?edit=${r.id}`, 'aria-label': S.car.editLabel(place, day) }, S.edit) : null,
+            r.can.edit ? linkButton({ label: S.edit, href: `#/car?edit=${r.id}`, attrs: { 'aria-label': S.car.editLabel(place, day) } }) : null,
             r.can.delete
-              ? h(
-                  'button',
-                  {
-                    class: 'btn danger',
-                    type: 'button',
-                    'aria-label': S.car.deleteLabel(place, day),
-                    onclick: (/** @type {Event} */ e) => {
-                      if (!confirm(S.car.confirmDelete)) return;
-                      void change(barOf(e), () => del(`/api/damage/${r.id}`), S.car.deleted);
-                    },
-                  },
-                  S.delete,
-                )
+              ? button({
+                  label: S.delete,
+                  variant: 'danger',
+                  attrs: { 'aria-label': S.car.deleteLabel(place, day) },
+                  onclick: (/** @type {Event} */ e) => removeReport(r, actionBar(e)),
+                })
               : null,
           ])
         : null,
@@ -428,13 +438,14 @@ export async function render(app, route) {
   // place the form sits under the APK card, below the fold on a 320 px phone: it would look as if nothing had happened.
   return h('div', { class: 'car-view' }, [
     h('h2', { text: S.car.title }),
-    existing ? form : null,
-    apkCard,
-    h('h2', { text: S.car.damage }),
-    h('p', { class: 'hint', text: S.car.intro }),
-    existing ? null : form,
-    h('h3', { text: S.car.open(open.length) }),
-    open.length === 0 ? h('p', { class: 'empty', text: reports.length === 0 ? S.car.none : S.car.noneOpen }) : open.map(card),
-    repaired.length > 0 ? [h('h3', { text: S.car.repairedList(repaired.length) }), repaired.map(card)] : null,
+    // On a wide screen the APK and the form are one column and the reports the other; on a phone they follow each other in this order.
+    h('div', { class: 'split' }, [
+      h('div', {}, [existing ? form : null, apkCard, h('h2', { text: S.car.damage }), h('p', { class: 'hint', text: S.car.intro }), existing ? null : form]),
+      h('div', {}, [
+        h('h3', { text: S.car.open(open.length) }),
+        open.length === 0 ? emptyState({ text: reports.length === 0 ? S.car.none : S.car.noneOpen }) : open.map(card),
+        repaired.length > 0 ? [h('h3', { text: S.car.repairedList(repaired.length) }), repaired.map(card)] : null,
+      ]),
+    ]),
   ]);
 }

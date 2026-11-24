@@ -2,6 +2,7 @@ import { get } from '../api.js';
 import { fmtDriveRange, fmtRange, fmtWhen, formatEuro, groupByDay, h, kmOwnerLine, setBusy } from '../dom.js';
 import { kmMarkers } from '../kmcheck.js';
 import { S, errorText } from '../strings.js';
+import { emptyState } from '../ui.js';
 import { carriedRows, selfPaidButton, shareStatus } from './fuel.js';
 
 export const live = true;
@@ -87,14 +88,12 @@ export async function render(app) {
 
   /**
    * Run one action with its buttons disabled (a double tap cannot send it twice), report, and reload.
-   * @param {Event} event
+   * @param {Element | null} bar the row of buttons the click came from
    * @param {number} fuelId
    * @param {() => Promise<unknown>} action
    * @param {string} done
    */
-  const act = async (event, fuelId, action, done) => {
-    const target = event.currentTarget;
-    const bar = target instanceof Element ? target.closest('.actions') : null;
+  const act = async (bar, fuelId, action, done) => {
     if (bar) setBusy(bar, true);
     try {
       await action();
@@ -170,9 +169,12 @@ export async function render(app) {
         ])
       : null,
     timeline.length === 0
-      ? h('p', { class: 'empty', text: S.history.none })
-      : groupByDay(timeline, (e) => e.start, app.tz).map((g) =>
-          h('section', { class: 'day' }, [h('h3', { class: 'day-heading', text: g.label }), g.items.map(card)]),
+      ? emptyState({ text: S.history.none })
+      : // Days in two columns on a wide screen.
+        h(
+          'div',
+          { class: 'cols' },
+          groupByDay(timeline, (e) => e.start, app.tz).map((g) => h('section', { class: 'day' }, [h('h3', { class: 'day-heading', text: g.label }), g.items.map(card)])),
         ),
     h('p', { class: 'hint center', text: S.agenda.windowNote(app.session.windowMonths) }),
   ]);

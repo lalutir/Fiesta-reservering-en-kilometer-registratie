@@ -1,6 +1,8 @@
 import { get, patch, post } from '../api.js';
 import { dateTimeField, driverSelect, field, h, nextFullHour, readRange, saveErrorText, showFieldErrors } from '../dom.js';
+import { persistForm, restoredLine } from '../drafts.js';
 import { S } from '../strings.js';
+import { button, linkButton } from '../ui.js';
 
 // A form: never re-rendered in the background, so typing is not lost.
 export const live = false;
@@ -19,7 +21,7 @@ export async function render(app, route) {
   if (editId) {
     existing = (await get(`/api/reservations/${editId}`)).reservation;
     if (!existing?.can.edit) {
-      return h('div', { class: 'card' }, [h('p', { text: S.errors.not_editable }), h('a', { class: 'btn', href: '#/' }, S.back)]);
+      return h('div', { class: 'card' }, [h('p', { text: S.errors.not_editable }), linkButton({ label: S.back, href: '#/' })]);
     }
   }
 
@@ -32,7 +34,7 @@ export async function render(app, route) {
   const note = h('input', { type: 'text', name: 'note', maxlength: '500', value: existing?.note ?? '', autocomplete: 'off' });
   const driverField = field(S.reserve.driver, driver);
   const noteField = field(S.reserve.note, note, S.noteHint);
-  const submit = h('button', { class: 'btn primary block', type: 'submit' });
+  const submit = button({ label: S.reserve.submit, variant: 'primary', block: true, type: 'submit' });
   const hint = h('p', { class: 'hint', text: S.reserve.suggestionHint, hidden: true });
   const formError = h('p', { class: 'form-error', role: 'alert', hidden: true });
 
@@ -42,6 +44,16 @@ export async function render(app, route) {
     hint.hidden = existing !== null || !isOther();
   };
   driver.addEventListener('change', syncLabels);
+  // A new reservation keeps what was typed when the person leaves (to check the Agenda, say) and comes back.
+  // A change to an existing one always shows what the server has.
+  const unsent = existing
+    ? null
+    : persistForm({
+        userId: me.id,
+        name: 'reservation',
+        controls: { driver, startDate: start.controls.date, startTime: start.controls.time, endDate: end.controls.date, endTime: end.controls.time, note },
+        onReset: () => syncLabels(),
+      });
   syncLabels();
 
   /** @param {string | null} message */
@@ -67,6 +79,7 @@ export async function render(app, route) {
         try {
           if (existing) await patch(`/api/reservations/${existing.id}`, body);
           else await post('/api/reservations', body);
+          unsent?.clear();
           const saved = existing ? S.reserve.updated : isOther() ? S.reserve.suggested : S.reserve.created;
           // A note is recommended, never required: an empty one only earns a friendly tip.
           app.toast(note.value.trim() === '' ? `${saved} ${S.noteTip}` : saved);
@@ -79,7 +92,7 @@ export async function render(app, route) {
         }
       },
     },
-    [driverField.row, hint, start.row, end.row, noteField.row, h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }), formError, submit],
+    [unsent ? restoredLine(unsent) : null, driverField.row, hint, start.row, end.row, noteField.row, h('p', { class: 'hint', text: S.reserve.tzNote(app.tz) }), formError, submit],
   );
 
   return h('div', { class: 'reserve' }, [h('h2', { text: existing ? S.reserve.editTitle : S.reserve.newTitle }), form]);
