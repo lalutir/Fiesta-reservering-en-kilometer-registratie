@@ -22,6 +22,7 @@ const SCREENS: ReadonlyArray<{ name: string; hash: string; title: RegExp }> = [
   { name: 'Ritten (the drive form and the kilometre check)', hash: '#/usage', title: /^Ritten/ },
   { name: 'Brandstof en kosten', hash: '#/fuel', title: /^Brandstof en kosten/ },
   { name: 'Verkeersboetes', hash: '#/tickets', title: /^Verkeersboetes/ },
+  { name: 'Statistieken', hash: '#/stats', title: /^Statistieken/ },
   { name: 'Inbox', hash: '#/inbox', title: /^Inbox/ },
   { name: 'Historie', hash: '#/history', title: /^Historie/ },
   { name: 'Auto', hash: '#/car', title: /^Auto/ },

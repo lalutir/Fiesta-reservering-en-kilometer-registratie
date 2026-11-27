@@ -281,6 +281,62 @@ export function formatDateKey(key, kind = 'date') {
   return displayFormatter('UTC', kind).format(new Date(utcDay(p.year, p.month, p.day) + DAY_MS / 2));
 }
 
+// ---- calendar months ('YYYY-MM': a month of the household calendar, the unit of the statistics) -----------
+
+/**
+ * 'YYYY-MM' of the local calendar month that contains the instant. The month is the household's, not UTC's:
+ * a drive that starts at 00:30 local time on the 1st belongs to the new month although it is still the old
+ * month in UTC.
+ * @param {Instant} instant
+ * @param {string} tz
+ * @returns {string}
+ */
+export function monthKeyOf(instant, tz) {
+  const p = zonedParts(instant, tz);
+  return `${pad(p.year, 4)}-${pad(p.month)}`;
+}
+
+/**
+ * Strictly 'YYYY-MM' with a month from 01 to 12 in the years 2000 to 2100 (the same years as every other date
+ * the app accepts). This is the one place that decides what a month key is.
+ * @param {unknown} text
+ * @returns {{ year: number, month: number } | null}
+ */
+export function parseMonthKey(text) {
+  if (typeof text !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})$/.exec(text);
+  if (!m) return null;
+  const [year, month] = [Number(m[1]), Number(m[2])];
+  if (year < 2000 || year > 2100 || month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+/**
+ * The month `months` after (or before, when negative) a month key.
+ * @param {string} key 'YYYY-MM'
+ * @param {number} months
+ * @returns {string}
+ */
+export function addMonthKey(key, months) {
+  const p = parseMonthKey(key);
+  if (!p) throw new RangeError('Invalid month');
+  const index = p.year * 12 + (p.month - 1) + months;
+  return `${pad(Math.floor(index / 12), 4)}-${pad((index % 12 + 12) % 12 + 1)}`;
+}
+
+/**
+ * A month for people: 'long' = "november 2026", 'short' = "nov 26". The same in every zone (it is formatted at
+ * noon UTC on the 15th in UTC).
+ * @param {string} key 'YYYY-MM'
+ * @param {'long' | 'short'} [kind]
+ * @returns {string} '' when the key is not a month
+ */
+export function formatMonthKey(key, kind = 'long') {
+  const p = parseMonthKey(key);
+  if (!p) return '';
+  return displayFormatter('UTC', kind === 'short' ? 'monthShort' : 'month').format(new Date(Date.UTC(p.year, p.month - 1, 15, 12)));
+}
+
 /**
  * Combine the value of an <input type="date"> and <input type="time"> that are
  * interpreted in the household zone into a UTC ISO string.
@@ -323,7 +379,7 @@ const displayFormatters = new Map();
 
 /**
  * @param {string} tz
- * @param {'datetime' | 'date' | 'time' | 'day'} kind
+ * @param {'datetime' | 'date' | 'time' | 'day' | 'month' | 'monthShort'} kind
  */
 function displayFormatter(tz, kind) {
   const key = `${tz}|${kind}`;
@@ -334,6 +390,8 @@ function displayFormatter(tz, kind) {
     if (kind === 'datetime') Object.assign(o, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     else if (kind === 'date') Object.assign(o, { day: 'numeric', month: 'short', year: 'numeric' });
     else if (kind === 'day') Object.assign(o, { weekday: 'long', day: 'numeric', month: 'long' });
+    else if (kind === 'month') Object.assign(o, { month: 'long', year: 'numeric' });
+    else if (kind === 'monthShort') Object.assign(o, { month: 'short', year: '2-digit' });
     else Object.assign(o, { hour: '2-digit', minute: '2-digit' });
     f = new Intl.DateTimeFormat(DISPLAY_LOCALE, o);
     displayFormatters.set(key, f);

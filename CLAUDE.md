@@ -1263,6 +1263,126 @@ Defaults taken (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/frontend-redesign-modern-ui` (git-excluded; it lives in the worktree). Base commit `58f4110b1601a33fe46b240044e103b1a8406248`.
 <!-- implement:run:frontend-redesign-modern-ui:end -->
 
+<!-- implement:run:statistics-monthly-totals-retention:start -->
+### Statistics screen, GET /api/stats and monthly totals kept 24 months past the 6-month purge (statistics-monthly-totals-retention)
+
+Date 2026-11-26. Branch `implement/statistics-monthly-totals-retention`. Base branch `main`, base commit `a025d50ec04bfac436d1857fd1541ae408dded49`.
+
+### Request
+
+> Add statistics to the app: an in-app statistics screen backed by its own endpoint, plus monthly totals that are kept longer than the 6-month window. A later change builds a token API and a calendar feed on top of the endpoint, so design it as a clean, documented JSON contract.
+>
+> Retention decision (made by me, the owner): the rule "everything older than 6 months is deleted" stays for drives, reservations, fill-ups, tickets, damage reports and everything else. The one exception is a small table of monthly totals, per person and for the household, that the purge writes before it deletes. It is kept for a new setting STATS_RETENTION_MONTHS (default 24, documented in .env.example and docs/DEPLOYMENT.md, and enforced by the purge). Totals contain numbers only: no times, notes or individual drives.
+>
+> Metrics per person and month, and for the household: - trips and km (km follow the km owner as in the fuel split; "together" km shown separately) - fuel: litres fuelled, euro paid at the pump (by the fueler), euro share owed, average price per litre, cost per km, and consumption in l/100 km from the fill-up odometer readings (assumes fill-to-full each time; say so on screen) - traffic tickets (count and total price, attributed with the existing whoDrove logic), damage reports (count), and unaccounted km from the odometer check
+>
+> The fuel numbers MUST come from the same share computation the Fuel screen uses (reuse computeShares/fuelOverview and its rules, including admins paying no fuel), so statistics can never disagree with the Fuel screen. Decide and document one attribution rule for things that span months (for example a fill-up's share belongs to the month of the fill-up, a drive to the month it started, in the household time zone).
+>
+> Storage: - Additive migration with the usual pre-migrate backup. - The current month, and every month still entirely inside the window, is computed live from source rows. - A month that is partly purged is served from a stored snapshot. That snapshot is written or refreshed while the month is still complete, and at the latest in the purge run that first deletes a row of that month, in the same transaction as the delete. It must never be recomputed from partial data, because that would silently lower history. Document the consequence (corrections in an already partly purged month do not change its totals). - Months that were already partly purged when this ships are marked "incomplete" and shown as such. Do not invent history. - Update the purge, the CLI purge line, the admin Retention tab and counts, backup and restore tests, and the README and DEPLOYMENT retention text, which currently says everything older than 6 months is deleted.
+>
+> Endpoint: `GET /api/stats?from=YYYY-MM&to=YYYY-MM` for any signed-in user (everyone sees everyone, like the rest of the app). It returns a per-month, per-person series plus household totals, with flags per month (provisional, frozen snapshot, incomplete). Strict validation and a range capped at the retention.
+>
+> Screen: reachable without crowding the tab bar at 320 px (a sub-route like Fuel and Tickets, or inside an existing tab; your call). Period choice (6, 12, 24 months), household vs per person, and one bar chart per metric as dependency-free inline SVG (no chart library, no external requests, CSP-safe). Each chart needs a text summary and a data-table alternative, must not rely on colour alone, and must be readable in light and dark. Texts go in the central Dutch dictionary, with nl-NL formatting and a decimal comma. Show empty and incomplete months honestly. A frontend rebuild may follow, so keep the screen thin and the logic in the endpoint.
+>
+> Add tests: totals equal the Fuel screen's shares, admin exemption, together pool, deactivated users, drafts excluded, DST and month boundaries, a fill-up period that straddles months, snapshot before purge (and never recomputed lower afterwards), the retention setting, v-migration upgrade and rollback, backup restore, and a performance check on about 3,000 drives. Extend the smoke check and the e2e suite, and do a headless Chromium pass at 390 and 320 px. Report how existing data was handled at first deploy.
+
+### What was built
+
+The Statistics screen (`#/stats`, a third link on the Drives header, the bar keeps its five places) shows monthly totals per person and for the household as inline-SVG bar charts, backed by a versioned, documented `GET /api/stats?from=YYYY-MM&to=YYYY-MM` (`docs/STATS-API.md`). Before the purge deletes anything it freezes every month it would change into a numbers-only snapshot (migration v7, `stats_months` and `stats_totals`), in the same transaction, and it drops snapshots older than the new `STATS_RETENTION_MONTHS` (default 24, 6 to 120); every other record keeps the 6-month rule. Fuel numbers come from `fuelOverview` (`src/fuel.ts` is untouched), tickets from `whoDrove` and gaps from the odometer chain. Nothing is committed: HEAD equals `main` and `origin/main`; git shows 41 modified tracked files (+1361/-76) and 7 untracked (`src/stats.ts`, `public/views/stats.js`, `docs/STATS-API.md`, four `test/stats*.test.ts`) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 8). One `src/stats.ts`, one numbers-only person table where row 0 holds the household-only items (so the household is the sum of the rows), `fuelOverview` reused as is, and the freeze decided inside the purge transaction by comparing computed months before and after the deletes.
+- Rejected: idiomatic (an odometer-style module with a `fuel.ts` extraction): a pure move in money code and more DTO surface for no gain at 2 to 10 users. Robust (one `MonthTotals` path for live and frozen plus extra layers): largest diff, no criterion needs it.
+- Rejected: freezing by calendar month only (misses a month whose rows stay while its fill-up period loses its predecessor, the key trap); separate household and person tables; writing snapshots from `GET` or a timer (only the purge sees the rows just before they go).
+- Rejected: per-user fields in the response (a later token API needs one body); a chart library, build step or any external request (zero dependencies, strict CSP).
+
+### How it works
+
+Start with the top comment of `src/stats.ts`, then `storeStatistics` in `src/retention.ts`, then `docs/STATS-API.md`, then `public/views/stats.js`.
+
+- Attribution, in the household time zone: a drive to its start month; a fill-up with its litres, shares and consumption interval to its own month; a ticket to the offence month (driver by `whoDrove`); a damage report to `noticed_on` (counted for the reporter); an odometer gap to the month of its later reading. Drafts never count, deactivated users stay in the series.
+- Units: integer cents, millilitres and km. Ratios are derived on read, null when the denominator is 0: price per litre and cost per km in thousandths of a euro, consumption in hundredths of a litre per 100 km. Together km, unaccounted km and consumption are household only.
+- Read: `computeMonths` builds per-month, per-person totals from source rows; `statsReport` serves live months from it and frozen ones from `stats_totals`, with flags `provisional` (current month), `frozen`, `incomplete`, `unavailable`. `parseStatsRange` gives 422 with a code per field (`invalid_month`, `in_future`, `after_to`, `outside_retention`); the default is the last 12 months; the body is the same for every user; the call writes nothing.
+- Freeze: the purge computes months, deletes, computes again when a data row went, and `planFreeze` stores from the BEFORE numbers a month whose signature changed, a month wholly before the cutoff that has data, and on the first run on an old database every month up to `stats_legacy_through` (flagged incomplete). The current month only gets a marker row (`frozen = 0`). A throw rolls the whole purge back, so nothing is deleted without its snapshot; the log line is written after the commit.
+- Maintenance: a failing purge is logged and no longer stops the daily backup; the day stays unmarked, so the next tick retries.
+- First deploy: nothing is back-filled or invented. On a database older than the window the first purge stores the cutoff month and the months up to the oldest remaining fill-up once, flagged incomplete; earlier months with no data are `unavailable`, not zero. A young database flags nothing. Consequence: corrections to a drive, fill-up or ticket in an already stored month do not change its totals.
+- Screen: 6, 12 or 24 months and household or one person; one chart per metric from `createElementNS` (hatched = provisional or incomplete, dotted = together km, dash = unknown month) with a sentence and a `<details>` table each; the consumption chart states the fill-to-full assumption. Cache `car-static-v9`, `/views/stats.js` precached.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/stats.ts` | added | `computeMonths`, `planFreeze`, `statsReport`, `parseStatsRange`, the route (464 lines) |
+| `src/db.ts` | modified | Migration 7: `stats_months`, `stats_totals`, CHECKs, numbers only; `pre-migrate-v6.db` written first |
+| `src/retention.ts`, `maintenance.ts`, `cli.ts`, `config.ts`, `app.ts` | modified | Freeze inside the purge, `PurgeResult` and counts, purge failure no longer blocks the backup, CLI line, `STATS_RETENTION_MONTHS`, route |
+| `shared/time.js`, `shared/format.js` | modified | Month-key helpers; `formatHundredths` |
+| `public/views/stats.js` | added | Statistics screen (500 lines) |
+| `public/app.js`, `nav.js`, `sw.js`, `api.js`, `dom.js`, `strings.js`, `style.css`, `views/usage.js`, `admin/admin.js` | modified | Route and sub-route of Ritten, cache v9 and precache, typedefs, `S.stats`, chart styles, Drives link, admin Retention tab |
+| `docs/STATS-API.md` | added | The JSON contract (205 lines); a test pins its fields to the response |
+| `README.md`, `docs/DEPLOYMENT.md`, `DESIGN.md`, `GLOSSARY.md`, `.env.example` | modified | Retention exception, first deploy, the setting, charts, vocabulary |
+| `test/stats.test.ts`, `stats-retention.test.ts`, `stats-view.test.ts`, `stats-property.test.ts` | added | API, freeze and purge, screen, properties (25, 18, 27 and 5 declarations) |
+| 13 existing `test/*.ts` files, `test/dutch-keys.txt` | modified | Pins that had to move (see Honesty flags) |
+| `scripts/smoke.mjs`, `e2e/` (4 files) | modified | Smoke check 22; Stats step in the journey, `Statistieken` in the states and touch-target specs, env clearing |
+| `CLAUDE.md` | modified | This entry |
+
+`package.json`, the lock file, `Dockerfile`, compose, `Caddyfile`, `.github`, `src/fuel.ts`, `src/odometer.ts` and `src/tickets.ts` are unchanged (empty `git diff`).
+
+### How to run and test
+
+Windows, Node 22.23.1. Test stage, final tree, all exit 0 (this documentation step ran no test command):
+
+- `npm run typecheck`, `npm run lint`, `npm run build`: clean. `npm test`: 1355 of 1355, 0 skipped, 0 todo (1265 on `main` per this file; 1345 after build, 1349 after UI, 1350 after backend). `npm run smoke`: 22 of 22 over real HTTP. `npm run e2e` (installed Chromium via `E2E_CHROMIUM_PATH`): 78 passed at 390 and 320 px, guard clean. `npm run check` ran in the build stage (exit 0).
+- Build stage also: `TZ=UTC npm test` 1345 of 1345; `npm audit --omit=dev` 0 vulnerabilities. Performance (3,000 drives, 150 fill-ups, 60 tickets, 40 damage reports): `computeMonths` 123 to 151 ms, `GET /api/stats` 101 to 104 ms, hard limit 1,500 ms.
+- Mutation checks, all killed, files restored and SHA-256 compared: 20 of 20 in build, 5 in the UI pass, 10 of 10 in the test stage. Headless Chromium at 390 and 320 px, light and dark: build pass (no sideways scroll, no target under 44 px, no console error, no external request) and test pass 20 of 20; the UI pass also looked at 768 and 1280 px.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design:frontend-design | No | 5 fixes: keyboard trap on the person select, legend now a closed disclosure (first chart 200 to 270 px higher), controls width on wide screens, per-chart names for twelve "Tabel" buttons, 320 px tables as a named focusable scroll region; 4 tests |
+| Backend | engineering-skills:senior-backend | No (its Python tools were not run) | `retention.stats` log line moved after the commit (shown red first), query parsing documented and tested; 1 test |
+| Data | engineering-advanced-skills:database-designer | No | No change: v7 additive, forced snapshot failure rolled the purge back and a retry worked, integrity and foreign-key checks clean; one guard was tried and reverted because an existing test pins that case |
+| Performance | engineering-advanced-skills:performance-profiler | No | No change: `computeMonths` 40 ms at 600 drives, 91 ms at 3,000, 256 ms at 12,000; new queries use primary-key searches |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; read-only, filtering inline |
+| Simplicity | simplify | No | Behaviour-neutral cleanups in `stats.ts`, `retention.ts`, `maintenance.ts`, `views/stats.js`; single inline pass, not the 4-agent fan-out |
+| DevOps | none | n/a | Did not run (no ledger entry; no Docker, Caddy or CI change) |
+
+### Verification
+
+Verified (ran and saw pass): the commands above; rolling-purge property (10 seeded households, 241 purges: a purge never changes a month that is over); stats against the Tickets, Fuel and Drives screens over 25 seeded households; month edges at local midnight in CEST and CET; v6 file with rows upgrades, a failing v7 rolls back, v6 and v7 backups restore; `GET /api/stats` is read-only. The correctness review lens also re-ran typecheck, lint and `npm test` (1355 of 1355) on the final tree.
+
+NOT verified: real phones, iOS Safari, Firefox and WebKit (headless Chromium on Windows only); screen readers; Docker, Caddy, a droplet and the live database (first-deploy rule tested on synthetic v6 files; its age of about ten days is inferred from run-log dates, and the rule reads `users.created_at` at runtime); Linux and GitHub Actions (nothing is pushed), including the 24-bar chart with Linux fonts; `TZ=UTC npm test` after the specialist and test changes; e2e and smoke after the review (read-only, no later change). Test confidence: high for what the commands cover (test stage); not for the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 19 findings, 0 confirmed, no blocking finding, no review fix.
+
+Remaining notes (not fixed): a legacy month that gains data after the first purge reads incomplete while live and complete once frozen; the period buttons use the phone clock, so a phone one month behind gets a 422, falls back to 12 months and still shows "24 mnd" pressed; a server clock that jumps far forward deletes every stored monthly total in one purge (no guard, no test); the first-deploy rule freezes and flags months that were not cut short while they are still editable; smoke check 22 hard-codes 11 unavailable months and fails in the first hours of a local month (the lenses estimate one to ten hours); the oldest-kept-month rule is written in two places; `stats_months` mixes stored months and markers (each reader repeats the `frozen` filter); long functions and growing positional argument lists; copied test helpers; every range with the current month recomputes everything.
+
+### Assumptions and open questions
+
+Defaults taken for seven open questions (none scope-changing; no one was asked):
+- Partly purged months at ship keep their partial numbers, frozen at the first purge and flagged incomplete; months with no data are unavailable, never zero. Damage counts go to the reporter; unaccounted km are household only; cost per km uses the km of the same fill-up periods as the Fuel computation.
+- A bad range is a 422 with field codes, not a silent clamp. The oldest fill-up month is reported as the Fuel screen does, with no extra flag. The entry point is a link on the Drives header, no new tab.
+- `windowMonths` stays 6 and hard-coded; `HOUSEHOLD_TZ` is assumed not to change once totals exist. Period buttons above the server's retention are not offered; loading and error states are the shell's.
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, ledger caveats none; the test stage ran once and the review one round.
+- Ledger and git disagree on the branch: the ledger and `git branch` name `implement/statistics-monthly-totals-retention` (checked out here at `a025d50`), but the build and analysis records name `worktree-statistics-monthly-totals-retention`, a second local branch at the same commit. Nothing is committed on either; all changes are uncommitted in this worktree.
+- The tree held an earlier, unrecorded build pass (steps 1 to 6 and the server half of step 7). The build stage audited it: 1,318 tests ran with 6 failing (5 in `stats-retention.test.ts`, 1 in `strings.test.ts`), all test bugs, fixed without a source change except a lint-only refactor in `stats.ts`.
+- Ledger and git disagree on tests: git shows 75 declarations in the four new files (25, 18, 27, 5) and the suite grew 1265 to 1355 (+90, where 1265 is quoted from this file, not re-measured); the ledger names counts only for the view and property files, and the rest is not itemised. New tests passed on their first run; the mutation checks, not a red run on the untouched tree, show they can fail (one build mutant first survived and led to a new test; two of the 10 survived the new property file and were killed by existing tests).
+- Existing tests changed only where tied to the change: schema version pins (`db`, README pins in `car-view`, `odometer-api`), `PurgeResult`, counts and CLI sentence (`retention`), cache name and precache (`pwa`), nav lists and tap counts (`nav`), Drives link row and admin Retention texts (`tickets-view`), `.env.example` and guide pins (`deploy`, `config`), month and format helpers (`time`, `format`), Dutch keys. No `.skip`, `.only` or `.todo` in `test/`; nothing loosened.
+- Backend and security skill scripts were not run; security and simplify ran inline (no Agent tool) and wrote no write-up file. The Request quote above has its line breaks collapsed.
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, no flags typed; resolved flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/statistics-monthly-totals-retention` (git-excluded). Base commit `a025d50ec04bfac436d1857fd1541ae408dded49`.
+<!-- implement:run:statistics-monthly-totals-retention:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

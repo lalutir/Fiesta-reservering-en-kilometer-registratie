@@ -648,3 +648,68 @@ home.quickFuelSub
 home.quickDamage
 home.quickDamageSub
 home.failed (function 1)
+stats.title
+stats.intro
+stats.period
+stats.periodLabel (function 1)
+stats.periodName (function 1)
+stats.who
+stats.household
+stats.inactive (function 1)
+stats.householdOnly
+stats.empty.title
+stats.empty.text
+stats.emptyPerson.title
+stats.emptyPerson.text
+stats.groups.drives
+stats.groups.fuel
+stats.groups.other
+stats.metrics.trips
+stats.metrics.km
+stats.metrics.unaccounted
+stats.metrics.litres
+stats.metrics.paid
+stats.metrics.share
+stats.metrics.price
+stats.metrics.costPerKm
+stats.metrics.consumption
+stats.metrics.tickets
+stats.metrics.ticketCents
+stats.metrics.damage
+stats.consumptionNote
+stats.value.trips (function 1)
+stats.value.tickets (function 1)
+stats.value.damage (function 1)
+stats.value.km (function 1)
+stats.value.litres (function 1)
+stats.value.euro (function 1)
+stats.value.price (function 1)
+stats.value.perKm (function 1)
+stats.value.consumption (function 1)
+stats.legend.title
+stats.legend.solid
+stats.legend.hatched
+stats.legend.dotted
+stats.legend.gap
+stats.legend.frozen
+stats.notes.provisional (function 1)
+stats.notes.incomplete (function 1)
+stats.notes.unavailable (function 1)
+stats.chart.table
+stats.chart.caption (function 1)
+stats.chart.colMonth
+stats.chart.colTogether
+stats.chart.colStatus
+stats.chart.unknown
+stats.chart.state (function 4)
+stats.chart.plusTogether (function 1)
+stats.chart.none
+stats.chart.latest (function 2)
+stats.chart.top (function 2)
+stats.chart.latestAndTop (function 2)
+usage.statsLink
+admin.retention.oldestStats
+admin.retention.statsNote (function 1)
+fieldErrors.invalid_month
+fieldErrors.after_to
+fieldErrors.outside_retention

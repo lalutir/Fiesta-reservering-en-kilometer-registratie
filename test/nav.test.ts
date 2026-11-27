@@ -34,7 +34,7 @@ test('every route of the app has a place: a place of the bar, a place under Meer
   assert.ok(VIEWS.length >= 11, `parsed ${VIEWS.length} views from app.js`);
   const known = new Set([...PRIMARY, ...SECONDARY].map((i) => i.name));
   for (const route of VIEWS) {
-    assert.ok(known.has(route) || ['fuel', 'tickets'].includes(route), `${route} has no place in the navigation`);
+    assert.ok(known.has(route) || ['fuel', 'tickets', 'stats'].includes(route), `${route} has no place in the navigation`);
     assert.ok(known.has(placeOf(route)), `${route} belongs to ${placeOf(route)}, which is not a place of the bar`);
   }
 });
@@ -45,6 +45,7 @@ test('the places under Meer light Meer, the sub-routes of Ritten light Ritten, a
   assert.deepEqual(currentPlaces('more'), ['more']);
   assert.deepEqual(currentPlaces('fuel'), ['usage']);
   assert.deepEqual(currentPlaces('tickets'), ['usage']);
+  assert.deepEqual(currentPlaces('stats'), ['usage']);
   assert.deepEqual(currentPlaces('agenda'), ['agenda']);
   assert.deepEqual(currentPlaces('home'), ['home']);
 });
@@ -54,6 +55,7 @@ test('page titles: the label of the place, or the name of the sub-view; an unkno
   assert.equal(titleOf('agenda'), 'Agenda');
   assert.equal(titleOf('fuel'), S.fuel.title);
   assert.equal(titleOf('tickets'), S.tickets.title);
+  assert.equal(titleOf('stats'), 'Statistieken');
   assert.equal(titleOf('more'), 'Meer');
   assert.equal(titleOf('car'), 'Auto');
   assert.equal(titleOf('nope'), null);
@@ -65,7 +67,7 @@ test('only an empty hash is a bare launch: "#/" is the Agenda, and every other a
 });
 
 test('the old addresses all still name a view, and the push deep links of the server open one too', () => {
-  for (const route of ['agenda', 'reserve', 'inbox', 'usage', 'fuel', 'tickets', 'history', 'car', 'account']) assert.ok(VIEWS.includes(route), route);
+  for (const route of ['agenda', 'reserve', 'inbox', 'usage', 'fuel', 'tickets', 'stats', 'history', 'car', 'account']) assert.ok(VIEWS.includes(route), route);
   assert.ok(VIEWS.includes('home') && VIEWS.includes('more'), 'routes were added');
   const sources = ['notify.ts', 'push.ts'].map((f) => fs.readFileSync(path.join(root, 'src', f), 'utf8')).join('\n');
   const links = new Set([...sources.matchAll(/'(\/#\/[a-z]*)(?:\?[^']*)?'|`(\/#\/[a-z]*)(?:\?[^`]*)?`/g)].map((m) => m[1] ?? m[2]));
@@ -116,6 +118,8 @@ test('every destination, the admin page included, is at most two taps away; the 
       assert.equal(taps(entry('inbox'), second), 2, 'Meer, then the row');
       assert.equal(taps(entry('fuel'), second), 2, 'Ritten, then Brandstof en kosten');
       assert.equal(taps(entry('tickets'), second), 2, 'Ritten, then Verkeersboetes');
+      assert.equal(taps(entry('stats'), second), 2, 'Ritten, then Statistieken');
+      assert.equal(PRIMARY.length, 5, 'Statistieken is no sixth place of the bar');
 
       // The admin page is its own document: an admin finds it on Meer (tap two), a member does not see it at all.
       assert.equal(taps(ADMIN_ITEM.href, adminMeer), 2);
@@ -251,7 +255,7 @@ test('the 60-second refresh leaves the page alone while a sheet or a field is op
   }));
 
 test('the shell keeps the pieces other tests rely on: the VIEWS literal, a skip link that does not touch the hash, a walk to another place before a render', () => {
-  assert.match(appSource, /const VIEWS = \{ home, more, agenda, reserve, inbox, usage, fuel, tickets, history, car, account \};/);
+  assert.match(appSource, /const VIEWS = \{ home, more, agenda, reserve, inbox, usage, fuel, tickets, stats, history, car, account \};/);
   assert.match(appSource, /class: 'skip-link', href: '#view', onclick: \(\/\*\* @type \{Event\} \*\/ e\) => \(e\.preventDefault\(\)/);
   // What it does is run by test/shell-undo.test.ts (the real shell) and test/undo.test.ts; this only keeps the call from being dropped,
   // and a flush on every render (the cause of an Ongedaan maken that did nothing) from coming back.

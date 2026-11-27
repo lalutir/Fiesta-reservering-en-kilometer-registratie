@@ -104,6 +104,7 @@ export default defineConfig({
       SHARED_DIR: '',
       HOUSEHOLD_TZ,
       BACKUP_KEEP_DAYS: '',
+      STATS_RETENTION_MONTHS: '',
       SCRYPT_R: '',
       TIKKIE_PAYMENT_REQUEST_URL: '',
       TIKKIE_API_KEY: '',

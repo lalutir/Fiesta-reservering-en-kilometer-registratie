@@ -178,7 +178,8 @@ Keep the password to letters, digits and `- _ . / + =`: Docker Compose treats `$
 and `#` in a `.env` file specially. Leave `COOKIE_SECURE` unset (it defaults to
 on). `.env` is git-ignored: never commit it and never paste it into chat or tickets.
 
-The reminders and the optional Tikkie link have settings of their own; the defaults
+The reminders, the optional Tikkie link and `STATS_RETENTION_MONTHS` (how long the
+monthly statistics are kept, default 24) have settings of their own; the defaults
 are right for this household (section 18).
 
 ## 8. Start it
@@ -388,6 +389,9 @@ Treat a new Caddy minor the same way (edit the `image:` line).
       card shows the days left. File a damage report: with reminders on for a second phone, that
       phone gets a notification that opens the Car tab, and the report says who had the car before the
       day you noticed it (section 18).
+- [ ] After an update from the version with the Car tab: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v6.db`. Drives > **Statistieken** opens and draws the charts; the admin Retention tab
+      shows how many monthly totals are stored (section 18).
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -410,6 +414,7 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 | Build is killed or hangs on the smallest droplet | Add the swap file (section 4) or use the 1 GiB droplet. |
 | The test notification never arrives | Check, in this order: reminders are on for that device (Account page), notifications are allowed for the app in the phone's settings, the app is installed on the Home Screen on an iPhone, `PUSH_ENABLED` is not `false`, `docker compose logs app` has no "Reminders are off" warning from the start-up (it means `DOMAIN` is not a bare host name such as `car.example.com` and `PUSH_CONTACT` is empty), and the same logs show no `push.send_failed` lines (they name the push service and the status). A phone whose push service answers "gone" is removed and has to enable reminders again. |
 | One person never gets the notifications for what others change, while the test notification works | They are only sent to **active** people with a device signed up, and never to the person who made the change. Check that the person is not deactivated, that they enabled reminders on that device, and `docker compose logs app | grep notify`: `notify.sent` lines say how many devices were reached, `notify.error` lines say that something failed (by the name of the error only). |
+| Old data is not deleted and `docker compose logs app` shows `maintenance.error` with `"step":"purge"` | The purge could not store a monthly total, so it deleted nothing (it is one transaction) and retries every 30 minutes; the daily backup is still written. The `message` says why (a full disk is the usual cause). Fix that and it recovers by itself; restoring `pre-migrate-v6.db` is the way back (section 18). |
 | The Account page says this browser's push service is not supported | Only Google (Chrome, Edge, Android), Apple, Mozilla and Microsoft push services are used (section 18). |
 | Times look an hour off | `HOUSEHOLD_TZ` is wrong in `.env`; times are shown in that zone whatever the phone is set to. |
 | Disk is filling up | `docker system df` shows where. Container logs are capped at 3 x 10 MB each; old images and build cache are the usual cause: `docker image prune -f` and `docker builder prune -f`. Do not prune volumes (`docker volume prune`, `docker system prune --volumes`): with the stack down they can remove the database volume. |
@@ -968,6 +973,78 @@ without a white flash; [ ] open `/admin/` on a computer: four sections in a side
 
 **Not verified:** the installed app on a real Android or iOS phone, the shell served by Caddy with a real certificate, real
 push delivery, a screen reader, and Docker (it runs in CI only).
+
+### Statistics: monthly totals that outlive the 6-month window
+
+**Updating from the version with the Car tab (schema v6).** The first start of this version upgrades the
+database once more, to schema v7: two new tables (`stats_months` and `stats_totals`) and nothing else. No
+existing table, row or index is changed. The same rules apply as for the earlier upgrades, with another copy,
+`/data/backups/pre-migrate-v6.db`:
+
+- Take a backup first (section 12). Right before the upgrade the app writes a full copy of the database as it was
+  to `/data/backups/pre-migrate-v6.db`, once, not rotated and not deleted by the daily clean-up. It holds password
+  hashes like every backup, so treat it as a secret and delete it
+  (`docker compose exec app rm /data/backups/pre-migrate-v6.db`) once you are happy with the new version. If it
+  cannot be written (disk full) the app refuses to start and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from section 11, and start the
+  previous version. That loses everything written after the upgrade, **including every stored monthly total**, and
+  an older app refuses to open a v7 database. If you go back and later try the update again, delete
+  `pre-migrate-v6.db` first: the app never overwrites an existing copy. (Operators who would rather keep the data
+  can stop the app, drop the two tables, set `PRAGMA user_version = 6` and delete the meta keys
+  `stats_first_month` and `stats_legacy_through`; this guide documents only the restore path.)
+- If you come from an older version than v6, the app upgrades straight to v7 in one start and writes only the copy
+  of the version it found.
+- The phones pick up the new screen by themselves: the app files are cached under a new name
+  (`car-static-v9`), so the old copy is dropped the next time the app is opened with a connection.
+
+**What it does.**
+
+- **The Statistics screen** (Drives tab, link *Statistieken*) and the JSON behind it, `GET /api/stats`
+  ([STATS-API.md](STATS-API.md)), show the monthly totals of the household and of each person. Everybody signed in
+  sees the same numbers; reading them writes nothing.
+- **`STATS_RETENTION_MONTHS`** in `.env` (default 24, from 6 to 120, the current month included) says how many
+  months of totals are kept. They are **numbers only**: kilometres, euros, litres and counts per person and month,
+  with no time of an event, no note, description or reason and no id of a drive, fill-up, ticket or report. Every
+  other record keeps the 6-month rule. Lowering the setting deletes the older totals at the next purge; raising it
+  restores nothing. After a change run `docker compose up -d` so the app reads it.
+- **When a month is stored.** Only the daily purge (at start-up and once a day, or the admin's *Opruiming nu
+  uitvoeren* / `purge` command) writes a total, **inside its own transaction and before it deletes anything**. It
+  works out every month's numbers before and after its deletes and stores the months that would change, from the
+  numbers before. That includes a month that loses none of its own rows (a fill-up whose earlier fill-up is
+  deleted gets a shorter period and other shares) and a month that lies wholly before the window. The current month
+  is never stored; if a purge changes it, it is flagged *incomplete* on the screen. If storing a total fails the whole
+  purge is rolled back (nothing is deleted without its totals), `maintenance.error` with `"step":"purge"` is
+  logged and the next 30-minute check tries again.
+- **A stored month never changes again.** Correcting a drive, a fill-up or a ticket of a month that is stored does
+  not change its totals, and nothing records the correction. This is the price of keeping the numbers when the
+  records are gone. A changed `HOUSEHOLD_TZ` re-cuts the live months but not the stored ones.
+- **First deploy on existing data.** Nothing is back-filled and nothing is invented. At the first purge after the
+  upgrade the app writes two keys (`stats_first_month`: the month of the oldest account, and, only when that account
+  is older than the window, `stats_legacy_through`). A database that is **older than the window** has months that
+  earlier purges already cut short: the month the cutoff falls in, and the months up to the oldest fill-up that is
+  left (its period reaches back into what was deleted). Those are stored once from the rows that remain and flagged
+  **incomplete**; a month before that with nothing in it is **unknown**, not zero. A database **younger than the
+  window** flags nothing, stores nothing until a purge changes a month, and a quiet month reads zero. Whether
+  the live database is old enough to be affected has not been checked (it is inferred from the dates of the first
+  runs): the admin Retention tab shows the oldest stored total after the first purge.
+- **Backups and the admin page.** The totals are in the database, so in every backup. The admin Retention tab shows
+  how many totals are stored, the oldest one and, in the last purge, how many months were stored and dropped; the `purge`
+  command prints the same in its sentence.
+- **A failing purge no longer stops the daily backup.** Before this version a purge that threw also skipped the
+  backup of that day. Now the backup is still written (once per day), the day stays unmarked, and the purge is tried
+  again every 30 minutes.
+
+**Checklist after the update:** [ ] `docker compose exec app ls -l /data/backups` lists `pre-migrate-v6.db`;
+[ ] Drives > *Statistieken* opens and shows charts (a young database shows "onbekend" months before the household
+started); [ ] the admin Retention tab shows *Oudste vastgelegde maandtotaal* ("–" until the first purge stores one);
+[ ] `docker compose logs app | grep retention.stats` shows, after the first purge, which months were stored and which
+were incomplete (month keys only).
+
+**Not verified:** a real droplet, the live database (the first-deploy rule is tested on synthetic files only), real
+phones and a screen reader, the charts in Safari and Firefox (a headless Chromium only), and the time on the
+smallest droplet. A test times a household of about 3,000 drives, 150 fill-ups, 60 tickets and 40 damage reports:
+about 0.12 s to work out all months and about 0.10 s for the request on a development machine (the budget in the test
+is 1.5 s), and the purge works the months out twice.
 
 ### Switching things off
 

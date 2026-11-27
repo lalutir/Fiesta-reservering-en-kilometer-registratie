@@ -255,9 +255,10 @@ test('.env.example is complete, free of secrets, and accepted by the config load
   const active: Record<string, string> = {};
   for (const m of raw.matchAll(/^([A-Z][A-Z0-9_]*)=(.*)$/gm)) active[m[1] as string] = (m[2] as string).trim();
 
-  for (const name of ['DOMAIN', 'HOUSEHOLD_TZ', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'BACKUP_KEEP_DAYS']) {
+  for (const name of ['DOMAIN', 'HOUSEHOLD_TZ', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'BACKUP_KEEP_DAYS', 'STATS_RETENTION_MONTHS']) {
     assert.ok(name in active, `${name} is in .env.example`);
   }
+  assert.equal(active['STATS_RETENTION_MONTHS'], '24', 'the example shows the default for how long monthly totals are kept');
   for (const [name, value] of Object.entries(active)) {
     if (/PASSWORD|SECRET|TOKEN|KEY/.test(name)) assert.equal(value, '', `${name} must be empty in the committed example`);
   }
@@ -334,6 +335,7 @@ test('the deployment guide covers droplet, DNS, first admin, backups, updates an
   assert.match(cost, /Hetzner/, 'the cost section names the cheaper alternative');
   assert.match(guide, /not verified|unverified/i, 'prices are flagged as unverified');
   assert.match(guide, /BACKUP_KEEP_DAYS/, 'backup rotation is explained');
+  assert.match(guide, /STATS_RETENTION_MONTHS/, 'how long the monthly totals are kept is explained');
 });
 
 test('every CLI command in the guide exists, and the guide shows the operator workflows', () => {

@@ -79,6 +79,18 @@ export function formatPrice(thousandths) {
 }
 
 /**
+ * A count of hundredths with a decimal comma and two decimals, no grouping: 1234 -> "12,34", 5 -> "0,05",
+ * 650 -> "6,50". Used for litres per 100 km, which the statistics keep as whole hundredths.
+ * @param {number} hundredths
+ * @returns {string}
+ */
+export function formatHundredths(hundredths) {
+  const s = split(hundredths);
+  if (!s) return MISSING;
+  return `${s.sign}${group(String(Math.floor(s.abs / 100)))},${String(s.abs % 100).padStart(2, '0')}`;
+}
+
+/**
  * Kilometres with a thousands dot, not locale dependent: 45210 -> "45.210".
  * @param {number} km
  * @returns {string}

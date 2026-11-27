@@ -63,6 +63,11 @@ without regard to case, and a "Do not use" term only as a whole word.
 | Reminder | reminder | herinnering | reminder | |
 | Note | note | notitie | opmerking | A note is "aanbevolen" (recommended) or "verplicht" (required). |
 | Retention | retention | bewaartermijn | retentie | |
+| Statistics | statistics | statistieken | | The screen under Ritten with the monthly totals as charts. |
+| Monthly total | monthly total | maandtotaal | maandcijfer | The numbers of one month (kilometres, euros, counts). They are kept longer than the records behind them (24 months unless the server says otherwise). |
+| Provisional | provisional | voorlopig | tijdelijk | The current month: its numbers still change. |
+| Incomplete | incomplete | onvolledig | gedeeltelijk | A month of which a part was already deleted when its total was stored, so the numbers can be too low. |
+| Stored (frozen) | frozen | vastgelegd | bevroren | A monthly total that is stored does not change any more, also when a drive or fill-up of that month is corrected afterwards. |
 | Together (kilometres of the household) | together | samen | gezamenlijk | |
 | History | history | historie | geschiedenis | Tab label; "Geschiedenis" does not fit. |
 | Car | car | auto | wagen | |

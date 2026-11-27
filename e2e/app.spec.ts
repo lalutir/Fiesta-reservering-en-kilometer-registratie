@@ -50,6 +50,14 @@ const UI = {
   drivenByMe: 'Gereden door jou',
   kmCheck: /Kilometercontrole/,
   fuelLink: 'Brandstof en kosten',
+  statsLink: 'Statistieken',
+  statsTitle: 'Statistieken',
+  statsPeriod12: '12 maanden',
+  statsPeriod24: '24 maanden',
+  statsWho: 'Voor wie',
+  statsHousehold: 'Hele huishouden',
+  chartKm: 'Kilometers',
+  chartTable: 'Tabel',
   fuelOdometer: 'Huidige kilometerstand (km)',
   litres: 'Liters',
   totalPrice: 'Totaalprijs (€)',
@@ -214,6 +222,29 @@ test('sign in, reserve, register km from the card, open History and the admin pa
     await expect(page.getByRole('heading', { name: UI.registerDrive })).toBeVisible();
     await expect(page.getByRole('heading', { name: UI.kmCheck })).toBeVisible();
     await expectNoHorizontalScroll(page, 'drives with the kilometre check');
+  });
+
+  await test.step('the Statistics screen draws the charts at this width, in 12 and in 24 months, and reads only', async () => {
+    // Reached from the Drives header. The drive registered above is in the 12 months, so there is something to draw.
+    await page.getByRole('link', { name: UI.statsLink, exact: true }).click();
+    await expect(page.getByRole('heading', { name: UI.statsTitle, exact: true })).toBeVisible();
+    await expect(page.getByRole('img', { name: UI.chartKm, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: UI.statsPeriod12, pressed: true })).toBeVisible();
+    await expect(page.getByLabel(UI.statsWho)).toHaveValue('household');
+    // Statistics is a sub-route of Ritten: Ritten stays lit and the bar keeps its five places.
+    await expect(mainNav.getByRole('link', { name: UI.tabDrives })).toHaveAttribute('aria-current', 'page');
+    await expectTabsFit(page, 'tab bar on the Statistics screen', ALL_TABS);
+    await expectNoHorizontalScroll(page, 'statistics, 12 months');
+    // The table with the same numbers is one tap away, and is not wider than the phone.
+    await page.getByText(UI.chartTable, { exact: true }).first().click();
+    await expectNoHorizontalScroll(page, 'statistics with a table open');
+    await page.getByRole('button', { name: UI.statsPeriod24 }).click();
+    await expect(page.getByRole('button', { name: UI.statsPeriod24, pressed: true })).toBeVisible();
+    await expect(page.getByRole('img', { name: UI.chartKm, exact: true })).toBeVisible();
+    await expectNoHorizontalScroll(page, 'statistics, 24 months');
+    // Back to where the next step expects to be: the Drives tab.
+    await mainNav.getByRole('link', { name: UI.tabDrives }).click();
+    await expect(page.getByRole('heading', { name: UI.registerDrive })).toBeVisible();
   });
 
   await test.step('a fill-up cannot be saved without the odometer reading', async () => {

@@ -48,6 +48,15 @@ test('numbers are range-checked and fail fast, naming the variable', () => {
   for (const bad of ['0', '366', 'many']) {
     assert.throws(() => loadConfig({ BACKUP_KEEP_DAYS: bad }), /BACKUP_KEEP_DAYS must be an integer between 1 and 365/, `BACKUP_KEEP_DAYS=${bad}`);
   }
+  // The months of statistics totals that are kept: the current month and the ones before it, 24 unless told otherwise.
+  assert.equal(loadConfig({}).statsRetentionMonths, 24);
+  assert.equal(loadConfig({ STATS_RETENTION_MONTHS: '' }).statsRetentionMonths, 24, 'an empty value counts as unset');
+  assert.equal(loadConfig({ STATS_RETENTION_MONTHS: '6' }).statsRetentionMonths, 6);
+  assert.equal(loadConfig({ STATS_RETENTION_MONTHS: '120' }).statsRetentionMonths, 120);
+  for (const bad of ['5', '121', '0', '-24', 'two years', '24.5', '1e3']) {
+    assert.throws(() => loadConfig({ STATS_RETENTION_MONTHS: bad }), /STATS_RETENTION_MONTHS must be an integer between 6 and 120/, `STATS_RETENTION_MONTHS=${bad}`);
+  }
+  assert.equal(loadConfig({}).windowMonths, 6, 'the window of everything else is not configurable and stays 6');
   assert.throws(() => loadConfig({ SCRYPT_R: '0' }), /SCRYPT_R/);
   assert.throws(() => loadConfig({ SCRYPT_P: '17' }), /SCRYPT_P/);
   assert.equal(loadConfig({ PORT: '  ' }).port, 3000, 'whitespace only counts as unset');

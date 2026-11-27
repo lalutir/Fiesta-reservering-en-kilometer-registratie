@@ -9,6 +9,9 @@ export interface Clock {
 
 export const systemClock: Clock = { now: () => new Date() };
 
+/** How many calendar months of frozen monthly totals are kept (the current month and the ones before it). */
+export const DEFAULT_STATS_RETENTION_MONTHS = 24;
+
 export interface ScryptParams {
   N: number;
   r: number;
@@ -39,6 +42,11 @@ export interface Config {
   scrypt: ScryptParams;
   /** Size of the visibility and retention window in calendar months. */
   windowMonths: number;
+  /**
+   * How many months of monthly statistics totals are kept, the current month included (STATS_RETENTION_MONTHS).
+   * Only these numbers live that long: every other record keeps the window above.
+   */
+  statsRetentionMonths: number;
   publicDir: string;
   sharedDir: string;
   /** Web Push kill switch (PUSH_ENABLED, default on). Push also needs a subject, see pushSubject. */
@@ -141,6 +149,7 @@ export function loadConfig(env: Env, overrides: Partial<Config> = {}): Config {
     backupKeepDays: intEnv(env, 'BACKUP_KEEP_DAYS', 14, 1, 365),
     scrypt: { N, r: intEnv(env, 'SCRYPT_R', 8, 1, 16), p: intEnv(env, 'SCRYPT_P', 3, 1, 16) },
     windowMonths: 6,
+    statsRetentionMonths: intEnv(env, 'STATS_RETENTION_MONTHS', DEFAULT_STATS_RETENTION_MONTHS, 6, 120),
     publicDir: path.resolve(strEnv(env, 'PUBLIC_DIR') ?? path.join(root, 'public')),
     sharedDir: path.resolve(strEnv(env, 'SHARED_DIR') ?? path.join(root, 'shared')),
     pushEnabled,

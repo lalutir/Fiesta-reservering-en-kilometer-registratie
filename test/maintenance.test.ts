@@ -396,6 +396,69 @@ test('a backup taken at schema v5 restores, and the app then upgrades it to v6 w
   upgraded.close();
 });
 
+test('a backup taken at schema v6 restores, and the app then upgrades it to v7 with the data intact and the two statistics tables empty', (tctx) => {
+  const e = setup(tctx);
+  e.db.close();
+  // What the release before the statistics wrote: a v6 file with a drive, a fill-up, a damage report and the APK date.
+  const v6File = path.join(e.dir, 'old-v6.db');
+  const old = openDb(v6File, MIGRATIONS.slice(0, 6));
+  addUser(old, 'anna');
+  run(old, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, created_by, created_at, updated_at) VALUES (1, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z', 100, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (1, '2026-06-14T11:00:00.000Z', 40000, 6000, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO damage_reports (noticed_on, noticed_by, reported_by, description, location, created_at, updated_at) VALUES ('2026-06-10', NULL, 1, 'A dent in the door', 'left', 'now', 'now')");
+  run(old, "INSERT INTO car_apk (id, expires_on, updated_by, updated_at) VALUES (1, '2027-03-01', 1, '2026-06-15T09:00:00.000Z')");
+  assert.equal(schemaVersion(old), 6);
+  old.close();
+
+  restoreBackup(e.config, v6File, e.clock.now());
+  const upgraded = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
+  assert.deepEqual(many(upgraded, 'SELECT odometer_start, odometer_end FROM usage'), [{ odometer_start: 100, odometer_end: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT total_cents, odometer FROM fuel'), [{ total_cents: 6000, odometer: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT noticed_on, location FROM damage_reports'), [{ noticed_on: '2026-06-10', location: 'left' }]);
+  assert.deepEqual(many(upgraded, 'SELECT expires_on FROM car_apk'), [{ expires_on: '2027-03-01' }]);
+  assert.deepEqual(many(upgraded, 'SELECT month FROM stats_months'), [], 'no month is stored until the first purge');
+  assert.deepEqual(many(upgraded, 'SELECT month FROM stats_totals'), []);
+  const copy = path.join(backupDir(e.dir), 'pre-migrate-v6.db');
+  assert.ok(fs.existsSync(copy), 'the upgrade left its own copy');
+  upgraded.close();
+  // The copy is the v6 file as it was: it has neither new table.
+  const before = openDb(copy, MIGRATIONS.slice(0, 6));
+  assert.equal(schemaVersion(before), 6);
+  assert.deepEqual(many(before, "SELECT name FROM sqlite_master WHERE name LIKE 'stats_%'"), []);
+  before.close();
+});
+
+test('a backup of v7 carries the stored monthly totals and the two baseline keys, and a restore brings back exactly those', (tctx) => {
+  const e = setup(tctx);
+  addUser(e.db, 'anna');
+  run(e.db, 'INSERT INTO stats_months (month, complete, frozen) VALUES (?, ?, ?)', '2025-11', 0, 1);
+  run(e.db, 'INSERT INTO stats_months (month, complete, frozen) VALUES (?, ?, ?)', '2026-06', 0, 0);
+  run(e.db, 'INSERT INTO stats_totals (month, user_id, trips, km, paid_cents, share_cents) VALUES (?, ?, ?, ?, ?, ?)', '2025-11', 1, 4, 120, 5000, 2500);
+  run(e.db, 'INSERT INTO stats_totals (month, user_id, together_km, unaccounted_km) VALUES (?, ?, ?, ?)', '2025-11', 0, 30, 5);
+  run(e.db, "INSERT INTO meta (key, value) VALUES ('stats_first_month', '2025-01'), ('stats_legacy_through', '2025-12')");
+  const backup = createBackup(e.ctx);
+  run(e.db, 'DELETE FROM stats_months'); // the totals go with their month
+  run(e.db, "DELETE FROM meta WHERE key LIKE 'stats_%'");
+  assert.deepEqual(many(e.db, 'SELECT month FROM stats_totals'), []);
+  e.db.close();
+
+  restoreBackup(e.config, backup.path, e.clock.now());
+  const restored = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(restored), SCHEMA_VERSION);
+  assert.deepEqual(many(restored, 'SELECT month, complete, frozen FROM stats_months ORDER BY month'), [
+    { month: '2025-11', complete: 0, frozen: 1 },
+    { month: '2026-06', complete: 0, frozen: 0 },
+  ]);
+  assert.deepEqual(many(restored, 'SELECT month, user_id, trips, km, together_km, paid_cents, share_cents, unaccounted_km FROM stats_totals ORDER BY user_id'), [
+    { month: '2025-11', user_id: 0, trips: 0, km: 0, together_km: 30, paid_cents: 0, share_cents: 0, unaccounted_km: 5 },
+    { month: '2025-11', user_id: 1, trips: 4, km: 120, together_km: 0, paid_cents: 5000, share_cents: 2500, unaccounted_km: 0 },
+  ]);
+  assert.equal(getMeta(restored, 'stats_first_month'), '2025-01');
+  assert.equal(getMeta(restored, 'stats_legacy_through'), '2025-12');
+  restored.close();
+});
+
 test('a backup of the current version (drafts, fuel, odometer explanations, damage reports, the APK date) restores as it was', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');

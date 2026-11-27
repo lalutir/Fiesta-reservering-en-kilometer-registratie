@@ -94,11 +94,28 @@ plus an admin page for the person who manages it.
   filed. **APK:** one expiry date for the car that any member can enter or update. Until somebody
   does, the tab asks for it; afterwards it shows the date, the days left (or "expired"), and who
   entered it and when. Nothing reminds anybody of the date.
+- **Statistics.** *Statistieken* (Drives tab, a sub-page of Ritten) shows the **monthly totals**, for the whole
+  household or for one person, over the last 6, 12 or 24 months: trips and kilometres (a person's own, and the
+  kilometres driven together), litres, what was paid at the pump, each person's share of the fuel, the price per
+  litre, the fuel cost per kilometre, the consumption (litres per 100 km, which assumes a full tank at every
+  fill-up), traffic tickets (count and amount), damage reports and the kilometres nobody registered. Every metric
+  is one bar chart (inline SVG, no library) with a sentence that says what it shows and a table with the same
+  numbers. A bar that is **not final** (the current month, or a month cut short) is hatched, the kilometres
+  driven together are dotted and an unknown month is a dash, so no cue rests on colour alone. The numbers are the
+  ones of the other screens: the fuel shares are those of the Fuel screen (an admin pays nothing, together
+  kilometres follow the ratio of the personal ones), the driver of a ticket is the one the tickets screen names,
+  and the unaccounted kilometres are the open gaps of the Kilometre check. Anybody signed in sees the same
+  numbers. The JSON behind it, `GET /api/stats?from=YYYY-MM&to=YYYY-MM`, is versioned and documented in
+  [docs/STATS-API.md](docs/STATS-API.md), so a later token API or calendar feed can serve the same document.
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
-  day and at start-up. The one exception is a **damage report that is still open**: the damage is
-  still on the car, so it is kept however old it is. A repaired report is deleted 6 months after
-  the day it was repaired.
+  day and at start-up. There are two exceptions. A **damage report that is still open** is kept
+  however old it is, because the damage is still on the car; a repaired report is deleted 6 months
+  after the day it was repaired. And the **monthly totals of the statistics** are kept for
+  `STATS_RETENTION_MONTHS` months (default 24, the current month included): they are numbers only
+  (kilometres, euros, counts), stored by the daily purge just before it deletes the records they
+  come from, in the same transaction, and a month that is stored never changes again. Nothing else
+  of a record, no time, note or name, outlives the window.
 - **Admin page** at `/admin/` (admins only): manage users (create, deactivate, reset password,
   roles), see and correct all reservations and drives, and check the purge and backup status.
 - Times are stored in UTC and shown in the household time zone (default `Europe/Amsterdam`).
@@ -183,6 +200,19 @@ plus an admin page for the person who manages it.
   start of the noticed local day goes through `whoDrove()` (`src/tickets.ts`) and, when that finds
   nobody, the driver of the last completed drive that ended before it is used. Correcting a drive
   corrects the hint on the next read.
+- **Monthly totals are computed live and frozen by the purge.** `src/stats.ts` adds up the records the
+  app already has, per calendar month of the household zone, with one attribution rule: a drive belongs to the
+  month it started in, a fill-up (and its shares, litres and consumption) to its own month, a ticket to the
+  month of the offence, a damage report to the day it was noticed, an odometer gap to the month of its later
+  reading. It is no second implementation of anything: the fuel numbers are `fuelOverview()` summed per month,
+  the ticket driver is `whoDrove()`, the gaps are the odometer chain's. Everything stored is an additive
+  component (counts, cents, millilitres, kilometres), never an average, so months and people can be added;
+  the averages are whole numbers with a fixed scale that are derived on read. The current month is always
+  live. The purge, inside its own transaction and before it deletes anything, **compares the numbers before and
+  after its deletes** and stores every month that would change, from the numbers before: that includes a
+  month that lost no row of its own (a fill-up whose earlier fill-up was purged has a shorter period and other
+  shares) and a month that lies wholly before the cutoff. If storing fails the whole purge rolls back, so no
+  record is deleted without its totals, and the daily backup is still written. `GET /api/stats` never writes.
 - **Upgrades keep a copy.** Before the first migration that changes an existing database the app
   writes `backups/pre-migrate-v<old>.db`.
 - The Inbox tab and its badge show suggestions waiting for your answer; the Drives tab and its
@@ -242,21 +272,23 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   fuel-carry.ts  carried-over amounts and settlement (pure)        notify.ts   the one notifier and its event table
   notify-texts.ts  every word of every notification (in Dutch)
   tickets.ts  traffic tickets and who was driving at the time       odometer.ts  the odometer chain, its gaps and explanations
-  car.ts      the Car tab: damage reports and the APK date
+  car.ts      the Car tab: damage reports and the APK date          stats.ts    monthly totals, GET /api/stats, what a purge freezes
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v6, migrations)
+  db.ts       the only file that touches node:sqlite (schema v7, migrations)
 shared/     time.js: time zone, DST, calendar-month and calendar-date maths, and the Dutch date display;
             format.js: euro, litres, price per litre and kilometres as integers written the Dutch way.
             Both are used by the server and the browser
 public/     the PWA (vanilla JavaScript modules, no build step; calendar.js is the pure date maths of the Agenda
             views, kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab;
+            views/stats.js the Statistics screen: inline-SVG bar charts and their tables;
             nav.js the five places of the bar and the rail; ui.js and icons.js the shared components and the one
             icon set; theme.js, drafts.js, undo.js and storage.js the theme choice, unsent form input and
             "Ongedaan maken"; views/home.js the Start screen, views/more.js the page Meer)
             and public/admin/ (admin page: admin.js, and table.js the sortable and filterable table)
-docs/       DEPLOYMENT.md, DESIGN.md (the design decisions), GLOSSARY.md (the Dutch vocabulary), third-party.md (the icon licence)
+docs/       DEPLOYMENT.md, DESIGN.md (the design decisions), GLOSSARY.md (the Dutch vocabulary), third-party.md (the icon licence),
+            STATS-API.md (the contract of GET /api/stats)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
@@ -482,6 +514,22 @@ backups, updates and a monthly cost estimate (about $4-6).
   kept a little longer than a drive of the same moment would be. Nobody is told when a report is
   edited, repaired or deleted. The APK is one date: there is no history, only the log line of who
   changed it.
+- **Statistics.** A month that is **stored** never changes again: correcting a drive, a fill-up or a ticket
+  that belongs to a month the purge has already stored (that is, one older than 6 months, or one the purge
+  changed) does not change its totals, and the correction is not recorded anywhere. The current month and the
+  months not yet touched by a purge are worked out live, so a correction shows at once; a month is stored by the
+  first purge that is about to change it or that finds it wholly before the window. **First deploy:** nothing is back-filled and nothing is
+  invented. At the first purge after the upgrade, a database that is older than the window has some months that
+  earlier purges already cut short (the month the cutoff falls in, and the months up to the oldest fill-up that is
+  left, whose period reaches back into what was deleted): they are stored once from the rows that remain and
+  flagged *incomplete*, and a month before that with nothing in it is *unknown*, not zero. A database younger than
+  the window flags nothing and a quiet month reads zero. Whether the live database is old enough to be affected was
+  not checked (it is inferred from the dates of the first runs). A changed `HOUSEHOLD_TZ` re-cuts the live months
+  but not the stored ones. Consumption assumes a full tank at every fill-up and skips any interval whose
+  fill-ups lack an odometer reading. Unaccounted kilometres and consumption are household numbers: there is no
+  per-person figure. The screen lays out up to 24 bars on a phone, so a long period writes a number on the latest
+  and the highest bar only (the table has the rest). Trips follow the driver and kilometres follow the owner, as on
+  the Drives tab. Nothing was tried on a real phone or with a screen reader.
 - **Notifications are sent once**, after the change is saved, and not retried; a person without a
   device signed up hears nothing and finds it in the Inbox, on the Drives tab or on the History
   screen. There is no per-category mute (the switch is per device), a suggestion that nobody

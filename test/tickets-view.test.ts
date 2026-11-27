@@ -446,7 +446,7 @@ test('deleting: a refusal is reported as an error and the list is reloaded anywa
 
 // ------------------------------------------------------ the Drives tab and shell
 
-test('the Drives view has links to both Fuel and costs and Traffic tickets beside its title', async () => {
+test('the Drives view has links to Fuel and costs, Traffic tickets and Statistics beside its title', async () => {
   const me = makeApp(ANNA);
   const routes: Routes = {
     'GET /api/usage': () => ({ items: [] }),
@@ -464,6 +464,7 @@ test('the Drives view has links to both Fuel and costs and Traffic tickets besid
       [
         ['#/fuel', S.usage.fuelLink],
         ['#/tickets', S.usage.ticketsLink],
+        ['#/stats', S.usage.statsLink],
       ],
     );
   });
@@ -524,6 +525,21 @@ test('retention texts include tickets, and counts an older stored result does no
   assert.match(r.damageNote, /Open schademeldingen worden nooit verwijderd/);
 });
 
+test('retention texts for the monthly totals: a clause only when something was stored or dropped, and none for a result from before they existed', () => {
+  const r = S.admin.retention;
+  const plain = '1 reserveringen, 2 ritten, 4 tankbeurten, 5 betaalverzoeken, 6 verkeersboetes, 7 kilometertoelichtingen, 8 gerepareerde schademeldingen, 3 verlopen sessies';
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8, 2, 1), `${plain}, 2 maandtotalen vastgelegd, 1 maandtotalen verwijderd`);
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8, 2, 0), `${plain}, 2 maandtotalen vastgelegd`);
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8, 0, 1), `${plain}, 1 maandtotalen verwijderd`);
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8, 0, 0), plain, 'a purge that stored nothing says nothing about it');
+  assert.equal(r.lastPurgeCounts(1, 2, 3, 4, 5, 6, 7, 8, undefined, undefined), plain, 'a result stored before the monthly totals existed');
+  assert.equal(r.countsText(1, 2, 3, 4, 5, 6, 7, 4), '1 reserveringen, 2 ritten, 3 tankbeurten, 4 betaalverzoeken, 5 verkeersboetes, 6 kilometertoelichtingen, 7 schademeldingen (open en gerepareerd), 4 vastgelegde maandtotalen');
+  assert.ok(r.countsText(1, 2, 3, 4, 5, 6, 7, 0).endsWith(', 0 vastgelegde maandtotalen'), 'zero is said when the server reports it');
+  assert.equal(r.countsText(1, 2, 3, 4, 5, 6, 7), r.countsText(1, 2, 3, 4, 5, 6, 7, undefined), 'and nothing when it does not');
+  assert.match(r.statsNote(24), /24 maanden staan, de huidige maand meegeteld/);
+  assert.match(r.statsNote(6), /alleen getallen/);
+});
+
 test('admin retention tab: tickets are counted, the oldest one counts for the oldest item, and a purge result stored before tickets existed still renders', async () => {
   const session = { user: ADMIN, timeZone: TZ, windowMonths: 6, serverTime: NOW };
   const base = {
@@ -552,9 +568,10 @@ test('admin retention tab: tickets are counted, the oldest one counts for the ol
     'POST /api/admin/retention/run': () => {
       current = {
         ...base,
-        lastPurge: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, odometerExplained: 4, damageReports: 5, sessions: 3 },
-        counts: { reservations: 4, usage: 5, fuel: 1, fuelRequests: 0, tickets: 2, odometerExplained: 6, damageReports: 3, sessions: 6 },
-        oldest: { reservationEnd: at(-3000), usageEnd: null, fuelAt: null, ticketAt: at(-5000), damageRepairedOn: '2026-01-02' },
+        statsRetentionMonths: 24,
+        lastPurge: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, odometerExplained: 4, damageReports: 5, sessions: 3, statsFrozen: 2, statsDropped: 1 },
+        counts: { reservations: 4, usage: 5, fuel: 1, fuelRequests: 0, tickets: 2, odometerExplained: 6, damageReports: 3, statsMonths: 3, sessions: 6 },
+        oldest: { reservationEnd: at(-3000), usageEnd: null, fuelAt: null, ticketAt: at(-5000), damageRepairedOn: '2026-01-02', statsMonth: '2025-11' },
       };
       return { result: { cutoff: at(-100_000), reservations: 1, usage: 2, fuel: 3, fuelRequests: 0, tickets: 7, odometerExplained: 4, damageReports: 5, sessions: 3 }, status: current };
     },
@@ -583,13 +600,18 @@ test('admin retention tab: tickets are counted, the oldest one counts for the ol
     assert.equal(dd(S.admin.retention.counts), '4 reserveringen, 5 ritten, 0 tankbeurten, 0 betaalverzoeken, 0 verkeersboetes, 0 kilometertoelichtingen, 0 schademeldingen (open en gerepareerd)');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-3000), TZ));
     assert.equal(dd(S.admin.retention.oldestRepaired), '–', 'no repaired damage report yet (an old server answer has no such figure at all)');
+    // An answer from before the monthly totals: no clause, a dash for the oldest total, and no sentence about how long they are kept.
+    assert.equal(dd(S.admin.retention.oldestStats), '–');
+    assert.ok(!all(adminRoot, 'p.hint').some((p) => p.textContent === S.admin.retention.statsNote(24)));
 
     await byText(adminRoot, 'button', S.admin.retention.runNow).fire('click');
     await until(() => toastEl.textContent === S.admin.retention.done(1, 2, 3, 7, 4, 5), 'the purge to report its tickets, explanations and repaired damage reports');
-    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('3 schademeldingen (open en gerepareerd)')), 'the tab to reload');
-    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 tankbeurten, 0 betaalverzoeken, 7 verkeersboetes, 4 kilometertoelichtingen, 5 gerepareerde schademeldingen, 3 verlopen sessies'));
-    assert.equal(dd(S.admin.retention.counts), '4 reserveringen, 5 ritten, 1 tankbeurten, 0 betaalverzoeken, 2 verkeersboetes, 6 kilometertoelichtingen, 3 schademeldingen (open en gerepareerd)');
+    await until(() => all(adminRoot, 'dd').some((e) => e.textContent.endsWith('3 vastgelegde maandtotalen')), 'the tab to reload');
+    assert.ok(dd(S.admin.retention.lastPurge).endsWith('3 tankbeurten, 0 betaalverzoeken, 7 verkeersboetes, 4 kilometertoelichtingen, 5 gerepareerde schademeldingen, 3 verlopen sessies, 2 maandtotalen vastgelegd, 1 maandtotalen verwijderd'));
+    assert.equal(dd(S.admin.retention.counts), '4 reserveringen, 5 ritten, 1 tankbeurten, 0 betaalverzoeken, 2 verkeersboetes, 6 kilometertoelichtingen, 3 schademeldingen (open en gerepareerd), 3 vastgelegde maandtotalen');
     assert.equal(dd(S.admin.retention.oldest), formatLocal(at(-5000), TZ), 'the oldest ticket is the oldest item');
     assert.equal(dd(S.admin.retention.oldestRepaired), '2 jan 2026', 'the repaired date is a calendar day with its own row: it is not an instant and is not mixed into the oldest item');
+    assert.equal(dd(S.admin.retention.oldestStats), 'november 2025', 'a stored total is a month: its own row, in words');
+    assert.ok(all(adminRoot, 'p.hint').some((p) => p.textContent === S.admin.retention.statsNote(24)), 'and the page says how long they are kept');
   });
 });

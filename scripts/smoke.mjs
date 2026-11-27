@@ -58,6 +58,7 @@ for (const key of [
   'TRUST_PROXY',
   'HOUSEHOLD_TZ',
   'BACKUP_KEEP_DAYS',
+  'STATS_RETENTION_MONTHS',
   'SCRYPT_R',
   'DOMAIN',
   'PUSH_CONTACT',
@@ -412,6 +413,78 @@ try {
     expect((await send('DELETE', `/api/damage/${report.id}`, undefined, ben)).status === 403, 'a report of somebody else cannot be deleted');
     expect((await send('DELETE', `/api/damage/${report.id}`)).status === 204, 'the person who filed it can delete it');
     expect(!((await (await send('GET', '/api/damage')).json()).items).some((r) => r.id === report.id), 'and it is gone');
+  });
+
+  // The statistics add up the records the Fuel screen shows, so what they say about a month must equal what the Fuel screen
+  // says about the fill-ups of that month, whatever day of the month this run happens to be on. The earlier checks left a
+  // fill-up of 60.00 (the admin fuelled, Ben pays all of it) one hour ago.
+  await check('statistics: monthly totals equal the Fuel screen and are the same for everybody, the admin pays nothing, a bad range is refused, anonymous is turned away and reading stores nothing', async () => {
+    const asAdmin = { 'Content-Type': 'application/json', Cookie: cookie };
+    const get = (url, headers = asAdmin) => fetch(`${base}${url}`, { headers });
+    expect((await fetch(`${base}/api/stats`)).status === 401, 'anonymous');
+    const res = await get('/api/stats');
+    expect(res.status === 200, `GET /api/stats ${res.status}`);
+    const text = await res.text();
+    const stats = JSON.parse(text);
+    expect(stats.version === 1 && stats.months.length === 12 && stats.retentionMonths === 24 && stats.windowMonths === 6, `the shape: ${text.slice(0, 200)}`);
+    const last = stats.months[11];
+    expect(last.month === stats.current && last.provisional === true && stats.range.to === stats.current, `the last month is the current one: ${JSON.stringify(last).slice(0, 120)}`);
+
+    // The month of a moment in the household's zone, the way the server counts.
+    const monthOf = (iso) => {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Amsterdam', year: 'numeric', month: '2-digit' }).formatToParts(new Date(iso)).map((p) => [p.type, p.value]));
+      return `${parts.year}-${parts.month}`;
+    };
+    const fuel = (await (await get('/api/fuel')).json()).items;
+    expect(fuel.length >= 1, 'the earlier checks left a fill-up');
+    for (const m of stats.months) {
+      // A month before the household existed is "unknown": no totals at all, not zeros (this database is a few seconds old).
+      if (m.unavailable) {
+        expect(m.household === null && m.people.length === 0 && !m.provisional, `${m.month}: an unknown month has no numbers`);
+        continue;
+      }
+      const fills = fuel.filter((f) => monthOf(f.at) === m.month);
+      const paid = fills.map((f) => f.totalCents).reduce((a, b) => a + b, 0);
+      expect(m.household.paidCents === paid && m.household.fillUps === fills.length, `${m.month}: paid ${m.household.paidCents} against ${paid} on the Fuel screen`);
+      for (const person of m.people) {
+        const shares = fills.flatMap((f) => f.shares).filter((s) => s.userId === person.userId).map((s) => s.cents).reduce((a, b) => a + b, 0);
+        expect(person.shareCents === shares, `${m.month}: the share of user ${person.userId} is ${person.shareCents}, the Fuel screen says ${shares}`);
+      }
+    }
+    expect(stats.months.some((m) => m.household?.paidCents === 6000), 'the 60.00 fill-up is in some month');
+    expect(stats.months.filter((m) => m.unavailable).length === 11 && last.unavailable === false, 'a database that is seconds old knows only the current month');
+    const me = (await (await get('/api/auth/me')).json()).user;
+    for (const m of stats.months) expect((m.people.find((p) => p.userId === me.id)?.shareCents ?? 0) === 0, `${m.month}: the admin pays no fuel`);
+
+    // The same body for a member.
+    const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'smokeben', password: 'smoke-ben-password-1' }) });
+    expect(login.status === 200, `Ben signs in ${login.status}`);
+    const asBen = { 'Content-Type': 'application/json', Cookie: (login.headers.getSetCookie()[0] ?? '').split(';')[0] };
+    expect((await (await get('/api/stats', asBen)).text()) === text, 'a member gets the same body as the admin');
+
+    // A range that does not make sense is a 422 with a code per field, not a silent clamp.
+    const fieldsOf = async (url) => {
+      const bad = await get(url);
+      return { status: bad.status, fields: (await bad.json()).error?.fields ?? {} };
+    };
+    const shift = (key, by) => {
+      const [y, m] = key.split('-').map(Number);
+      const index = y * 12 + (m - 1) + by;
+      return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
+    };
+    for (const [url, field, code] of [
+      ['/api/stats?from=2026-13', 'from', 'invalid_month'],
+      [`/api/stats?to=${shift(stats.current, 1)}`, 'to', 'in_future'],
+      [`/api/stats?from=${stats.current}&to=${shift(stats.current, -1)}`, 'from', 'after_to'],
+      [`/api/stats?from=${shift(stats.current, -36)}`, 'from', 'outside_retention'],
+    ]) {
+      const bad = await fieldsOf(url);
+      expect(bad.status === 422 && bad.fields[field] === code, `${url} gave ${bad.status} ${JSON.stringify(bad.fields)}`);
+    }
+
+    // Reading stores nothing: only the purge writes a monthly total, and this database has nothing older than the window.
+    const status = await (await get('/api/admin/retention')).json();
+    expect(status.counts.statsMonths === 0 && status.statsRetentionMonths === 24, `nothing stored by reading: ${JSON.stringify(status.counts)}`);
   });
 } catch (err) {
   failures.push('startup');
