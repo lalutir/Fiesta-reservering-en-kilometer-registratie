@@ -15,6 +15,7 @@ const SCREENS: ReadonlyArray<{ name: string; hash: string; title: RegExp; path: 
   { name: 'Ritten', hash: '#/usage', title: /^Ritten/, path: '/api/usage' },
   { name: 'Brandstof en kosten', hash: '#/fuel', title: /^Brandstof en kosten/, path: '/api/fuel' },
   { name: 'Verkeersboetes', hash: '#/tickets', title: /^Verkeersboetes/, path: '/api/tickets' },
+  { name: 'Statistieken', hash: '#/stats', title: /^Statistieken/, path: '/api/stats' },
   { name: 'Historie', hash: '#/history', title: /^Historie/, path: '/api/history' },
   { name: 'Auto', hash: '#/car', title: /^Auto/, path: '/api/damage' },
   { name: 'Inbox', hash: '#/inbox', title: /^Inbox/, path: '/api/inbox' },

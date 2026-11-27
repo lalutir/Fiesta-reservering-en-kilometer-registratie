@@ -865,9 +865,10 @@ test('a v5 file with rows upgrades to v6 without losing anything, and leaves one
   const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v5.db');
   assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
 
-  const v6 = openDb(file);
+  // The v6-era steps stop at the sixth migration: the app has moved on (v7), these tests are about the v5 to v6 step.
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
   assert.equal(schemaVersion(v6), 6);
-  assert.equal(schemaVersion(v6), SCHEMA_VERSION);
+  assert.ok(SCHEMA_VERSION >= 6, 'the app is at v6 or later');
   assert.deepEqual(many(v6, 'SELECT id FROM damage_reports'), [], 'the new tables start empty');
   assert.deepEqual(many(v6, 'SELECT id FROM car_apk'), [], 'no APK row: "not set"');
   assert.deepEqual(many(v6, 'SELECT id, user_id, odometer_end FROM usage'), [{ id: drive, user_id: anna, odometer_end: 160 }], 'drives are untouched');
@@ -897,7 +898,7 @@ test('a v5 file with rows upgrades to v6 without losing anything, and leaves one
 
   // Opening again changes nothing and does not touch the copy.
   const mtime = fs.statSync(copy).mtimeMs;
-  openDb(file).close();
+  openDb(file, MIGRATIONS.slice(0, 6)).close();
   assert.equal(fs.statSync(copy).mtimeMs, mtime);
 });
 
@@ -909,7 +910,7 @@ test('migration 6 is purely additive: every table and index of a v5 file is exac
   const before = objects(v5);
   v5.close();
 
-  const v6 = openDb(file);
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
   const after = objects(v6);
   v6.close();
 
@@ -928,7 +929,7 @@ test('a v4 file goes straight to v6 in one open, with the one copy of what it wa
   addUser(v4);
   v4.close();
 
-  const db = openDb(file);
+  const db = openDb(file, MIGRATIONS.slice(0, 6));
   assert.equal(schemaVersion(db), 6);
   assert.ok(tablesOf(db).includes('damage_reports') && tablesOf(db).includes('car_apk'));
   assert.ok(tablesOf(db).includes('odometer_explained'), 'the v5 step ran first');
@@ -949,7 +950,7 @@ test('the real v6 upgrade is all or nothing: a table already in the way leaves t
   v5.exec('CREATE TABLE car_apk (stranger INTEGER)');
   v5.close();
 
-  assert.throws(() => openDb(file), /table car_apk already exists/);
+  assert.throws(() => openDb(file, MIGRATIONS.slice(0, 6)), /table car_apk already exists/);
 
   const after = openDb(file, MIGRATIONS.slice(0, 5));
   assert.equal(schemaVersion(after), 5, 'the version was not bumped');
@@ -959,7 +960,7 @@ test('the real v6 upgrade is all or nothing: a table already in the way leaves t
   // The way out is to clear the obstacle: the same upgrade then runs from the top.
   after.exec('DROP TABLE car_apk');
   after.close();
-  const v6 = openDb(file);
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
   assert.equal(schemaVersion(v6), 6);
   assert.deepEqual(columnsOf(v6, 'car_apk'), ['id', 'expires_on', 'updated_by', 'updated_at']);
   assert.ok(tablesOf(v6).includes('damage_reports'));
@@ -1041,5 +1042,196 @@ test('the APK record is one row (id 1) with a real calendar date, a UTC update t
   assert.throws(() => insert(1, '2027-06-10', GOOD, 999), /FOREIGN KEY constraint failed/, 'the updater must exist');
   assert.ok(insert(1, '2028-02-29') > 0, 'a leap day');
   assert.throws(() => insert(1, '2029-01-01'), (err: unknown) => isUniqueViolation(err), 'a second row with id 1 is refused');
+  db.close();
+});
+
+// ------------------------------------------ schema v7 (monthly statistics totals that outlive the window)
+
+test('a v6 file with rows upgrades to v7 without losing anything, and leaves one pre-migrate-v6 copy that has neither new table', (tctx) => {
+  const file = tempFile(tctx);
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
+  assert.equal(schemaVersion(v6), 6);
+  const anna = addUser(v6, 'anna');
+  const drive = run(
+    v6,
+    "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, note, created_by, created_at, updated_at) VALUES (?, ?, ?, 100, 160, 'a drive', ?, ?, ?)",
+    anna,
+    GOOD,
+    LATER,
+    anna,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+  const fuel = run(v6, 'INSERT INTO fuel (user_id, at_utc, millilitres, total_cents, odometer, created_by, created_at, updated_at) VALUES (?, ?, 40000, 6000, 20000, ?, ?, ?)', anna, LATER, anna, GOOD, GOOD).lastInsertRowid;
+  const damage = run(
+    v6,
+    "INSERT INTO damage_reports (noticed_on, reported_by, description, location, created_at, updated_at) VALUES ('2026-06-10', ?, 'A dent', 'front', ?, ?)",
+    anna,
+    GOOD,
+    GOOD,
+  ).lastInsertRowid;
+  run(v6, "INSERT INTO car_apk (id, expires_on, updated_by, updated_at) VALUES (1, '2027-06-10', ?, ?)", anna, GOOD);
+  v6.close();
+
+  const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v6.db');
+  assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
+
+  const v7 = openDb(file);
+  assert.equal(schemaVersion(v7), 7);
+  assert.equal(schemaVersion(v7), SCHEMA_VERSION);
+  assert.deepEqual(many(v7, 'SELECT month FROM stats_months'), [], 'the new tables start empty: nothing is back-filled');
+  assert.deepEqual(many(v7, 'SELECT month FROM stats_totals'), []);
+  assert.deepEqual(many(v7, 'SELECT id, odometer_end FROM usage'), [{ id: drive, odometer_end: 160 }], 'drives are untouched');
+  assert.deepEqual(many(v7, 'SELECT id, odometer FROM fuel'), [{ id: fuel, odometer: 20_000 }]);
+  assert.deepEqual(many(v7, 'SELECT id FROM damage_reports'), [{ id: damage }]);
+  assert.deepEqual(many(v7, 'SELECT expires_on FROM car_apk'), [{ expires_on: '2027-06-10' }]);
+  assert.deepEqual(columnsOf(v7, 'stats_months'), ['month', 'complete', 'frozen']);
+  v7.close();
+
+  // The copy is a readable v6 database without the new tables, holding the data as it was.
+  assert.ok(fs.existsSync(copy), 'backups/pre-migrate-v6.db was written');
+  const old = openDb(copy, MIGRATIONS.slice(0, 6));
+  assert.equal(schemaVersion(old), 6);
+  assert.ok(!tablesOf(old).includes('stats_months') && !tablesOf(old).includes('stats_totals'));
+  assert.equal(many(old, 'SELECT id FROM usage').length, 1);
+  assert.equal(many(old, 'SELECT id FROM damage_reports').length, 1);
+  old.close();
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(copy)).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v6.db'],
+    'no temporary file is left behind',
+  );
+
+  // Opening again changes nothing and does not touch the copy.
+  const mtime = fs.statSync(copy).mtimeMs;
+  openDb(file).close();
+  assert.equal(fs.statSync(copy).mtimeMs, mtime);
+});
+
+test('migration 7 is purely additive: every table and index of a v6 file is exactly as it was, and the only new objects are the two statistics tables', (tctx) => {
+  const file = tempFile(tctx);
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
+  const objects = (db: Db): Array<{ type: string; name: string; tbl_name: string; sql: string | null }> =>
+    many(db, "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name");
+  const before = objects(v6);
+  v6.close();
+
+  const v7 = openDb(file);
+  const after = objects(v7);
+  v7.close();
+
+  for (const object of before) {
+    assert.deepEqual(after.find((o) => o.type === object.type && o.name === object.name), object, `${object.type} ${object.name} is untouched (same definition, nothing altered or rebuilt)`);
+  }
+  const known = new Set(before.map((o) => `${o.type}:${o.name}`));
+  const added = after.filter((o) => !known.has(`${o.type}:${o.name}`)).map((o) => `${o.type}:${o.name} on ${o.tbl_name}`);
+  assert.deepEqual(added, ['table:stats_months on stats_months', 'table:stats_totals on stats_totals']);
+  assert.equal(after.length, before.length + 2);
+});
+
+test('a v4 file goes straight to v7 in one open, with the one copy of what it was', (tctx) => {
+  const file = tempFile(tctx);
+  const v4 = openDb(file, MIGRATIONS.slice(0, 4));
+  addUser(v4);
+  v4.close();
+
+  const db = openDb(file);
+  assert.equal(schemaVersion(db), 7);
+  assert.ok(tablesOf(db).includes('stats_months') && tablesOf(db).includes('stats_totals'));
+  assert.ok(tablesOf(db).includes('damage_reports'), 'the v6 step ran first');
+  db.close();
+  assert.deepEqual(
+    fs.readdirSync(path.join(path.dirname(file), 'backups')).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v4.db'],
+    'one copy, of the version the file was at, before the first step',
+  );
+});
+
+test('the real v7 upgrade is all or nothing: a table already in the way leaves the v6 file as it was, with neither new table, and a retry works', (tctx) => {
+  const file = tempFile(tctx);
+  const v6 = openDb(file, MIGRATIONS.slice(0, 6));
+  const anna = addUser(v6);
+  const drive = addUsage(v6, anna);
+  // The second table of the step is the one in the way: the first one was already created when it fails.
+  v6.exec('CREATE TABLE stats_totals (stranger INTEGER)');
+  v6.close();
+
+  assert.throws(() => openDb(file), /table stats_totals already exists/);
+
+  const after = openDb(file, MIGRATIONS.slice(0, 6));
+  assert.equal(schemaVersion(after), 6, 'the version was not bumped');
+  assert.ok(!tablesOf(after).includes('stats_months'), 'the first CREATE TABLE was rolled back with the rest of the step');
+  assert.deepEqual(columnsOf(after, 'stats_totals'), ['stranger'], 'the stranger table is untouched');
+  assert.deepEqual(many(after, 'SELECT id, user_id FROM usage'), [{ id: drive, user_id: anna }], 'the data is untouched');
+  // The way out is to clear the obstacle: the same upgrade then runs from the top.
+  after.exec('DROP TABLE stats_totals');
+  after.close();
+  const v7 = openDb(file);
+  assert.equal(schemaVersion(v7), 7);
+  assert.ok(tablesOf(v7).includes('stats_months'));
+  assert.equal(columnsOf(v7, 'stats_totals')[0], 'month');
+  v7.close();
+});
+
+test('stats_months: a month is YYYY-MM from 2000-01 to 2100-12, frozen and complete are flags, and a month that is not frozen is never complete', () => {
+  const db = memoryDb();
+  const insert = (month: string, complete: number, frozen: number): number =>
+    run(db, 'INSERT INTO stats_months (month, complete, frozen) VALUES (?, ?, ?)', month, complete, frozen).changes;
+  for (const good of ['2026-11', '2000-01', '2100-12', '2026-01', '2026-12']) assert.equal(insert(good, 1, 1), 1, good);
+  for (const bad of ['2026-13', '2026-00', '2026-1', '26-11', '2026-11-01', '2026/11', '1999-12', '2101-01', '', '2026-1a', ' 2026-11']) {
+    assert.throws(() => insert(bad, 1, 1), /CHECK constraint failed/, JSON.stringify(bad));
+  }
+  assert.equal(insert('2026-02', 0, 1), 1, 'frozen but already cut short when it was frozen');
+  assert.equal(insert('2026-03', 0, 0), 1, 'a marker: not frozen, so not complete');
+  assert.throws(() => insert('2026-04', 1, 0), /CHECK constraint failed/, 'a month that is not frozen cannot be complete');
+  assert.throws(() => insert('2026-05', 2, 1), /CHECK constraint failed/);
+  assert.throws(() => insert('2026-05', 1, 2), /CHECK constraint failed/);
+  assert.throws(() => insert('2026-11', 1, 1), (err: unknown) => isUniqueViolation(err), 'one row per month');
+  db.close();
+});
+
+test('stats_totals: one row per month and person, whole non-negative numbers, deleted with their month, and user 0 is no user', () => {
+  const db = memoryDb();
+  run(db, 'INSERT INTO stats_months (month, complete, frozen) VALUES (?, 1, 1)', '2026-10');
+  const insert = (month: string, userId: number, over: Record<string, number> = {}): number => {
+    const cols = Object.keys(over);
+    return run(
+      db,
+      `INSERT INTO stats_totals (month, user_id${cols.map((c) => `, ${c}`).join('')}) VALUES (?, ?${cols.map(() => ', ?').join('')})`,
+      month,
+      userId,
+      ...cols.map((c) => over[c] as number),
+    ).changes;
+  };
+  assert.equal(insert('2026-10', 0, { together_km: 40, unaccounted_km: 12 }), 1, 'user 0 holds what belongs to nobody in particular');
+  assert.equal(insert('2026-10', 7, { trips: 3, km: 120, paid_cents: 6000 }), 1, 'a person need not exist as a user row: there is no foreign key');
+  assert.deepEqual(many(db, 'SELECT km, together_km, trips FROM stats_totals WHERE user_id = 0'), [{ km: 0, together_km: 0 + 40, trips: 0 }], 'every component defaults to 0');
+  assert.throws(() => insert('2026-10', 7), (err: unknown) => isUniqueViolation(err), 'one row per month and person');
+  assert.throws(() => insert('2026-10', -1), /CHECK constraint failed/);
+  assert.throws(() => insert('2026-09', 1), /FOREIGN KEY constraint failed/, 'a total belongs to a month row');
+  for (const column of ['trips', 'km', 'together_km', 'fill_ups', 'millilitres', 'paid_cents', 'share_cents', 'cost_cents', 'cost_km', 'pool_km', 'consumption_ml', 'consumption_km', 'tickets', 'ticket_cents', 'damage_reports', 'unaccounted_km']) {
+    assert.throws(() => insert('2026-10', 8, { [column]: -1 }), /CHECK constraint failed/, `${column} is never negative`);
+  }
+  run(db, 'DELETE FROM stats_months WHERE month = ?', '2026-10');
+  assert.deepEqual(many(db, 'SELECT month FROM stats_totals'), [], 'the totals go with their month');
+  db.close();
+});
+
+test('the statistics tables hold numbers only: no time of an event, no note, description, reason or id of a record', () => {
+  const db = memoryDb();
+  const info = (table: string): Array<{ name: string; type: string }> => many(db, `PRAGMA table_info(${table})`);
+  for (const table of ['stats_months', 'stats_totals']) {
+    for (const column of info(table)) {
+      if (column.name === 'month') assert.equal(column.type, 'TEXT', 'a month key is the only text');
+      else assert.equal(column.type, 'INTEGER', `${table}.${column.name} is a number`);
+      assert.doesNotMatch(column.name, /(_at|_on|_utc|note|description|reason|text|message|name)$/, `${table}.${column.name} cannot hold a time or free text`);
+    }
+  }
+  // Ids: the one person column is a user number (0 = household), nothing names a drive, fill-up, ticket, report or reservation.
+  assert.deepEqual(
+    info('stats_totals').map((c) => c.name).filter((n) => /id$/.test(n)),
+    ['user_id'],
+    'user_id is the only id',
+  );
   db.close();
 });

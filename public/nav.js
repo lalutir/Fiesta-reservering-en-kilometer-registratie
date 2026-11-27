@@ -32,10 +32,10 @@ export const SECONDARY = [
 export const ADMIN_ITEM = { name: 'admin', href: '/admin/', label: S.nav.admin, icon: 'shield' };
 
 /** Which place of the bar a route belongs to: the sub-routes of Ritten keep Ritten lit, the places under Meer light Meer. @type {Record<string, string>} */
-const PLACE_OF_ROUTE = { fuel: 'usage', tickets: 'usage', inbox: 'more', history: 'more', car: 'more', account: 'more' };
+const PLACE_OF_ROUTE = { fuel: 'usage', tickets: 'usage', stats: 'usage', inbox: 'more', history: 'more', car: 'more', account: 'more' };
 
 /** The page title of the routes that have no label of their own in the bar. @type {Record<string, string>} */
-const SUBVIEW_TITLE = { fuel: S.fuel.title, tickets: S.tickets.title, more: S.nav.more };
+const SUBVIEW_TITLE = { fuel: S.fuel.title, tickets: S.tickets.title, stats: S.stats.title, more: S.nav.more };
 
 /**
  * @param {string} routeName

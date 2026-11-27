@@ -410,6 +410,51 @@ export const MIGRATIONS: readonly string[] = [
     updated_at TEXT NOT NULL CHECK (updated_at GLOB ${UTC_MS})
   );
   `,
+
+  // 7: monthly statistics totals that outlive the 6-month window. Additive: two new tables, nothing else changes.
+  // Only the purge writes them (stats.ts computes, retention.ts freezes): a month is frozen from the numbers just
+  // BEFORE the purge deletes the rows they came from, so the totals stay what they were. The tables hold NUMBERS
+  // ONLY: a month key, two flags and counts, cents, millilitres and kilometres. No time of an event, no note,
+  // description or reason, no id of a drive, reservation, fill-up, ticket or report, and no frozen_at, so nothing
+  // here can say what happened on which day.
+  // stats_months: one row per month. frozen = 1 is a stored total (complete = 0 says it was already cut short
+  // by an earlier purge when it was frozen). frozen = 0 is only a marker on a month that is still live: the
+  // purge changed what it would show (complete is 0 then, see the CHECK). Readers of totals filter on frozen.
+  // stats_totals: one row per month and person; user_id 0 holds what belongs to nobody in particular (together
+  // kilometres, a ticket without a known driver, unaccounted kilometres, consumption). No foreign key on user_id:
+  // 0 is no user. The component list is TOTAL_FIELDS in stats.ts and a test compares the two.
+  `
+  CREATE TABLE stats_months (
+    month    TEXT NOT NULL PRIMARY KEY
+             CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' AND month >= '2000-01' AND month <= '2100-12'
+                    AND substr(month, 6, 2) BETWEEN '01' AND '12'),
+    complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+    frozen   INTEGER NOT NULL CHECK (frozen IN (0, 1)),
+    CHECK (frozen = 1 OR complete = 0)
+  ) WITHOUT ROWID;
+
+  CREATE TABLE stats_totals (
+    month           TEXT NOT NULL REFERENCES stats_months(month) ON DELETE CASCADE,
+    user_id         INTEGER NOT NULL CHECK (user_id >= 0),
+    trips           INTEGER NOT NULL DEFAULT 0 CHECK (trips >= 0),
+    km              INTEGER NOT NULL DEFAULT 0 CHECK (km >= 0),
+    together_km     INTEGER NOT NULL DEFAULT 0 CHECK (together_km >= 0),
+    fill_ups        INTEGER NOT NULL DEFAULT 0 CHECK (fill_ups >= 0),
+    millilitres     INTEGER NOT NULL DEFAULT 0 CHECK (millilitres >= 0),
+    paid_cents      INTEGER NOT NULL DEFAULT 0 CHECK (paid_cents >= 0),
+    share_cents     INTEGER NOT NULL DEFAULT 0 CHECK (share_cents >= 0),
+    cost_cents      INTEGER NOT NULL DEFAULT 0 CHECK (cost_cents >= 0),
+    cost_km         INTEGER NOT NULL DEFAULT 0 CHECK (cost_km >= 0),
+    pool_km         INTEGER NOT NULL DEFAULT 0 CHECK (pool_km >= 0),
+    consumption_ml  INTEGER NOT NULL DEFAULT 0 CHECK (consumption_ml >= 0),
+    consumption_km  INTEGER NOT NULL DEFAULT 0 CHECK (consumption_km >= 0),
+    tickets         INTEGER NOT NULL DEFAULT 0 CHECK (tickets >= 0),
+    ticket_cents    INTEGER NOT NULL DEFAULT 0 CHECK (ticket_cents >= 0),
+    damage_reports  INTEGER NOT NULL DEFAULT 0 CHECK (damage_reports >= 0),
+    unaccounted_km  INTEGER NOT NULL DEFAULT 0 CHECK (unaccounted_km >= 0),
+    PRIMARY KEY (month, user_id)
+  ) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
@@ -597,5 +642,6 @@ export function countRows(
     | 'damage_reports'
     | 'push_subscriptions',
 ): number {
+  // Not 'stats_months': its marker rows (frozen = 0) are no stored month. retention.ts counts frozen rows itself.
   return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
 }

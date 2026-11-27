@@ -123,18 +123,18 @@ test('the deleted-row counts are logged as one JSON line and kept for the admin 
     t.logs.length = 0;
     const res = await admin.post('/api/admin/retention/run');
     assert.equal(res.status, 200);
-    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
+    assert.deepEqual({ ...res.body.result }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0, statsFrozen: 1, statsDropped: 0 });
     const lines = t.logs.filter((l) => l['event'] === 'retention.purge');
     assert.equal(lines.length, 1);
-    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
+    assert.deepEqual({ ...lines[0] }, { event: 'retention.purge', cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0, statsFrozen: 1, statsDropped: 0 });
 
     const status = (await admin.get('/api/admin/retention')).body;
     assert.equal(status.cutoff, CUTOFF);
     assert.equal(status.windowMonths, 6);
     assert.deepEqual(status.window, { from: CUTOFF, to: '2026-12-15T11:00:00.000Z' });
     assert.equal(status.lastPurgeAt, NOW);
-    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 });
-    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: status.counts.sessions });
+    assert.deepEqual({ ...status.lastPurge }, { cutoff: CUTOFF, reservations: 2, usage: 1, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0, statsFrozen: 1, statsDropped: 0 });
+    assert.deepEqual(status.counts, { reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, statsMonths: 1, sessions: status.counts.sessions });
     assert.equal(status.oldest.reservationEnd, null);
     assert.equal(status.timeZone, 'Europe/Amsterdam');
   } finally {
@@ -250,7 +250,7 @@ test('old tickets are purged by the time of the offence, strictly before the cut
     );
     assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM tickets').some((r) => r.id === before));
     // A ticket does not take anything else with it, and the other counts stay at zero.
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, odometerExplained: 0, damageReports: 0, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 1, odometerExplained: 0, damageReports: 0, sessions: 0, statsFrozen: 1, statsDropped: 0 });
     t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 1);
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).tickets, 0, 'idempotent');
@@ -296,7 +296,7 @@ test('the purge command says how many tickets it removed', async (tctx) => {
 
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged. Monthly totals: 0 stored before their rows went, 0 dropped for being older than 24 months.`,
   );
 
   const db = openDb(path.join(dir, 'car.db'));
@@ -307,7 +307,7 @@ test('the purge command says how many tickets it removed', async (tctx) => {
   db.close();
   assert.equal(
     await purgeLine(),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 2 tickets, 0 odometer explanations, 0 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged. Monthly totals: 1 stored before their rows went, 0 dropped for being older than 24 months.`,
     'two tickets removed, the one exactly at the cutoff kept',
   );
 });
@@ -332,7 +332,7 @@ test('odometer explanations are purged when their earlier reading is strictly be
       [atCutoff, recent],
     );
     assert.ok(!many<{ id: number }>(t.db, 'SELECT id FROM odometer_explained').some((r) => r.id === before));
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 1, damageReports: 0, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 1, damageReports: 0, sessions: 0, statsFrozen: 0, statsDropped: 0 });
     assert.equal((await admin.get('/api/admin/retention')).body.counts.odometerExplained, 2);
     t.clock.advance(1); // one millisecond later the window has moved past the one at the edge
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).odometerExplained, 1);
@@ -467,7 +467,7 @@ test('an open damage report is never purged, however old; a repaired one goes by
     assert.equal(result.damageReports, 2, 'the one repaired the day before and the one repaired years ago');
     assert.deepEqual(damageIds(t), [openAncient, openLastYear, onCutoffDay, dayAfter, recent], 'both open ones, and the repaired ones from the cutoff day on');
     assert.ok(![dayBefore, longAgo].some((id) => damageIds(t).includes(id)));
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 2, sessions: 0 });
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 2, sessions: 0, statsFrozen: 1, statsDropped: 0 });
     assert.equal(purge(t.db, t.clock.now(), TZ, t.ctx.log).damageReports, 0, 'idempotent');
 
     const status = (await admin.get('/api/admin/retention')).body;
@@ -551,7 +551,7 @@ test('the APK record is never purged, however old its date or its last update, a
     insertApk(t, { userId: anna.id, expiresOn: '2019-03-01' });
     run(t.db, "UPDATE car_apk SET updated_at = '2019-01-01T00:00:00.000Z'");
     const result = purge(t.db, t.clock.now(), TZ, t.ctx.log);
-    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0 }, 'nothing counted, no APK key');
+    assert.deepEqual({ ...result }, { cutoff: CUTOFF, reservations: 0, usage: 0, fuel: 0, fuelRequests: 0, tickets: 0, odometerExplained: 0, damageReports: 0, sessions: 0, statsFrozen: 0, statsDropped: 0 }, 'nothing counted, no APK key');
     assert.deepEqual(many(t.db, 'SELECT id, expires_on, updated_by, updated_at FROM car_apk'), [{ id: 1, expires_on: '2019-03-01', updated_by: anna.id, updated_at: '2019-01-01T00:00:00.000Z' }], 'the one row is still there, unchanged');
     // A purge that does remove other things leaves it alone too, and the page still shows it as expired.
     insertDamage(t, { reportedBy: anna.id, noticedOn: '2020-01-01', repairedOn: '2020-02-01' });
@@ -591,7 +591,7 @@ test('the purge command counts the repaired damage reports it removed, and says 
   assert.equal(await runCli(['purge'], env, io, makeClock(NOW)), 0);
   assert.equal(
     out.join('\n'),
-    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 1 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged.`,
+    `Purged 0 reservations, 0 usage records, 0 fill-ups (0 payment requests), 0 tickets, 0 odometer explanations, 1 repaired damage reports and 0 expired sessions older than ${CUTOFF}. Open damage reports are never purged. Monthly totals: 1 stored before their rows went, 0 dropped for being older than 24 months.`,
   );
   const after = openDb(path.join(dir, 'car.db'));
   assert.deepEqual(many(after, 'SELECT noticed_on, status FROM damage_reports ORDER BY id'), [

@@ -180,6 +180,53 @@ import { flushPending } from './undo.js';
  * @property {string | null} updatedAt UTC ISO
  */
 
+/**
+ * One set of monthly totals (docs/STATS-API.md): the household's, or one person's. Additive components, and what the
+ * server derives from them as whole numbers (ratios are null when there is nothing to divide by).
+ * @typedef {object} StatsEntry
+ * @property {number} trips finished drives, to the driver
+ * @property {number} km kilometres that are the person's (own, or another driver's registered as theirs)
+ * @property {number} togetherKm kilometres registered as "together" (household only)
+ * @property {number} fillUps
+ * @property {number} millilitres fuel filled, to the person who fuelled
+ * @property {number} paidCents paid at the pump, to the person who fuelled
+ * @property {number} shareCents what the person owes for the fill-ups of the month
+ * @property {number} costCents
+ * @property {number} costKm
+ * @property {number} poolKm
+ * @property {number} consumptionMl
+ * @property {number} consumptionKm
+ * @property {number} tickets
+ * @property {number} ticketCents
+ * @property {number} damageReports
+ * @property {number} unaccountedKm household only
+ * @property {number} totalKm km plus togetherKm
+ * @property {number | null} pricePerLitreMillis thousandths of a euro per litre
+ * @property {number | null} costPerKmMillis thousandths of a euro per kilometre
+ * @property {number | null} consumptionHundredths hundredths of a litre per 100 km
+ */
+/**
+ * @typedef {object} StatsMonth
+ * @property {string} month 'YYYY-MM'
+ * @property {boolean} provisional the current month, still being added to
+ * @property {boolean} frozen a stored total: later corrections do not change it
+ * @property {boolean} incomplete known to be short of what happened
+ * @property {boolean} unavailable nothing is known (household is null then)
+ * @property {StatsEntry | null} household
+ * @property {Array<StatsEntry & { userId: number }>} people only the people who have anything in the month
+ */
+/**
+ * @typedef {object} StatsReport
+ * @property {number} version
+ * @property {string} timeZone
+ * @property {number} windowMonths
+ * @property {number} retentionMonths how many months of totals are kept, the current month included
+ * @property {string} current 'YYYY-MM'
+ * @property {{ from: string, to: string }} range
+ * @property {Array<{ id: number, name: string, active: boolean }>} users everybody who ever had an account
+ * @property {StatsMonth[]} months oldest first
+ */
+
 /** @typedef {{ label: string, run: () => void, ms?: number }} ToastAction ms: how long the action works; the toast leaves with it */
 /**
  * What toaster() (dom.js) makes. dismiss(action) takes the toast away at once when it is the one carrying that action, and

@@ -262,6 +262,9 @@ export interface UsageSeed {
   odometerStart?: number | null;
   odometerEnd?: number | null;
   reservationId?: number | null;
+  /** Whose kilometres these are; absent means the driver's own. 'person' needs kmUserId. */
+  kmFor?: 'self' | 'person' | 'together';
+  kmUserId?: number | null;
 }
 
 /** Insert a usage row directly, bypassing the API rules (for fixtures). */
@@ -269,14 +272,16 @@ export function insertUsage(t: TestApp, seed: UsageSeed): number {
   const now = t.clock.now().toISOString();
   return run(
     t.db,
-    `INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, reservation_id, note, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+    `INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, reservation_id, km_for, km_user_id, note, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
     seed.userId,
     seed.start,
     seed.end,
     seed.odometerStart ?? null,
     seed.odometerEnd ?? null,
     seed.reservationId ?? null,
+    seed.kmFor ?? 'self',
+    seed.kmUserId ?? null,
     seed.userId,
     now,
     now,

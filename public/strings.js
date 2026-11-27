@@ -8,7 +8,7 @@
 // S.you ("jou") only go behind a preposition ("Gereden door jou"); S.meLabel ("jij") is for a name that stands alone
 // inside a sentence or in brackets ("Anna (jij)"); S.meHead ("Jij") is the same word where it heads a card or a row,
 // next to the capitalised names of the others.
-import { formatKm } from '../shared/format.js';
+import { NBSP, formatEuro, formatHundredths, formatKm, formatLitres, formatPrice } from '../shared/format.js';
 
 export const S = {
   appName: 'Gedeelde auto',
@@ -269,6 +269,7 @@ export const S = {
     kmTogetherNote: 'Kilometers die samen zijn gereden, worden bij het tanken verdeeld in dezelfde verhouding als ieders eigen kilometers.',
     fuelLink: 'Brandstof en kosten',
     ticketsLink: 'Verkeersboetes',
+    statsLink: 'Statistieken',
     fuelLocked: 'Voor de tankbeurt waar deze rit bij hoort, is een betaalverzoek gedaan. Alleen een admin kan hem wijzigen.',
     overlap: (/** @type {string} */ who, /** @type {string} */ when) => `Dit overlapt met een rit van ${who} (${when}).`,
     pending: {
@@ -474,6 +475,79 @@ export const S = {
       draft: 'Uit een rit die is gestart en niet is afgerond',
       reservation: 'Uit de reservering (er is geen rit geregistreerd)',
       none: 'Geen rit of reservering op dat moment. Registreer een ontbrekende rit, of controleer de tijd.',
+    },
+  },
+
+  // Statistics (a sub-route of Ritten): monthly totals for the household or one person, as charts with a table beside each.
+  // The numbers come from the server (GET /api/stats); nothing here adds up or divides, it only writes them.
+  stats: {
+    title: 'Statistieken',
+    intro: 'De cijfers per maand, voor het hele huishouden of voor één persoon. Een maandtotaal blijft langer bewaard dan de ritten en tankbeurten waaruit het bestaat.',
+    period: 'Periode',
+    periodLabel: (/** @type {number} */ n) => `${n} mnd`,
+    periodName: (/** @type {number} */ n) => `${n} maanden`,
+    who: 'Voor wie',
+    household: 'Hele huishouden',
+    inactive: (/** @type {string} */ name) => `${name} (niet actief)`,
+    householdOnly: 'Het verbruik en de niet geregistreerde kilometers horen bij het hele huishouden. Kies Hele huishouden om ze te zien.',
+    empty: { title: 'Nog niets om te tellen', text: 'Zodra er ritten, tankbeurten, verkeersboetes of schademeldingen zijn, verschijnen hier de totalen per maand.' },
+    emptyPerson: { title: 'Niets in deze periode', text: 'Deze persoon heeft in deze periode niets om te tellen. Kies een langere periode of een ander persoon.' },
+    groups: { drives: 'Ritten en kilometers', fuel: 'Brandstof', other: 'Verkeersboetes en schade' },
+    metrics: {
+      trips: 'Ritten',
+      km: 'Kilometers',
+      unaccounted: 'Niet geregistreerde kilometers',
+      litres: 'Getankt (liter)',
+      paid: 'Aan de pomp betaald (€)',
+      share: 'Aandeel in de brandstofkosten (€)',
+      price: 'Prijs per liter (€)',
+      costPerKm: 'Brandstofkosten per kilometer (€)',
+      consumption: 'Verbruik (liter per 100 km)',
+      tickets: 'Verkeersboetes',
+      ticketCents: 'Bedrag aan verkeersboetes (€)',
+      damage: 'Schademeldingen',
+    },
+    consumptionNote: 'Dit gaat ervan uit dat je bij elke tankbeurt vol tankt: de liters van een tankbeurt zijn wat er sinds de vorige is verbruikt.',
+    // A value with its unit, for the text and the table. The labels on the bars are the same numbers without the unit.
+    value: {
+      trips: (/** @type {number} */ n) => `${n} ${n === 1 ? 'rit' : 'ritten'}`,
+      tickets: (/** @type {number} */ n) => `${n} ${n === 1 ? 'verkeersboete' : 'verkeersboetes'}`,
+      damage: (/** @type {number} */ n) => `${n} ${n === 1 ? 'schademelding' : 'schademeldingen'}`,
+      km: (/** @type {number} */ n) => `${formatKm(n)} km`,
+      litres: (/** @type {number} */ ml) => `${formatLitres(ml)} L`,
+      euro: (/** @type {number} */ cents) => formatEuro(cents),
+      price: (/** @type {number} */ millis) => `€${NBSP}${formatPrice(millis)} per liter`,
+      perKm: (/** @type {number} */ millis) => `€${NBSP}${formatPrice(millis)} per km`,
+      consumption: (/** @type {number} */ hundredths) => `${formatHundredths(hundredths)} L per 100 km`,
+    },
+    legend: {
+      title: 'Zo lees je de grafieken',
+      solid: 'Effen staaf: het maandtotaal is compleet.',
+      hatched: 'Gestreepte staaf: voorlopig (de lopende maand) of onvolledig.',
+      dotted: 'Gestippeld deel: kilometers die samen zijn gereden, boven op de kilometers van personen.',
+      gap: 'Een streepje zonder staaf: onbekend.',
+      frozen: 'Een maandtotaal dat is vastgelegd, verandert niet meer, ook niet als je daarna een rit of tankbeurt uit die maand corrigeert.',
+    },
+    notes: {
+      provisional: (/** @type {string} */ month) => `${month} loopt nog: de getallen van die maand zijn voorlopig en veranderen nog.`,
+      incomplete: (/** @type {string} */ months) => `Onvolledig: ${months}. Een deel van de gegevens van deze maanden was al verwijderd voordat het maandtotaal werd vastgelegd, dus de getallen kunnen te laag zijn.`,
+      unavailable: (/** @type {string} */ months) => `Onbekend: ${months}. Daar zijn geen gegevens van.`,
+    },
+    chart: {
+      table: 'Tabel',
+      caption: (/** @type {string} */ title) => `${title} per maand`,
+      colMonth: 'Maand',
+      colTogether: 'Samen',
+      colStatus: 'Status',
+      unknown: 'onbekend',
+      // The state of one month in the table, in words, so it never rests on the look of a bar alone.
+      state: (/** @type {boolean} */ provisional, /** @type {boolean} */ frozen, /** @type {boolean} */ incomplete, /** @type {boolean} */ unavailable) =>
+        unavailable ? 'Onbekend' : `${provisional ? 'Voorlopig' : frozen ? 'Vastgelegd' : 'Berekend'}${incomplete ? ' (onvolledig)' : ''}`,
+      plusTogether: (/** @type {string} */ text) => `, plus ${text} samen`,
+      none: 'Geen waarden in deze periode.',
+      latest: (/** @type {string} */ month, /** @type {string} */ text) => `Laatste maand, ${month}: ${text}.`,
+      top: (/** @type {string} */ month, /** @type {string} */ text) => `Hoogste maand, ${month}: ${text}.`,
+      latestAndTop: (/** @type {string} */ month, /** @type {string} */ text) => `Laatste en hoogste maand, ${month}: ${text}.`,
     },
   },
 
@@ -710,7 +784,13 @@ export const S = {
         /** @type {number} */ t = 0,
         /** @type {number} */ e = 0,
         /** @type {number} */ d = 0,
-      ) => `${r} reserveringen, ${u} ritten, ${f} tankbeurten, ${q} betaalverzoeken, ${t} verkeersboetes, ${e} kilometertoelichtingen, ${d} gerepareerde schademeldingen, ${s} verlopen sessies`,
+        // The monthly totals of the run: left out when nothing was stored or dropped, and for a result from before they existed.
+        /** @type {number | undefined} */ m = undefined,
+        /** @type {number | undefined} */ x = undefined,
+      ) =>
+        `${r} reserveringen, ${u} ritten, ${f} tankbeurten, ${q} betaalverzoeken, ${t} verkeersboetes, ${e} kilometertoelichtingen, ${d} gerepareerde schademeldingen, ${s} verlopen sessies` +
+        (m ? `, ${m} maandtotalen vastgelegd` : '') +
+        (x ? `, ${x} maandtotalen verwijderd` : ''),
       never: 'Nooit',
       lastMaintenance: 'Laatste dagelijkse onderhoudsronde (lokale datum)',
       lastBackup: 'Laatste back-up',
@@ -728,8 +808,16 @@ export const S = {
         /** @type {number} */ t = 0,
         /** @type {number} */ e = 0,
         /** @type {number} */ d = 0,
-      ) => `${r} reserveringen, ${u} ritten, ${f} tankbeurten, ${q} betaalverzoeken, ${t} verkeersboetes, ${e} kilometertoelichtingen, ${d} schademeldingen (open en gerepareerd)`,
+        // The stored monthly totals; left out when the server does not say.
+        /** @type {number | undefined} */ m = undefined,
+      ) =>
+        `${r} reserveringen, ${u} ritten, ${f} tankbeurten, ${q} betaalverzoeken, ${t} verkeersboetes, ${e} kilometertoelichtingen, ${d} schademeldingen (open en gerepareerd)` +
+        (m === undefined ? '' : `, ${m} vastgelegde maandtotalen`),
       oldest: 'Oudste item eindigt',
+      // A stored monthly total is kept by its month, not by an instant: it has its own row.
+      oldestStats: 'Oudste vastgelegde maandtotaal is van',
+      statsNote: (/** @type {number} */ months) =>
+        `Maandtotalen (alleen getallen: kilometers, bedragen en aantallen) blijven ${months} maanden staan, de huidige maand meegeteld. Ze worden vastgelegd vlak voordat een opruiming de gegevens verwijdert, en een vastgelegde maand verandert daarna niet meer.`,
       // Damage reports are kept by their repaired date, and only once they are repaired: it is not an instant, so it has its own row.
       oldestRepaired: 'Oudste gerepareerde schademelding is gerepareerd op',
       damageNote: 'Open schademeldingen worden nooit verwijderd. Een gerepareerde wordt verwijderd als de dag waarop ze is gerepareerd vóór de eerste dag van het zichtbare venster ligt.',
@@ -809,6 +897,9 @@ export const S = {
     before_noticed: 'Mag niet vóór de dag liggen waarop het is opgemerkt.',
     too_far_ahead: 'Dat is meer dan 5 jaar vooruit. Controleer het jaar.',
     only_when_repaired: 'Alleen voor een gerepareerde schademelding.',
+    invalid_month: 'Vul een geldige maand in (tussen 2000 en 2100).',
+    after_to: 'De eerste maand mag niet na de laatste liggen.',
+    outside_retention: 'Van die maand worden geen totalen bewaard.',
   },
 };
 

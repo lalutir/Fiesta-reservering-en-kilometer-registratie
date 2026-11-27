@@ -431,7 +431,11 @@ export async function render(app, route) {
     // Fuel and costs and Traffic tickets are further places to go from here, so they sit next to the title where they are seen without scrolling past the form.
     h('div', { class: 'view-head' }, [
       h('h2', { text: mode === 'draft' ? S.usage.finishTitle : existing ? S.usage.editTitle : S.usage.logTitle }),
-      h('div', { class: 'actions' }, [linkButton({ label: S.usage.fuelLink, href: '#/fuel', small: true }), linkButton({ label: S.usage.ticketsLink, href: '#/tickets', small: true })]),
+      h('div', { class: 'actions' }, [
+        linkButton({ label: S.usage.fuelLink, href: '#/fuel', small: true }),
+        linkButton({ label: S.usage.ticketsLink, href: '#/tickets', small: true }),
+        linkButton({ label: S.usage.statsLink, href: '#/stats', small: true }),
+      ]),
     ]),
     pendingBanner(app, pending),
     // On a wide screen the form (with the kilometre check) and the drives are side by side; on a phone they follow each other.

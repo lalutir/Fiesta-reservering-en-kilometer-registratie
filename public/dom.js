@@ -1,12 +1,12 @@
 // Safe DOM construction (text only, never innerHTML) and display helpers.
 // The time helpers come from the same file the server uses (/shared/time.js).
-import { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput } from '../shared/time.js';
-import { formatCentsInput, formatEuro, formatLitres, formatPrice } from '../shared/format.js';
+import { addDateKeyYears, addMonthKey, daysBetween, formatDateKey, formatLocal, formatMonthKey, isCalendarDate, localDateKey, localInputToUtc, monthKeyOf, utcToLocalInput } from '../shared/time.js';
+import { formatCentsInput, formatEuro, formatHundredths, formatKm, formatLitres, formatPrice } from '../shared/format.js';
 import { S, errorText, fieldErrorText } from './strings.js';
 
-export { addDateKeyYears, daysBetween, formatDateKey, formatLocal, isCalendarDate, localDateKey, localInputToUtc, utcToLocalInput };
+export { addDateKeyYears, addMonthKey, daysBetween, formatDateKey, formatLocal, formatMonthKey, isCalendarDate, localDateKey, localInputToUtc, monthKeyOf, utcToLocalInput };
 // Amounts, litres and kilometres are written by one module, the same one the server uses (/shared/format.js).
-export { formatCentsInput, formatEuro, formatLitres, formatPrice };
+export { formatCentsInput, formatEuro, formatHundredths, formatKm, formatLitres, formatPrice };
 
 const PROPERTY_KEYS = new Set(['value', 'checked', 'disabled', 'selected', 'hidden', 'required', 'readOnly', 'multiple']);
 

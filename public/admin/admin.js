@@ -11,6 +11,7 @@ import {
   fmtWhen,
   formatDateKey,
   formatLocal,
+  formatMonthKey,
   h,
   kmOwnerControl,
   kmOwnerLabel,
@@ -601,19 +602,24 @@ async function renderRetention() {
         h('dt', { text: r.cutoff }),
         h('dd', { text: formatLocal(s.cutoff, tz) }),
         h('dt', { text: r.lastPurge }),
-        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0, last.odometerExplained ?? 0, last.damageReports ?? 0) : ''}` : r.never }),
+        // A purge result from before the monthly totals has no statsFrozen and statsDropped: those stay undefined and add no clause.
+        h('dd', { text: s.lastPurgeAt ? `${formatLocal(s.lastPurgeAt, tz)}: ${last ? r.lastPurgeCounts(last.reservations, last.usage, last.sessions, last.fuel ?? 0, last.fuelRequests ?? 0, last.tickets ?? 0, last.odometerExplained ?? 0, last.damageReports ?? 0, last.statsFrozen, last.statsDropped) : ''}` : r.never }),
         h('dt', { text: r.lastMaintenance }),
         h('dd', { text: text(s.lastMaintenanceDay) }),
         h('dt', { text: r.lastBackup }),
         h('dd', { text: s.lastBackupAt ? `${s.lastBackupFile} (${formatLocal(s.lastBackupAt, tz)})` : r.never }),
         h('dt', { text: r.counts }),
-        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0, s.counts.odometerExplained ?? 0, s.counts.damageReports ?? 0) }),
+        h('dd', { text: r.countsText(s.counts.reservations, s.counts.usage, s.counts.fuel ?? 0, s.counts.fuelRequests ?? 0, s.counts.tickets ?? 0, s.counts.odometerExplained ?? 0, s.counts.damageReports ?? 0, s.counts.statsMonths) }),
         h('dt', { text: r.oldest }),
         h('dd', { text: oldest ? formatLocal(oldest, tz) : '–' }),
         h('dt', { text: r.oldestRepaired }),
         h('dd', { text: s.oldest.damageRepairedOn ? formatDateKey(s.oldest.damageRepairedOn) : '–' }),
+        // A month, not an instant: the oldest stored (frozen) monthly total.
+        h('dt', { text: r.oldestStats }),
+        h('dd', { text: s.oldest.statsMonth ? formatMonthKey(s.oldest.statsMonth) : '–' }),
       ]),
       h('p', { class: 'hint', text: r.damageNote }),
+      ...(typeof s.statsRetentionMonths === 'number' ? [h('p', { class: 'hint', text: r.statsNote(s.statsRetentionMonths) })] : []),
       h('div', { class: 'actions' }, [
         button(r.runNow, async () => {
           if (!(await confirmSheet(r.confirmRun, { confirmLabel: r.runNow }))) return;

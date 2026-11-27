@@ -120,6 +120,42 @@ What makes an interface look generated, and how each one is kept out. The test o
 | Filler copy ("Welcome back!", "Oops!", lorem) | every text is a fact or an instruction, written for this app | `dutch.test.ts`, `docs/GLOSSARY.md` |
 | Accent colour on everything | the signal yellow is allowed in exactly the rules for Boeken and "car is out" | `design.test.ts`: where `var(--accent)` may be used |
 
+## Charts
+
+The Statistics screen (`#/stats`, a sub-page of Ritten) is the only place with charts. They are drawn without a
+library, so there is nothing to download, nothing to keep up to date and nothing for the CSP to object to.
+
+- **Inline SVG, built with `createElementNS`.** One bar chart per metric on a 320 × 172 sheet that scales with its box
+  (about 1:1 on a phone, and it stops growing at 26 rem so the type stays readable). No `style` attribute anywhere: size
+  comes from the `viewBox`, colour from classes that read the tokens (`--primary`, `--surface`, `--muted`, `--text`),
+  and the two patterns from `<pattern>` elements referenced by a `fill` attribute. The patterns live once in a box with no
+  size that is not `display: none` (a pattern in a box that is not rendered paints nowhere).
+- **Colour is never the only cue.** A bar that is final is solid. A bar that is not (the current month, or a month cut short
+  by a purge) is **hatched**, the kilometres driven together are **dotted**, and an unknown month is a **dash** with no bar.
+  The same ink is used in light and in dark, so the contrast of the pairs in `design.test.ts` is the contrast of the
+  chart. Every month also has its state in words in the table beside the chart (*Voorlopig*, *Vastgelegd*, *Berekend*,
+  *onvolledig*, *Onbekend*), and a few sentences name the months that are not plain numbers. They stay in view under the
+  controls; the legend (*Zo lees je de grafieken*) is a closed disclosure below them, so the first chart starts about 200 to
+  270 px higher on a phone and someone who has read it once is not made to scroll past it again.
+- **A chart is a figure.** A title (`h4`), one sentence that says the latest and the highest month (the SVG is named by the
+  title and described by that sentence, `role="img"`), the sheet, and a **table** with the same numbers in a
+  disclosure (*Tabel*) for whoever cannot read bars. The sentence only compares; no total or average is worked out on
+  the screen, the server sends every number (docs/STATS-API.md), and the only arithmetic is the scaling of a bar. Twelve
+  identical buttons would be one word twelve times, so each carries the chart's name in visually hidden text. At 320 px
+  most tables are wider than their box (a month, a number with its unit and the state need about 290 px of the 252 that
+  are left): a month and a number never break over two lines, the box scrolls sideways and is a named region the keyboard
+  can reach (as in the admin tables), and the page itself still never scrolls sideways.
+- **The person select keeps the keyboard.** Choosing a person redraws the screen through the address and the shell then
+  focuses the heading. A closed select applies every arrow key at once in Chromium on a computer (seen there; other
+  browsers were not tried), so the second press used to land on the heading; the redraw now gives the focus back to the
+  select when it had it.
+- **Labels.** Every bar of a 6 month period carries its number; a 12 or 24 month period labels the latest and the highest
+  month only (when they are not neighbours) and thins the month names (every second, every fourth, the latest always),
+  because 24 bars on a 288 px sheet leave 12 units each. The table has all of them. The consumption chart says what it
+  assumes: a full tank at every fill-up.
+- **Not done:** hover or tap tooltips (a tap target of 12 units is below 44 px; the table is the way to read one
+  month), zooming, a legend you can click, animation. A bar is not interactive, so it needs no target.
+
 ## UX standards
 
 - **Targets** are at least 44 × 44 CSS px on a phone ([exceptions](#targets-under-44-px)); the thumb zone (bottom half)

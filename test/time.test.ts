@@ -4,15 +4,19 @@ import {
   DISPLAY_LOCALE,
   addCalendarMonths,
   addDateKeyYears,
+  addMonthKey,
   daysBetween,
   formatDateKey,
   formatLocal,
+  formatMonthKey,
   isCalendarDate,
   isValidTimeZone,
   localDateKey,
   localInputToUtc,
   localToUtc,
+  monthKeyOf,
   parseDateKey,
+  parseMonthKey,
   startOfLocalDay,
   utcToLocalInput,
   zonedParts,
@@ -224,6 +228,62 @@ test('the date helpers give the same answers whatever the zone of the process is
       assert.equal(formatDateKey('2026-03-28'), '28 mrt 2026', tz);
       assert.equal(startOfLocalDay('2026-03-29', TZ), '2026-03-28T23:00:00.000Z', tz);
       assert.equal(localDateKey('2026-03-27T23:30:00.000Z', TZ), '2026-03-28', tz);
+    }
+  } finally {
+    if (saved === undefined) delete process.env['TZ'];
+    else process.env['TZ'] = saved;
+  }
+});
+
+// ------------------------------------------------------------ calendar months (statistics)
+
+test("a month is the household's local calendar month: the edges sit at local midnight, also on the 23 and 25 hour days", () => {
+  // 31 March 23:59:59.999 local is still March; the next millisecond is April (CEST has been on since the 29th).
+  assert.equal(monthKeyOf('2026-03-31T21:59:59.999Z', TZ), '2026-03');
+  assert.equal(monthKeyOf('2026-03-31T22:00:00.000Z', TZ), '2026-04');
+  // 31 October 23:59:59.999 local is CET (UTC+1): the autumn edge sits an hour later in UTC.
+  assert.equal(monthKeyOf('2026-10-31T22:59:59.999Z', TZ), '2026-10');
+  assert.equal(monthKeyOf('2026-10-31T23:00:00.000Z', TZ), '2026-11');
+  // The spring-forward day (23 hours) and the fall-back day (25 hours) are inside one month each.
+  assert.equal(monthKeyOf('2026-03-29T00:30:00.000Z', TZ), '2026-03');
+  assert.equal(monthKeyOf('2026-10-25T01:30:00.000Z', TZ), '2026-10');
+  // Year rollover.
+  assert.equal(monthKeyOf('2026-12-31T22:59:59.999Z', TZ), '2026-12');
+  assert.equal(monthKeyOf('2026-12-31T23:00:00.000Z', TZ), '2027-01');
+});
+
+test('the same instant is another month in a zone east or west of Amsterdam', () => {
+  assert.equal(monthKeyOf('2026-03-31T22:00:00.000Z', 'Pacific/Auckland'), '2026-04');
+  assert.equal(monthKeyOf('2026-03-31T22:00:00.000Z', 'America/Los_Angeles'), '2026-03');
+  assert.equal(monthKeyOf('2026-03-31T18:29:00.000Z', 'Asia/Kolkata'), '2026-03');
+  assert.equal(monthKeyOf('2026-03-31T18:30:00.000Z', 'Asia/Kolkata'), '2026-04', 'a half-hour zone: local midnight is not on a UTC hour');
+});
+
+test('parseMonthKey is strict and addMonthKey does calendar arithmetic', () => {
+  assert.deepEqual(parseMonthKey('2026-11'), { year: 2026, month: 11 });
+  assert.deepEqual(parseMonthKey('2000-01'), { year: 2000, month: 1 });
+  assert.deepEqual(parseMonthKey('2100-12'), { year: 2100, month: 12 });
+  for (const bad of ['2026-13', '2026-00', '2026-1', '26-11', '2026-11-01', ' 2026-11', '2026-11 ', '1999-12', '2101-01', '', null, undefined, 202611, '2026/11']) {
+    assert.equal(parseMonthKey(bad), null, String(bad));
+  }
+  assert.equal(addMonthKey('2026-01', -1), '2025-12');
+  assert.equal(addMonthKey('2026-12', 1), '2027-01');
+  assert.equal(addMonthKey('2026-11', -23), '2024-12');
+  assert.equal(addMonthKey('2026-11', 0), '2026-11');
+  assert.equal(addMonthKey('2026-06', 36), '2029-06');
+  assert.throws(() => addMonthKey('2026-13', 1), RangeError);
+});
+
+test('a month is written in Dutch, the same in every zone', () => {
+  assert.equal(formatMonthKey('2026-11'), 'november 2026');
+  assert.equal(formatMonthKey('2026-03', 'short'), 'mrt 26');
+  assert.equal(formatMonthKey('2026-01', 'short'), 'jan 26');
+  assert.equal(formatMonthKey('2026-13'), '', 'not a month: nothing to show');
+  const saved = process.env['TZ'];
+  try {
+    for (const tz of ['UTC', 'America/Los_Angeles', 'Pacific/Auckland']) {
+      process.env['TZ'] = tz;
+      assert.equal(formatMonthKey('2026-03'), 'maart 2026', tz);
     }
   } finally {
     if (saved === undefined) delete process.env['TZ'];

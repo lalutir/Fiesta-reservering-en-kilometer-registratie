@@ -1504,6 +1504,167 @@ ul.km-list {
   padding-right: 0;
 }
 
+/* ---- statistics (#/stats) ------------------------------------------------------------ */
+
+/* The two patterns are defined once, in a box with no size that is not hidden: a pattern in a box that is not
+   rendered (display: none) paints nowhere. The bars refer to them by id with a fill attribute. */
+.chart-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.stats-pattern-bg {
+  fill: var(--surface);
+}
+.stats-pattern-ink {
+  stroke: var(--primary);
+  stroke-width: 2;
+}
+.stats-pattern-dot {
+  fill: var(--primary);
+}
+.stats-controls {
+  display: grid;
+  gap: var(--s-3);
+}
+.stats-controls .field {
+  margin: 0;
+}
+/* On a wide screen the two controls sit side by side at their own width: stretched over the whole page, three buttons and a
+   select read as a phone form. */
+@media (min-width: 48rem) {
+  .stats-controls {
+    grid-template-columns: repeat(2, minmax(0, 20rem));
+    align-items: end;
+    gap: var(--s-4);
+    width: fit-content;
+    max-width: 100%;
+  }
+}
+/* The way to read the bars is a disclosure under the notes about the months: a line between them says they are two things. */
+.stats-notes p + .chart-details {
+  margin-top: var(--s-2);
+  border-top: 1px solid var(--border);
+}
+.stats-notes .chart-details > summary {
+  padding: var(--s-2) 0;
+}
+.chart-group h3 {
+  margin: var(--s-5) 0 var(--s-1);
+  font-size: var(--fs-md);
+}
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 0 var(--s-4);
+  align-items: start;
+}
+figure.chart {
+  margin: var(--s-3) 0;
+}
+.chart-title {
+  margin: 0;
+  font-size: var(--fs-md);
+}
+.chart-summary {
+  margin: var(--s-1) 0 var(--s-2);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  /* Short words and month names: "ok-tober" in a sentence of two lines reads worse than an early line break. */
+  hyphens: manual;
+}
+/* The sheet is 320 wide and scales with the box, about 1:1 on a phone; on a wide screen it stops growing, so the type stays readable. */
+.chart-svg {
+  display: block;
+  width: 100%;
+  max-width: 26rem;
+  height: auto;
+}
+.chart-bar {
+  fill: var(--primary);
+}
+.chart-bar-hatched,
+.chart-bar-dotted {
+  stroke: var(--primary);
+  stroke-width: 1;
+}
+.chart-base {
+  stroke: var(--field-border);
+  stroke-width: 1;
+}
+.chart-gap {
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+/* Type on the sheet is in the units of the sheet (px = one unit), not in rem. A number written beside a taller bar would be
+   ink on ink, so the number has an outline in the colour of the card (paint-order puts it behind the letters). */
+.chart-value {
+  fill: var(--text);
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 700;
+}
+.chart-axis {
+  fill: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
+}
+.chart-legend {
+  list-style: none;
+  margin: 0 0 var(--s-2);
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+}
+.chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.chart-swatch {
+  flex: none;
+}
+.chart-details > summary {
+  cursor: pointer;
+  padding: var(--s-3) 0;
+  min-height: var(--tap);
+  font-weight: 700;
+}
+.chart-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.chart-table th,
+.chart-table td {
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.chart-table thead th {
+  background: var(--surface-2);
+}
+/* A month and a number with its unit stay on one line ("129 km" never breaks into two); only the words of the state may wrap.
+   On a narrow phone the table is wider than its box for some charts, so it scrolls inside the box (focusable, see chart()). */
+.chart-table th[scope='row'],
+.chart-table td:not(:last-child) {
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .chart-table th,
+  .chart-table td {
+    padding-inline: var(--s-2);
+  }
+}
+
 /* ---- Meer (more) and Account ---------------------------------------------------- */
 
 .more .list {

@@ -17,6 +17,7 @@ import * as inbox from './views/inbox.js';
 import * as login from './views/login.js';
 import * as more from './views/more.js';
 import * as reserve from './views/reserve.js';
+import * as stats from './views/stats.js';
 import * as tickets from './views/tickets.js';
 import * as usage from './views/usage.js';
 
@@ -33,7 +34,7 @@ import * as usage from './views/usage.js';
  */
 
 /** @type {Record<string, View>} */
-const VIEWS = { home, more, agenda, reserve, inbox, usage, fuel, tickets, history, car, account };
+const VIEWS = { home, more, agenda, reserve, inbox, usage, fuel, tickets, stats, history, car, account };
 const REFRESH_MS = 60_000;
 /** A screen that answers faster than this shows no skeleton at all, so a quick answer does not flash. */
 const SKELETON_DELAY_MS = 120;

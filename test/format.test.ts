@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NBSP, formatCentsInput, formatEuro, formatKm, formatLitres, formatPrice } from '../shared/format.js';
+import { NBSP, formatCentsInput, formatEuro, formatHundredths, formatKm, formatLitres, formatPrice } from '../shared/format.js';
 import { splitCents } from '../src/fuel.ts';
 import { S, fieldErrorText } from '../public/strings.js';
 import { deriveFuel, parseDecimal } from '../public/views/fuel.js';
@@ -259,5 +259,17 @@ test('the formatters agree with a BigInt reference over every magnitude up to th
     assert.equal(formatKm(value), `${sign}${dots(String(abs))}`, `km ${value}`);
     assert.equal(formatLitres(value), `${sign}${abs / 1000n},${abs % 10n === 0n ? thousandths.slice(0, 2) : thousandths}`, `litres ${value}`);
     assert.equal(formatPrice(value), `${sign}${abs / 1000n},${thousandths}`, `price ${value}`);
+    assert.equal(formatHundredths(value), `${sign}${dots(String(abs / 100n))},${hundredths}`, `hundredths ${value}`);
   }
+});
+
+test('hundredths are written with a decimal comma and two decimals (litres per 100 km)', () => {
+  assert.equal(formatHundredths(0), '0,00');
+  assert.equal(formatHundredths(5), '0,05');
+  assert.equal(formatHundredths(650), '6,50');
+  assert.equal(formatHundredths(1234), '12,34');
+  assert.equal(formatHundredths(123_456), '1.234,56');
+  assert.equal(formatHundredths(-250), '-2,50');
+  assert.equal(formatHundredths(1.5), '–', 'not an integer: a dash, never a crash');
+  assert.equal(formatHundredths(Number.NaN), '–');
 });

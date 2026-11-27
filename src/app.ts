@@ -25,6 +25,7 @@ import { createPush, registerPushRoutes } from './push.ts';
 import { createReminders, type Reminders } from './reminders.ts';
 import { registerReservationRoutes } from './reservations.ts';
 import { registerRetentionRoutes } from './retention.ts';
+import { registerStatsRoutes } from './stats.ts';
 import { serveStatic } from './static.ts';
 import { registerTicketRoutes } from './tickets.ts';
 import { registerUsageRoutes } from './usage.ts';
@@ -77,6 +78,7 @@ export function createApp(deps: AppDeps): App {
   registerTicketRoutes(router, ctx, notifier);
   registerCarRoutes(router, ctx, notifier);
   registerOdometerRoutes(router, ctx);
+  registerStatsRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);

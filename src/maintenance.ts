@@ -108,25 +108,48 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Whether the backup of a local day (YYYY-MM-DD) is already written. */
+function hasBackupFor(config: Config, day: string): boolean {
+  return fs.existsSync(path.join(backupDir(config.dataDir), `car-${day}.db`));
+}
+
+/** The purge with this app's settings. Returns whether it ran: a failure is logged here and nothing was deleted (it is one transaction). */
+function purgeOrLog(ctx: MaintCtx, now: Date): boolean {
+  try {
+    purge(ctx.db, now, ctx.config.tz, ctx.log, ctx.config.windowMonths, ctx.config.statsRetentionMonths);
+    return true;
+  } catch (err) {
+    ctx.log({ event: 'maintenance.error', step: 'purge', message: errMessage(err) });
+    return false;
+  }
+}
+
 /**
  * Daily maintenance: purge, then back up, once per local calendar day. Cheap
  * enough to call every 30 minutes; it does nothing when today is already done.
+ * The two steps do not depend on each other: a purge that fails (it stores the monthly
+ * statistics first, and that can throw) must not also stop the backup, so the backup
+ * is still written when there is none for today. The day stays unmarked until both
+ * worked, so the next tick tries again.
  */
 export function tick(ctx: MaintCtx): boolean {
   const { db, config } = ctx;
   const now = ctx.clock.now();
   const today = localDateKey(now, config.tz);
   if (getMeta(db, 'last_maintenance_day') === today) return false;
+  const purged = purgeOrLog(ctx, now);
   try {
-    purge(db, now, config.tz, ctx.log, config.windowMonths);
-    createBackup(ctx);
-    setMeta(db, 'last_maintenance_day', today);
-    return true;
+    // After a good purge the backup is always (re)written, as before. After a failed one it is only written when
+    // today has none yet, so a purge that keeps failing does not rewrite the backup every half hour.
+    if (purged || !hasBackupFor(config, today)) createBackup(ctx);
   } catch (err) {
     // last_maintenance_day stays unset, so the next tick retries.
-    ctx.log({ event: 'maintenance.error', message: errMessage(err) });
+    ctx.log({ event: 'maintenance.error', step: 'backup', message: errMessage(err) });
     return false;
   }
+  if (!purged) return false;
+  setMeta(db, 'last_maintenance_day', today);
+  return true;
 }
 
 /** Purge at startup, back up if there is none for today, then check every 30 minutes. */
@@ -135,11 +158,11 @@ export function startMaintenance(ctx: MaintCtx): { stop(): void } {
   try {
     const now = ctx.clock.now();
     const today = localDateKey(now, config.tz);
-    purge(db, now, config.tz, ctx.log, config.windowMonths);
-    if (!fs.existsSync(path.join(backupDir(config.dataDir), `car-${today}.db`))) createBackup(ctx);
-    setMeta(db, 'last_maintenance_day', today);
+    const purged = purgeOrLog(ctx, now);
+    if (!hasBackupFor(config, today)) createBackup(ctx);
+    if (purged) setMeta(db, 'last_maintenance_day', today);
   } catch (err) {
-    ctx.log({ event: 'maintenance.error', message: errMessage(err) });
+    ctx.log({ event: 'maintenance.error', step: 'backup', message: errMessage(err) });
   }
   const timer = setInterval(() => tick(ctx), 30 * 60_000);
   timer.unref();
