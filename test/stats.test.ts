@@ -580,7 +580,8 @@ test('docs/STATS-API.md names every field of the real response, and every field 
     for (const key of listed) assert.ok(real.has(key), `the document names ${key}, which the response does not have`);
     for (const field of TOTAL_FIELDS) assert.ok(listed.includes(field), `the component ${field} is described`);
     // The example in the document is the shape of the real answer.
-    const example = /```json\n([\s\S]*?)\n```/.exec(doc);
+    // A checkout with CRLF line endings (windows-latest) must find it too.
+    const example = /```json\r?\n([\s\S]*?)\r?\n```/.exec(doc);
     assert.ok(example, 'the document has a JSON example');
     const parsed = JSON.parse(example[1] as string) as Json;
     assert.deepEqual(Object.keys(parsed).sort(), Object.keys(r).sort(), 'the example has the keys of the response');
