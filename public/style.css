@@ -1773,6 +1773,44 @@ figure.chart {
   border: 2px solid var(--primary);
 }
 
+/* Account: the calendar link and the access tokens. A secret is long and has no spaces: it wraps anywhere. */
+.secret-box {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  /* Read-only: nothing to drag. Where the browser can, the box is as tall as the secret, so none of it is hidden. */
+  resize: none;
+  field-sizing: content;
+}
+.token-list {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+}
+.token-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-top: 1px solid var(--border);
+}
+.token-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 12em;
+  min-width: 0;
+}
+.token-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.token-meta {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
 /* ---- wider screens: a rail instead of the tab bar, content in columns ---------------- */
 
 @media (min-width: 48rem) {

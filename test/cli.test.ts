@@ -157,3 +157,29 @@ test('the forgotten-password flow from the guide: reset on the command line sign
     await t.close();
   }
 });
+
+test('reset-password on the command line also revokes the access tokens of that person, and says how many', async () => {
+  const t = await createTestApp();
+  try {
+    const anna = await t.signIn('anna');
+    const ben = await t.signIn('ben');
+    const made = [await anna.post('/api/tokens', { name: 'one' }), await anna.post('/api/tokens', { name: 'two' }), await ben.post('/api/tokens', { name: 'other' })];
+    const [first, second, other] = made.map((r) => r.body.token as string);
+    const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
+    assert.equal((await t.client().get('/api/v1/me', bearer(first as string))).status, 200);
+
+    const reset = harness();
+    assert.equal(await runCli(['reset-password', 'anna'], { ...ENV, DATA_DIR: t.dir }, reset.io), 0);
+    assert.match(reset.out.join('\n'), /Password reset for "anna"; all their sessions were signed out\. 2 access tokens were revoked\./);
+    assert.equal((await t.client().get('/api/v1/me', bearer(first as string))).status, 401);
+    assert.equal((await t.client().get('/api/v1/me', bearer(second as string))).status, 401);
+    assert.equal((await t.client().get('/api/v1/me', bearer(other as string))).status, 200, 'somebody else keeps theirs');
+
+    // With no token the sentence does not mention them.
+    const again = harness();
+    assert.equal(await runCli(['reset-password', 'anna'], { ...ENV, DATA_DIR: t.dir }, again.io), 0);
+    assert.doesNotMatch(again.out.join('\n'), /access token/);
+  } finally {
+    await t.close();
+  }
+});

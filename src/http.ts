@@ -24,6 +24,8 @@ export interface Principal {
   sessionId: number;
   /** Set when the session was just extended; the router adds it to the reply. */
   setCookie?: string;
+  /** Set only for a caller that came in with a personal access token (tokens.ts): which token it was. */
+  tokenId?: number;
 }
 
 export class HttpError extends Error {
@@ -52,12 +54,26 @@ export interface Reply {
   status: number;
   body?: unknown;
   headers?: Record<string, string | string[]>;
+  /**
+   * An answer that is not JSON (the calendar feed): these bytes are sent as they are, with the content type and
+   * the other headers the handler set. An empty `raw` sends no body (a HEAD request, a 304).
+   */
+  raw?: Buffer;
 }
 
 export const ok = (body: unknown, status = 200): Reply => ({ status, body });
 export const noContent = (): Reply => ({ status: 204 });
 
-export type AuthLevel = 'public' | 'user' | 'admin';
+/**
+ * Who may call a route. 'token' is the read-only /api/v1/ prefix: it takes a personal access token in the
+ * Authorization header and nothing else (a session cookie does not work there), and no other level takes a token.
+ */
+export type AuthLevel = 'public' | 'user' | 'admin' | 'token';
+
+/** The one prefix of the token API. Router.add keeps the prefix and the 'token' level welded together. */
+export const TOKEN_API_PREFIX = '/api/v1';
+
+const inTokenApi = (pattern: string): boolean => pattern === TOKEN_API_PREFIX || pattern.startsWith(`${TOKEN_API_PREFIX}/`);
 
 export interface Req {
   method: string;
@@ -98,14 +114,32 @@ export class Router {
   readonly routes: RouteInfo[] = [];
   private entries: Route[] = [];
   private authenticate: (req: IncomingMessage) => Principal | null;
+  private authenticateToken: ((req: IncomingMessage, ip: string) => Principal) | undefined;
   private trustProxy: boolean;
 
-  constructor(authenticate: (req: IncomingMessage) => Principal | null, trustProxy: boolean) {
+  /**
+   * `authenticateToken` resolves the Authorization header of a 'token' route to a person, or throws the 401 or 429
+   * itself (it is the only place that knows the failure counts). Without it every 'token' route answers 401.
+   */
+  constructor(
+    authenticate: (req: IncomingMessage) => Principal | null,
+    trustProxy: boolean,
+    authenticateToken?: (req: IncomingMessage, ip: string) => Principal,
+  ) {
     this.authenticate = authenticate;
     this.trustProxy = trustProxy;
+    this.authenticateToken = authenticateToken;
   }
 
   add(method: string, pattern: string, auth: AuthLevel, handler: Handler): void {
+    // Checked when the route is registered, so a mistake cannot ship: the token API is GET only, every route under
+    // its prefix is a token route, and no route outside it takes a token.
+    if (auth === 'token' && (method !== 'GET' || !inTokenApi(pattern))) {
+      throw new Error(`Only GET routes under ${TOKEN_API_PREFIX}/ may use token authentication (${method} ${pattern})`);
+    }
+    if (auth !== 'token' && inTokenApi(pattern)) {
+      throw new Error(`Every route under ${TOKEN_API_PREFIX}/ must use token authentication (${method} ${pattern})`);
+    }
     const info: RouteInfo = { method, pattern, auth };
     this.routes.push(info);
     this.entries.push({ ...info, segments: pattern.split('/').filter(Boolean), handler });
@@ -136,8 +170,13 @@ export class Router {
     const found = this.match(method, path);
     if (!found) throw new HttpError(404, 'not_found', 'Not found');
     const { route, params } = found;
+    const ip = clientIp(req, this.trustProxy);
     let user: Principal | null = null;
-    if (route.auth !== 'public') {
+    if (route.auth === 'token') {
+      // The cookie is never looked at here, and the token is never looked at anywhere else.
+      if (!this.authenticateToken) throw new HttpError(401, 'unauthenticated', 'Authentication required', { headers: { 'WWW-Authenticate': 'Bearer' } });
+      user = this.authenticateToken(req, ip);
+    } else if (route.auth !== 'public') {
       user = this.authenticate(req);
       if (!user) throw new HttpError(401, 'unauthenticated', 'Authentication required');
       if (route.auth === 'admin' && user.role !== 'admin') throw new HttpError(403, 'forbidden', 'Admin only');
@@ -149,7 +188,7 @@ export class Router {
       params,
       headers: req.headers,
       cookies: parseCookies(req.headers.cookie),
-      ip: clientIp(req, this.trustProxy),
+      ip,
       user,
       json: () => readJson(req),
     };
@@ -278,6 +317,15 @@ export function checkCsrf(req: IncomingMessage): void {
 
 export function sendReply(res: ServerResponse, reply: Reply): void {
   for (const [k, v] of Object.entries(reply.headers ?? {})) res.setHeader(k, v);
+  if (reply.raw !== undefined) {
+    // Not JSON: the handler chose the content type. A 304 has no length and no body; a HEAD handler sets
+    // Content-Length itself and passes an empty body.
+    const body = reply.status === 304 ? undefined : reply.raw;
+    if (body !== undefined && !res.hasHeader('Content-Length')) res.setHeader('Content-Length', body.length);
+    res.writeHead(reply.status);
+    res.end(body);
+    return;
+  }
   if (reply.body === undefined || reply.status === 204) {
     res.writeHead(reply.status);
     res.end();
@@ -289,6 +337,20 @@ export function sendReply(res: ServerResponse, reply: Reply): void {
     'Content-Length': payload.length,
   });
   res.end(payload);
+}
+
+/**
+ * The request path as it may appear in a log line. Repeated slashes are collapsed first (the router ignores
+ * empty segments, so //api//calendar//x is the same route), the segment after calendar/ is the private feed
+ * secret and is replaced, and so is any other long run of address-safe characters (a token, a secret that
+ * ended up in an unexpected place). Cut at 200 characters.
+ */
+export function logPath(rawPath: string): string {
+  return rawPath
+    .replace(/\/{2,}/g, '/')
+    .replace(/(\/calendar\/)[^/]*/i, '$1[redacted]')
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[redacted]')
+    .slice(0, 200);
 }
 
 export function errorReply(err: HttpError): Reply {

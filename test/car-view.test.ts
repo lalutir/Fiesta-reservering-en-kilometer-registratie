@@ -1022,7 +1022,7 @@ test('the deployment guide and the README describe the v6 upgrade, going back, h
   }
   assert.match(guide, /pre-migrate-v5\.db[\s\S]*Car tab: damage reports and the APK date|Car tab: damage reports and the APK date[\s\S]*pre-migrate-v5\.db/);
   assert.match(guide, /\[ \] After an update from the version with the kilometre check:[^\n]*pre-migrate-v5\.db/, 'a line in the smoke checklist');
-  for (const needle of ['schema v7', '**Car tab.**', 'damage.created', 'Calendar dates are not instants', 'photo of the damage']) {
+  for (const needle of ['schema v8', '**Car tab.**', 'damage.created', 'Calendar dates are not instants', 'photo of the damage']) {
     assert.ok(readme.includes(needle), `the README mentions "${needle}"`);
   }
   assert.doesNotMatch(readme, /damage report for everybody is next/, 'the design note no longer calls the damage report a future event');

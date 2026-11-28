@@ -201,7 +201,7 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
       registration: { showNotification: async (title: string, options: Json) => void shown.push({ title, options }) },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url: string) => void opened.push(url) },
     },
-    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7', 'car-static-v8', 'car-static-v9'], delete: async (k: string) => deleted.push(k) },
+    caches: { open: async () => cache, keys: async () => ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7', 'car-static-v8', 'car-static-v9', 'car-static-v10'], delete: async (k: string) => deleted.push(k) },
     fetch: fetchImpl,
     URL,
   };
@@ -221,11 +221,12 @@ function loadServiceWorker(fetchImpl: (req: Json) => Promise<Json>, windows: Jso
 test('service worker: the cache name is bumped with the app files, so phones drop the old copy of the shell', () => {
   // A new view file changes what the shell is: without a new name an installed app keeps serving the old one.
   const source = read(publicDir, 'sw.js');
-  assert.match(source, /const CACHE = 'car-static-v9';/);
+  assert.match(source, /const CACHE = 'car-static-v10';/);
   assert.match(source, /'\/views\/tickets\.js',/, 'the tickets view is precached');
   assert.match(source, /'\/views\/stats\.js',/, 'the statistics view is precached');
   assert.match(source, /'\/views\/car\.js',/, 'the Car view is precached');
   assert.match(source, /'\/kmcheck\.js',/, 'the kilometre check module is precached');
+  assert.match(source, /'\/views\/integrations\.js',/, 'the access token and calendar link cards are precached');
 });
 
 test('service worker: precaches on install, drops old caches on activate', async () => {
@@ -240,10 +241,11 @@ test('service worker: precaches on install, drops old caches on activate', async
   assert.ok(sw.store.has('https://car.example/views/stats.js'));
   assert.ok(sw.store.has('https://car.example/kmcheck.js'));
   assert.ok(sw.store.has('https://car.example/views/car.js'));
+  assert.ok(sw.store.has('https://car.example/views/integrations.js'));
   let activated: Promise<unknown> | undefined;
   (sw.handlers['activate'] as (e: Json) => void)({ waitUntil: (p: Promise<unknown>) => (activated = p) });
   await activated;
-  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7', 'car-static-v8'], 'the previous versions of the shell go, the current one stays');
+  assert.deepEqual(sw.deleted, ['old-cache', 'car-static-v4', 'car-static-v5', 'car-static-v6', 'car-static-v7', 'car-static-v8', 'car-static-v9'], 'the previous versions of the shell go, the current one stays');
 });
 
 test('service worker never handles /api, /admin, non-GET or cross-origin requests', async () => {
@@ -251,6 +253,14 @@ test('service worker never handles /api, /admin, non-GET or cross-origin request
   const untouched = [
     ['GET', 'https://car.example/api/reservations'],
     ['GET', 'https://car.example/api'],
+    // The token API and the private calendar feed: live data and a secret in the address, never cached.
+    ['GET', 'https://car.example/api/v1/status'],
+    ['GET', 'https://car.example/api/v1/me'],
+    ['GET', 'https://car.example/api/v1/reservations?from=2026-06-01T00:00:00.000Z'],
+    ['GET', `https://car.example/api/calendar/${'A'.repeat(43)}.ics`],
+    ['GET', `https://car.example/api//calendar//${'A'.repeat(43)}.ics`],
+    ['HEAD', `https://car.example/api/calendar/${'A'.repeat(43)}.ics`],
+    ['GET', 'https://car.example/api/calendar-feed'],
     ['GET', 'https://car.example/admin'],
     ['GET', 'https://car.example/admin/'],
     ['GET', 'https://car.example/admin/admin.js'],

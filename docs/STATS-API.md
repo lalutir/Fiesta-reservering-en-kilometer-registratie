@@ -1,8 +1,9 @@
 # Statistics API
 
 `GET /api/stats` returns monthly totals for the household and for each person. It is read-only, the same for
-every signed-in user, and versioned (`version`), so a later token API or calendar feed can serve the same
-document. This file is the contract: a test compares the field names below with the real response.
+every signed-in user, and versioned (`version`). The same document, byte for byte, is served at
+`GET /api/v1/stats` to a personal access token (see [API.md](API.md)). This file is the contract: a test compares
+the field names below with the real response.
 
 Everything here is integers. Money is whole cents, volume whole millilitres, distance whole kilometres. Averages
 are derived on read as integers with a fixed scale (see "Derived values"); nothing is a float.

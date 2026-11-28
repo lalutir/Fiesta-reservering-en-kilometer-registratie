@@ -106,7 +106,18 @@ plus an admin page for the person who manages it.
   kilometres follow the ratio of the personal ones), the driver of a ticket is the one the tickets screen names,
   and the unaccounted kilometres are the open gaps of the Kilometre check. Anybody signed in sees the same
   numbers. The JSON behind it, `GET /api/stats?from=YYYY-MM&to=YYYY-MM`, is versioned and documented in
-  [docs/STATS-API.md](docs/STATS-API.md), so a later token API or calendar feed can serve the same document.
+  [docs/STATS-API.md](docs/STATS-API.md); a personal access token gets the same document at `GET /api/v1/stats`.
+- **Read-only API and calendar feed.** Each person can make up to 5 **personal access tokens** (Account page) for
+  their own tools, such as a Google script or a home-automation system. A token reads four `GET` routes under
+  `/api/v1/` (`status`: who has the car, who is next, what is waiting; `reservations`; `stats`; `me`: the owner's own
+  kilometres and fuel balances) and nothing else. It acts as its owner and always as a member (also for an admin),
+  never shows more than the app shows that person, is shown once and stored only as a SHA-256 digest, and ends when
+  its owner is deactivated, when an admin resets their password or when it is revoked (an admin can list and revoke
+  every token). Each person can also make one private **calendar link**, an `.ics` address with a secret in it, to
+  subscribe Google, Apple or Outlook Agenda to every confirmed reservation and to their own waiting suggestions
+  (as tentative), with no notes. Failed attempts are throttled per address like the login, and neither secret
+  reaches a log line, an answer header or the service worker's cache. See [docs/API.md](docs/API.md); its Home
+  Assistant and Apps Script examples were never run on the real systems.
 - **Six-month window.** You can see 6 months back and 6 months ahead, and you cannot create
   anything outside that. Everything that ended more than 6 months ago is deleted for good, every
   day and at start-up. There are two exceptions. A **damage report that is still open** is kept
@@ -276,19 +287,23 @@ src/        server (TypeScript, run directly by Node in dev, compiled to dist/ f
   webpush.ts  VAPID and message encryption (pure)                  push.ts     push endpoints, key, sender, routes
   reminders.ts  the once-a-minute reminder scheduler               retention.ts  the 6-month purge
   maintenance.ts  backups, daily job                               cli.ts      operator commands
-  db.ts       the only file that touches node:sqlite (schema v7, migrations)
+  tokens.ts   personal access tokens and the bearer check          v1.ts       the read-only /api/v1/ routes
+  calendar.ts the private calendar feed (.ics) and its link         ics.ts      the pure RFC 5545 writer (no database)
+  calendar-texts.ts  the words of the calendar feed (in Dutch)
+  db.ts       the only file that touches node:sqlite (schema v8, migrations)
 shared/     time.js: time zone, DST, calendar-month and calendar-date maths, and the Dutch date display;
             format.js: euro, litres, price per litre and kilometres as integers written the Dutch way.
             Both are used by the server and the browser
 public/     the PWA (vanilla JavaScript modules, no build step; calendar.js is the pure date maths of the Agenda
             views, kmcheck.js the Kilometre check: prefill, warnings, the findings list; views/car.js the Car tab;
             views/stats.js the Statistics screen: inline-SVG bar charts and their tables;
+            views/integrations.js the access token and calendar link cards of the Account page;
             nav.js the five places of the bar and the rail; ui.js and icons.js the shared components and the one
             icon set; theme.js, drafts.js, undo.js and storage.js the theme choice, unsent form input and
             "Ongedaan maken"; views/home.js the Start screen, views/more.js the page Meer)
             and public/admin/ (admin page: admin.js, and table.js the sortable and filterable table)
 docs/       DEPLOYMENT.md, DESIGN.md (the design decisions), GLOSSARY.md (the Dutch vocabulary), third-party.md (the icon licence),
-            STATS-API.md (the contract of GET /api/stats)
+            STATS-API.md (the contract of GET /api/stats), API.md (the token API and the calendar feed)
 test/       tests (API integration tests plus unit tests)
 scripts/    icon generator, the built-output smoke test (and its push stub) and the container check CI runs
 e2e/        browser suite (Playwright specs, run by `npm run e2e`; not part of `npm test`)
@@ -530,6 +545,15 @@ backups, updates and a monthly cost estimate (about $4-6).
   per-person figure. The screen lays out up to 24 bars on a phone, so a long period writes a number on the latest
   and the highest bar only (the table has the rest). Trips follow the driver and kilometres follow the owner, as on
   the Drives tab. Nothing was tried on a real phone or with a screen reader.
+- **Tokens and the calendar feed.** Read only: no scopes, no expiry, no CORS (callers are servers, not
+  browsers) and no global off switch (revoke the tokens in the admin Users tab, and each person turns their
+  link off). The limits (60 requests a minute per token, 30 failed attempts per address in 15 minutes, one
+  counter for the token API and another for the feed) live in memory and reset when the app restarts. A feed
+  address is its own secret, so the database keeps it readable and **a backup holds it in plain text**; a
+  restore also brings back tokens and links that were revoked or replaced since. Changing your own password
+  does not revoke your tokens (an admin reset does). Google Calendar refreshes a subscription only a few times a
+  day. The Caddy log filter that hides the feed secret was only syntax-checked in CI (`caddy validate`). Nothing
+  was tried with a real calendar app, Home Assistant, Apps Script or a real phone.
 - **Notifications are sent once**, after the change is saved, and not retried; a person without a
   device signed up hears nothing and finds it in the Inbox, on the Drives tab or on the History
   screen. There is no per-category mute (the switch is per device), a suggestion that nobody

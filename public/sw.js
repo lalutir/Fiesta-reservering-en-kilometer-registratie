@@ -1,10 +1,13 @@
 // Service worker: network first with a cache fallback for the static app files,
 // so the installed app can still open when the phone is offline. It never
-// touches /api (always live data) or /admin (admin only, never cached).
+// touches /api (always live data) or /admin (admin only, never cached). That
+// includes the read-only token API (/api/v1/) and the private calendar feed
+// (/api/calendar/<secret>.ics): an answer that holds somebody's data, or an
+// address that is a secret, must never end up in a cache on a phone.
 // It also shows the reminder notifications the server pushes (see the end of this file).
 // Keep PRECACHE equal to the files in public/ (test/pwa.test.ts checks this).
 
-const CACHE = 'car-static-v9';
+const CACHE = 'car-static-v10';
 
 const PRECACHE = [
   '/',
@@ -35,6 +38,7 @@ const PRECACHE = [
   '/views/stats.js',
   '/views/car.js',
   '/views/account.js',
+  '/views/integrations.js',
   '/views/home.js',
   '/views/more.js',
   '/icons/icon-192.png',

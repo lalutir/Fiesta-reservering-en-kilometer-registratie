@@ -442,7 +442,8 @@ test('first deploy on an old database: months that were already partly purged ar
   let opened: Db | undefined;
   try {
     const file = buildV6(dir, '2025-01-10T08:00:00.000Z');
-    const db = (opened = openDb(file)); // the upgrade to v7 (and its pre-migrate-v6 copy)
+    // The statistics era stops at the seventh migration: the app has moved on (v8), this test is about the v6 to v7 step.
+    const db = (opened = openDb(file, MIGRATIONS.slice(0, 7))); // the upgrade to v7 (and its pre-migrate-v6 copy)
     assert.equal(schemaVersion(db), 7);
     assert.ok(fs.existsSync(path.join(dir, 'backups', 'pre-migrate-v6.db')));
     const now = new Date(NOW);

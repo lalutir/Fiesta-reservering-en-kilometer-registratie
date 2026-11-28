@@ -20,6 +20,7 @@ const NOT_FOR_PEOPLE: Record<string, string> = {
   csrf: 'a cross-site write, which the app never makes',
   must_be_string: 'a field of the wrong JSON type, which the forms never send',
   must_be_boolean: 'a field of the wrong JSON type, which the forms never send',
+  rate_limited: 'the per-token request limit of the read-only API, which only a script can reach (a person is never turned away by it)',
 };
 
 function emittedCodes(): { error: Map<string, string>; field: Map<string, string> } {

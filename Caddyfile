@@ -3,6 +3,24 @@
 # The Cloudflare DNS record for $DOMAIN must be "DNS only" (grey cloud): the app
 # rate-limits logins by the client address Caddy reports, and behind Cloudflare's
 # proxy that would be a Cloudflare address.
+
+# Global options. The site below has no `log` directive, so Caddy writes no access log. Its default logger
+# still writes errors (for example when the app is down), and such a line names the request address. The
+# address of a person's private calendar feed contains a secret (/api/calendar/<secret>.ics), so that part is
+# replaced in everything Caddy logs. The pattern tolerates repeated slashes, because the app treats
+# /api//calendar//<secret>.ics as the same address. A `log` directive added to the site later needs the same
+# filter (docs/DEPLOYMENT.md).
+{
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp calendar/+[^?]* calendar/REDACTED
+			}
+		}
+	}
+}
+
 {$DOMAIN} {
 	encode zstd gzip
 

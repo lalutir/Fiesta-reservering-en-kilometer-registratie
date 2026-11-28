@@ -486,6 +486,50 @@ try {
     const status = await (await get('/api/admin/retention')).json();
     expect(status.counts.statsMonths === 0 && status.statsRetentionMonths === 24, `nothing stored by reading: ${JSON.stringify(status.counts)}`);
   });
+
+  // The two read-only integrations (docs/API.md). The reservation of the earlier check is tomorrow, so the feed lists it.
+  await check('read-only API and calendar feed: a token reads the four routes and dies when revoked, the feed has an ETag and a new link kills the old one, and no secret reaches the server output', async () => {
+    const asAdmin = { 'Content-Type': 'application/json', Cookie: cookie };
+    const made = await fetch(`${base}/api/tokens`, { method: 'POST', headers: asAdmin, body: JSON.stringify({ name: 'Smoke test' }) });
+    expect(made.status === 201, `make a token ${made.status}`);
+    const { token, item } = await made.json();
+    expect(/^pat_[A-Za-z0-9_-]{43}$/.test(token), 'the token has its shape');
+    const bearer = { Authorization: `Bearer ${token}` };
+    for (const route of ['status', 'reservations', 'stats', 'me']) {
+      const res = await fetch(`${base}/api/v1/${route}`, { headers: bearer });
+      expect(res.status === 200 && res.headers.get('cache-control') === 'no-store', `GET /api/v1/${route}: ${res.status}`);
+    }
+    const viaToken = await (await fetch(`${base}/api/v1/stats`, { headers: bearer })).text();
+    expect(viaToken === (await (await fetch(`${base}/api/stats`, { headers: asAdmin })).text()), 'the token gets the statistics byte for byte');
+    expect((await fetch(`${base}/api/v1/me`, { headers: asAdmin })).status === 401, 'a session cookie does not work on /api/v1/');
+    expect((await fetch(`${base}/api/auth/me`, { headers: bearer })).status === 401, 'a token does not work on a cookie route');
+    expect((await fetch(`${base}/api/v1/me`, { method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' }, body: '{}' })).status === 404, 'nothing can be written with a token');
+    expect((await fetch(`${base}/api/tokens/${item.id}`, { method: 'DELETE', headers: asAdmin })).status === 204, 'revoke');
+    expect((await fetch(`${base}/api/v1/me`, { headers: bearer })).status === 401, 'a revoked token is refused');
+
+    const feedMade = await fetch(`${base}/api/calendar-feed`, { method: 'POST', headers: asAdmin, body: '{}' });
+    expect(feedMade.status === 201, `make a link ${feedMade.status}`);
+    const firstPath = (await feedMade.json()).feed.path;
+    const ics = await fetch(`${base}${firstPath}`);
+    const body = await ics.text();
+    expect(ics.status === 200 && ics.headers.get('content-type') === 'text/calendar; charset=utf-8' && ics.headers.get('cache-control') === 'no-store', `the feed: ${ics.status} ${ics.headers.get('content-type')}`);
+    expect(body.startsWith('BEGIN:VCALENDAR\r\n') && body.endsWith('END:VCALENDAR\r\n') && body.includes('BEGIN:VEVENT'), 'it is a calendar with the reservation of the earlier check in it');
+    const etag = ics.headers.get('etag') ?? '';
+    expect(/^"[0-9a-f]{32}"$/.test(etag), `a strong ETag: ${etag}`);
+    const unchanged = await fetch(`${base}${firstPath}`, { headers: { 'If-None-Match': etag } });
+    expect(unchanged.status === 304 && (await unchanged.text()) === '', `If-None-Match: ${unchanged.status}`);
+    const renewed = await fetch(`${base}/api/calendar-feed/new-link`, { method: 'POST', headers: asAdmin, body: '{}' });
+    const secondPath = (await renewed.json()).feed.path;
+    expect(secondPath !== firstPath, 'a new link is a different link');
+    expect((await fetch(`${base}${firstPath}`)).status === 404, 'the old link is dead');
+    expect((await fetch(`${base}${secondPath}`)).status === 200, 'the new one works');
+
+    // The server writes a line for each request; none of them may hold a secret. The path is logged redacted.
+    await new Promise((r) => setTimeout(r, 300));
+    const secrets = [token, token.slice(4), firstPath.slice('/api/calendar/'.length, -4), secondPath.slice('/api/calendar/'.length, -4)];
+    for (const secret of secrets) expect(!output.includes(secret), 'a secret is in the server output');
+    expect(output.includes('"path":"/api/calendar/[redacted]"'), 'the access log has the redacted path');
+  });
 } catch (err) {
   failures.push('startup');
   console.log(`  FAIL startup: ${err instanceof Error ? err.message : err}`);

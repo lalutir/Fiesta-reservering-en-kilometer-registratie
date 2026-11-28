@@ -673,9 +673,17 @@ export interface ApiStub {
  * Routes are keyed "METHOD /path" (query string ignored); a plain object answers 200, a Reply anything else.
  * GET /api/odometer (the kilometre check every drive, fill-up and history screen asks for) answers an empty
  * chain unless a test plans something else, so a test about something else does not have to know about it.
+ * The same goes for GET /api/tokens, /api/calendar-feed and /api/admin/tokens (nothing made yet).
  */
 export function stubApi(planned: Routes): ApiStub {
-  const routes: Routes = { 'GET /api/odometer': () => odometerChain(), ...planned };
+  // The Account page and the admin Users tab also ask for the person's access tokens and calendar link; no token and no link is the quiet default.
+  const routes: Routes = {
+    'GET /api/odometer': () => odometerChain(),
+    'GET /api/tokens': () => ({ items: [], max: 5 }),
+    'GET /api/calendar-feed': () => ({ feed: null }),
+    'GET /api/admin/tokens': () => ({ items: [], max: 5 }),
+    ...planned,
+  };
   const g = globalThis as Json;
   const before = Object.getOwnPropertyDescriptor(g, 'fetch');
   const stub: ApiStub = {

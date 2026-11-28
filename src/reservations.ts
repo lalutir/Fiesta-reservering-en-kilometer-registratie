@@ -280,6 +280,46 @@ export function listUnregistered(db: Db, actor: Principal, nowIso: string, userI
   return rows.map((r) => toDto(r, actor, nowIso));
 }
 
+/**
+ * The reservations a person may see in a window, as GET /api/reservations answers (the query is its from, to,
+ * status and userId). One function for the cookie route and the token API, so what a token sees can never be more
+ * than what the app shows that person: confirmed ones for everybody, the rest only to their owner, their creator
+ * and an admin.
+ */
+export function listReservations(ctx: Ctx, actor: Principal, query: URLSearchParams): { items: ReservationDto[]; window: { from: string; to: string } } {
+  const now = ctx.clock.now();
+  const nowIso = now.toISOString();
+  const range = queryRange(query, now, ctx.config.tz, ctx.config.windowMonths);
+  const where = ['r.end_utc >= ?', 'r.start_utc <= ?'];
+  const params: Array<string | number> = [range.from, range.to];
+  if (actor.role !== 'admin') {
+    where.push("(r.status = 'confirmed' OR r.created_by = ? OR r.user_id = ?)");
+    params.push(actor.id, actor.id);
+  }
+  const status = query.get('status');
+  if (status !== null && status !== '') {
+    if (status === 'expired') {
+      where.push("r.status = 'pending' AND r.start_utc <= ?");
+      params.push(nowIso);
+    } else if (status === 'pending') {
+      where.push("r.status = 'pending' AND r.start_utc > ?");
+      params.push(nowIso);
+    } else if (status === 'confirmed' || status === 'declined') {
+      where.push('r.status = ?');
+      params.push(status);
+    } else {
+      throw new ValidationError({ status: 'invalid_value' });
+    }
+  }
+  const userId = queryUserId(query);
+  if (userId !== undefined) {
+    where.push('r.user_id = ?');
+    params.push(userId);
+  }
+  const rows = many<ReservationJoin>(ctx.db, `${SELECT} WHERE ${where.join(' AND ')} ORDER BY r.start_utc, r.id`, ...params);
+  return { items: rows.map((r) => toDto(r, actor, nowIso)), window: range };
+}
+
 function overlapError(conflict: NonNullable<ReturnType<typeof findOverlap>>): HttpError {
   return new HttpError(409, 'overlap', `That time overlaps a reservation by ${conflict.userName}`, {
     extra: { conflict },
@@ -292,40 +332,7 @@ export function registerReservationRoutes(router: Router, ctx: Ctx, notifier?: N
   const { db, config } = ctx;
   const nowDate = (): Date => ctx.clock.now();
 
-  router.add('GET', '/api/reservations', 'user', (req) => {
-    const actor = me(req);
-    const now = nowDate();
-    const nowIso = now.toISOString();
-    const range = queryRange(req.query, now, config.tz, config.windowMonths);
-    const where = ['r.end_utc >= ?', 'r.start_utc <= ?'];
-    const params: Array<string | number> = [range.from, range.to];
-    if (actor.role !== 'admin') {
-      where.push("(r.status = 'confirmed' OR r.created_by = ? OR r.user_id = ?)");
-      params.push(actor.id, actor.id);
-    }
-    const status = req.query.get('status');
-    if (status !== null && status !== '') {
-      if (status === 'expired') {
-        where.push("r.status = 'pending' AND r.start_utc <= ?");
-        params.push(nowIso);
-      } else if (status === 'pending') {
-        where.push("r.status = 'pending' AND r.start_utc > ?");
-        params.push(nowIso);
-      } else if (status === 'confirmed' || status === 'declined') {
-        where.push('r.status = ?');
-        params.push(status);
-      } else {
-        throw new ValidationError({ status: 'invalid_value' });
-      }
-    }
-    const userId = queryUserId(req.query);
-    if (userId !== undefined) {
-      where.push('r.user_id = ?');
-      params.push(userId);
-    }
-    const rows = many<ReservationJoin>(db, `${SELECT} WHERE ${where.join(' AND ')} ORDER BY r.start_utc, r.id`, ...params);
-    return ok({ items: rows.map((r) => toDto(r, actor, nowIso)), window: range });
-  });
+  router.add('GET', '/api/reservations', 'user', (req) => ok(listReservations(ctx, me(req), req.query)));
 
   router.add('GET', '/api/inbox', 'user', (req) => {
     const actor = me(req);

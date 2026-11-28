@@ -10,6 +10,7 @@ import {
 } from './auth.ts';
 import { countRows, isUniqueViolation, many, one, run, tx, type Role, type UserRow } from './db.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Reply, type Router } from './http.ts';
+import { revokeUserTokens } from './tokens.ts';
 import { Fields, ValidationError } from './validate.ts';
 
 export interface UserDto {
@@ -228,6 +229,7 @@ export function registerUserRoutes(router: Router, ctx: Ctx): void {
     const role = f.oneOf('role', ROLES, { optional: true });
     const active = f.bool('active', { optional: true });
     f.done();
+    let tokensRevoked = 0;
     const updated = tx(db, () => {
       const row = findUser(ctx, id);
       const nextRole = role ?? row.role;
@@ -252,13 +254,17 @@ export function registerUserRoutes(router: Router, ctx: Ctx): void {
       );
       if (!nextActive) {
         destroyUserSessions(ctx, id);
-        // A deactivated person gets no more notifications on their devices.
+        // A deactivated person gets no more notifications on their devices, and nothing else gets in on their behalf:
+        // their access tokens and their calendar link end with them (reactivating does not bring either back).
         run(db, 'DELETE FROM push_subscriptions WHERE user_id = ?', id);
+        tokensRevoked = revokeUserTokens(db, id);
+        run(db, 'DELETE FROM calendar_feeds WHERE user_id = ?', id);
       }
       return findUser(ctx, id);
     });
     // The role decides who pays for fuel (admins do not, fuel.ts), so the role a person ends up with is part of the audit line.
-    ctx.log({ event: 'user.updated', userId: id, by: req.user?.id, role: updated.role, active: updated.active === 1 });
+    // So is the number of access tokens that a deactivation ended (a count, never a token), as in user.password_reset.
+    ctx.log({ event: 'user.updated', userId: id, by: req.user?.id, role: updated.role, active: updated.active === 1, ...(tokensRevoked > 0 ? { tokensRevoked } : {}) });
     return ok({ user: toUserDto(updated) });
   });
 
@@ -269,8 +275,14 @@ export function registerUserRoutes(router: Router, ctx: Ctx): void {
     f.done();
     findUser(ctx, id);
     const generated = supplied === undefined ? generatePassword() : undefined;
-    storePassword(ctx, id, await hashPassword((supplied ?? generated) as string, config.scrypt));
-    ctx.log({ event: 'user.password_reset', userId: id, by: req.user?.id });
+    const hash = await hashPassword((supplied ?? generated) as string, config.scrypt);
+    // A reset is what an admin does when a login may be in the wrong hands: every session and every access token of
+    // that person ends with it. (The person changing their own password does not touch their tokens.)
+    const tokensRevoked = tx(db, () => {
+      storePassword(ctx, id, hash);
+      return revokeUserTokens(db, id);
+    });
+    ctx.log({ event: 'user.password_reset', userId: id, by: req.user?.id, tokensRevoked });
     return ok(generated ? { generatedPassword: generated } : {});
   });
 }
