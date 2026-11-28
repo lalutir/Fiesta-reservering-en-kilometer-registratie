@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { S } from '../public/strings.js';
 import { resetTableStates } from '../public/admin/table.js';
-import { ADMIN, ANNA, BEN, NOW, Reply, TZ, all, at, byText, control, doc, fieldRow, finding, odometerChain, one, reading, reservation, typeInto, until, usage, withClient, type FakeDom, type FakeElement, type Routes } from './fake-dom.ts';
+import { fmtWhen } from '../public/dom.js';
+import { ADMIN, ANNA, BEN, NOW, Reply, TZ, all, at, byText, control, doc, fieldRow, finding, odometerChain, one, reading, refuse, reservation, typeInto, until, usage, withClient, type FakeDom, type FakeElement, type Routes } from './fake-dom.ts';
 import type { Json } from './helpers.ts';
 
 const A = S.admin;
@@ -173,6 +174,71 @@ test('admin users: deactivating asks first, a role change asks nothing, resettin
       }
     },
   ));
+
+const adminToken = (id: number, userName: string, name: string, over: Json = {}): Json => ({ id, userId: id, userName, name, createdAt: at(-1000), lastUsedAt: null, ...over });
+
+test('admin users: every access token of the household is listed under the users, and revoking one asks first; the page still has exactly four tabs', () =>
+  withClient(
+    {
+      now: NOW,
+      routes: baseRoutes({
+        'GET /api/admin/tokens': () => ({ items: [adminToken(5, 'Anna', 'Woonkamerscherm', { lastUsedAt: at(-30) }), adminToken(6, 'Ben', 'Google-script')], max: 5 }),
+        'DELETE /api/admin/tokens/5': () => new Reply(null, 204),
+      }),
+    },
+    async ({ dom, api }) => {
+      try {
+        const { root, toastEl } = await openAdmin(dom);
+        assert.equal(all(root, '.admin-tabs button').length, 4, 'the tokens are a section of the users tab, not a tab of their own');
+        assert.ok(all(root, 'h2').some((h2) => h2.textContent === A.tokens.title));
+        assert.ok(all(root, 'p.hint').some((p) => p.textContent === A.tokens.intro));
+        const wrap = wrapOf(root, A.tokens.title);
+        assert.deepEqual(all(wrap, 'th').map((th) => th.textContent), [A.tokens.person, A.tokens.name, A.tokens.made, A.tokens.lastUsed, A.actions], 'the actions column is named for a screen reader');
+        assert.equal(bodyRows(wrap).length, 2);
+        const anna = rowOf(wrap, 'Anna');
+        assert.ok(anna.textContent.includes('Woonkamerscherm') && anna.textContent.includes(fmtWhen(at(-30), TZ)), 'who, what, and when it was last used');
+        assert.ok(rowOf(wrap, 'Ben').textContent.includes(A.tokens.neverUsed));
+        assert.ok(!root.textContent.includes('pat_'), 'never a token');
+        assert.equal(byText(anna, 'button', A.tokens.revoke).getAttribute('aria-label'), A.tokens.revokeLabel('Anna', 'Woonkamerscherm'));
+        assert.ok(A.tokens.revokeLabel('Anna', 'Woonkamerscherm').startsWith(A.tokens.revoke), 'the accessible name starts with the visible text (WCAG 2.5.3)');
+
+        dom.answer = false;
+        await byText(anna, 'button', A.tokens.revoke).fire('click');
+        assert.equal(dom.confirms.at(-1), A.tokens.confirmRevoke('Anna', 'Woonkamerscherm'));
+        assert.deepEqual(api.writes(), [], 'a no revokes nothing');
+        dom.answer = true;
+        await byText(anna, 'button', A.tokens.revoke).fire('click');
+        await until(() => api.writes().length === 1, 'the revoke');
+        assert.deepEqual(api.writes().map((c) => `${c.method} ${c.path}`), ['DELETE /api/admin/tokens/5']);
+        await until(() => toastEl.textContent === A.tokens.revokedToast, 'the toast');
+        await usersReloaded(api, 2);
+        assert.ok(api.calls.filter((c) => c.method === 'GET' && c.path === '/api/admin/tokens').length >= 2, 'the list was asked for again');
+      } finally {
+        await closeAdmin();
+      }
+    },
+  ));
+
+test('admin users: with no tokens the section says so, and when the token list cannot be loaded the users tab still works', async () => {
+  await withClient({ now: NOW, routes: baseRoutes() }, async ({ dom }) => {
+    try {
+      const { root } = await openAdmin(dom);
+      assert.ok(all(root, 'h2').some((h2) => h2.textContent === A.tokens.title));
+      assert.ok(all(root, '.empty p').some((p) => p.textContent === A.tokens.none));
+    } finally {
+      await closeAdmin();
+    }
+  });
+  await withClient({ now: NOW, routes: baseRoutes({ 'GET /api/admin/tokens': () => refuse(500, 'internal') }) }, async ({ dom }) => {
+    try {
+      const { root } = await openAdmin(dom);
+      assert.equal(wrapOf(root, A.tabs.users).getAttribute('role'), 'region', 'the users table is there');
+      assert.ok(!all(root, 'h2').some((h2) => h2.textContent === A.tokens.title), 'and the section is left out');
+    } finally {
+      await closeAdmin();
+    }
+  });
+});
 
 test('admin users: renaming is a field in a drawer, an empty name is refused on the field, and a name is sent trimmed', () =>
   withClient({ now: NOW, routes: baseRoutes({ 'PATCH /api/admin/users/2': () => ({ user: BEN }) }) }, async ({ dom, api }) => {

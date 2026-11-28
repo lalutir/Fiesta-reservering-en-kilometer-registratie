@@ -5,7 +5,8 @@ import { hashPassword, parseHash, verifyPassword, LoginLimiter, throttleAddress 
 import { one } from '../src/db.ts';
 import { PASSWORD, createTestApp, rawRequest } from './helpers.ts';
 
-const PUBLIC_ROUTES = ['GET /api/health', 'POST /api/auth/login'];
+// The calendar feed is the one deliberate addition: its address is its credential (src/calendar.ts), and it is a GET and a HEAD.
+const PUBLIC_ROUTES = ['GET /api/health', 'POST /api/auth/login', 'GET /api/calendar/:file', 'HEAD /api/calendar/:file'];
 
 test('every API route except health and login answers 401 to anonymous callers', async () => {
   const t = await createTestApp();

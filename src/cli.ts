@@ -9,10 +9,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LoginLimiter, generatePassword, hashPassword } from './auth.ts';
 import { loadConfig, systemClock, type Clock } from './config.ts';
-import { openDb, one, type UserRow } from './db.ts';
+import { openDb, one, tx, type UserRow } from './db.ts';
 import { HttpError, type Ctx, type Logger } from './http.ts';
 import { createBackup, dbPath, restoreBackup } from './maintenance.ts';
 import { purge } from './retention.ts';
+import { revokeUserTokens } from './tokens.ts';
 import { createUser, readNewPassword, storePassword } from './users.ts';
 import { Fields } from './validate.ts';
 
@@ -105,8 +106,13 @@ export async function runCli(
           const f = new Fields({ password });
           readNewPassword(f, 'password');
           f.done();
-          storePassword(ctx, user.id, await hashPassword(password, config.scrypt));
-          io.out(`Password reset for "${user.username}"; all their sessions were signed out.`);
+          const hash = await hashPassword(password, config.scrypt);
+          // Same as the admin reset in the app: the sessions and the access tokens of that person end.
+          const tokens = tx(db, () => {
+            storePassword(ctx, user.id, hash);
+            return revokeUserTokens(db, user.id);
+          });
+          io.out(`Password reset for "${user.username}"; all their sessions were signed out.${tokens > 0 ? ` ${tokens} access token${tokens === 1 ? ' was' : 's were'} revoked.` : ''}`);
           if (generated) io.out(`Generated password (shown once): ${password}`);
           return 0;
         }

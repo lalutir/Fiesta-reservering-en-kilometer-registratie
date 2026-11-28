@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { LoginLimiter, authenticate } from './auth.ts';
 import type { Clock, Config } from './config.ts';
+import { registerCalendarRoutes } from './calendar.ts';
 import { registerCarRoutes } from './car.ts';
 import type { Db } from './db.ts';
 import {
@@ -12,6 +13,7 @@ import {
   checkCsrf,
   clientIp,
   errorReply,
+  logPath,
   ok,
   sendReply,
   type Ctx,
@@ -28,8 +30,10 @@ import { registerRetentionRoutes } from './retention.ts';
 import { registerStatsRoutes } from './stats.ts';
 import { serveStatic } from './static.ts';
 import { registerTicketRoutes } from './tickets.ts';
+import { createTokenAuth, registerTokenRoutes } from './tokens.ts';
 import { registerUsageRoutes } from './usage.ts';
 import { registerUserRoutes } from './users.ts';
+import { registerV1Routes } from './v1.ts';
 
 export interface AppDeps {
   db: Db;
@@ -62,7 +66,9 @@ export interface App {
 export function createApp(deps: AppDeps): App {
   const ctx: Ctx = { ...deps, fetch: deps.fetch ?? globalThis.fetch, limiter: new LoginLimiter() };
   const { config, log } = ctx;
-  const router = new Router((req) => authenticate(ctx, req), config.trustProxy);
+  // The bearer check of the read-only /api/v1/ routes has its own failure counter (tokens.ts).
+  const tokenAuth = createTokenAuth(ctx);
+  const router = new Router((req) => authenticate(ctx, req), config.trustProxy, tokenAuth.authenticate);
 
   router.add('GET', '/api/health', 'public', () => {
     ctx.db.prepare('SELECT 1').get();
@@ -72,6 +78,7 @@ export function createApp(deps: AppDeps): App {
   // One notifier for everything somebody else enters, changes or removes on a person's behalf (notify.ts).
   const notifier = createNotifier(ctx, push);
   registerUserRoutes(router, ctx);
+  registerTokenRoutes(router, ctx);
   registerReservationRoutes(router, ctx, notifier);
   registerUsageRoutes(router, ctx, notifier);
   registerFuelRoutes(router, ctx, notifier);
@@ -79,6 +86,8 @@ export function createApp(deps: AppDeps): App {
   registerCarRoutes(router, ctx, notifier);
   registerOdometerRoutes(router, ctx);
   registerStatsRoutes(router, ctx);
+  registerV1Routes(router, ctx);
+  registerCalendarRoutes(router, ctx);
   registerPushRoutes(router, ctx, push);
   const reminders = createReminders(ctx, push);
   registerRetentionRoutes(router, ctx);
@@ -114,12 +123,13 @@ export function createApp(deps: AppDeps): App {
     const rid = crypto.randomBytes(6).toString('hex');
     res.setHeader('X-Request-Id', rid);
     res.on('finish', () => {
-      // Method, path and status only: never bodies, cookies or query strings.
+      // Method, path and status only: never bodies, cookies, the Authorization header or query strings. The path
+      // goes through logPath(): the calendar feed address carries a secret, and nothing like it may reach the log.
       log({
         event: 'http',
         rid,
         method: req.method,
-        path: rawPath.slice(0, 200),
+        path: logPath(rawPath),
         status: res.statusCode,
         ms: Number((process.hrtime.bigint() - started) / 1_000_000n),
         ip: clientIp(req, config.trustProxy),

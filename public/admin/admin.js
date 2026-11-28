@@ -196,7 +196,48 @@ async function renderUsers() {
     ]),
   ]);
 
-  return h('div', {}, [secret, createForm, table(S.admin.tabs.users, [S.admin.users.name, S.admin.users.username, S.admin.users.role, S.admin.users.status, ''], rows)]);
+  // The access tokens of the household sit under the users (not a tab of their own). The users tab works without them.
+  /** @type {{ items: import('../api.js').AdminAccessToken[] } | null} */
+  const tokens = await get('/api/admin/tokens').catch(() => null);
+
+  return h('div', {}, [
+    secret,
+    createForm,
+    table(S.admin.tabs.users, [S.admin.users.name, S.admin.users.username, S.admin.users.role, S.admin.users.status, ''], rows),
+    tokens ? tokensSection(tokens.items) : null,
+  ]);
+}
+
+/**
+ * Every personal access token in the household: whose, what it is called, when it was made and last used, and a way
+ * to cut it off. Never the token itself: nobody can read one back.
+ * @param {import('../api.js').AdminAccessToken[]} items
+ */
+function tokensSection(items) {
+  const T = S.admin.tokens;
+  const rows = items.map((t) => [
+    t.userName,
+    t.name,
+    withSort(fmtWhen(t.createdAt, tz), t.createdAt),
+    withSort(t.lastUsedAt ? fmtWhen(t.lastUsedAt, tz) : T.neverUsed, t.lastUsedAt ?? ''),
+    h('div', { class: 'actions' }, [
+      uiButton({
+        label: T.revoke,
+        small: true,
+        variant: 'danger',
+        attrs: { 'aria-label': T.revokeLabel(t.userName, t.name) },
+        onclick: async () => {
+          if (!(await confirmSheet(T.confirmRevoke(t.userName, t.name), { confirmLabel: T.revoke }))) return;
+          void perform(() => del(`/api/admin/tokens/${t.id}`), T.revokedToast);
+        },
+      }),
+    ]),
+  ]);
+  return h('section', { class: 'admin-tokens' }, [
+    h('h2', { text: T.title }),
+    h('p', { class: 'hint', text: T.intro }),
+    items.length === 0 ? emptyState({ text: T.none }) : table(T.title, [T.person, T.name, T.made, T.lastUsed, ''], rows),
+  ]);
 }
 
 /**

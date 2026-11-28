@@ -145,6 +145,24 @@ export interface ApkRow {
   updated_at: string;
 }
 
+/** A personal access token. Only the SHA-256 digest of the token is stored (tokens.ts). */
+export interface ApiTokenRow {
+  id: number;
+  user_id: number;
+  name: string;
+  token_hash: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/** One private calendar feed per person: the secret in the feed address, and its digest for lookups (calendar.ts). */
+export interface CalendarFeedRow {
+  user_id: number;
+  secret: string;
+  secret_hash: string;
+  created_at: string;
+}
+
 export interface PushSubscriptionRow {
   id: number;
   user_id: number;
@@ -454,6 +472,35 @@ export const MIGRATIONS: readonly string[] = [
     unaccounted_km  INTEGER NOT NULL DEFAULT 0 CHECK (unaccounted_km >= 0),
     PRIMARY KEY (month, user_id)
   ) WITHOUT ROWID;
+  `,
+
+  // 8: personal access tokens for the read-only /api/v1 and one private calendar feed per person. Additive: two
+  // new tables, nothing else changes.
+  // api_tokens: only the SHA-256 digest (hex) of a token is stored, never the token, so a leaked backup cannot be
+  // used to call the API. The digest is unique and is how a request finds its row; the comparison itself is
+  // constant-time (tokens.ts). last_used_at is written at most once an hour. Rows are deleted, not flagged, when a
+  // token is revoked, when its owner is deactivated, and when an admin resets the owner's password.
+  // calendar_feeds: one row per person. The feed address contains the secret, so the secret is kept readable (the
+  // Account page shows the address again) next to a digest that is the lookup key; a backup therefore holds the
+  // feed secrets in plain text and has to be treated like a password file (docs/DEPLOYMENT.md). Making a new link
+  // replaces the row; turning the feed off or deactivating the person deletes it.
+  `
+  CREATE TABLE api_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 60),
+    token_hash   TEXT NOT NULL UNIQUE CHECK (length(token_hash) = 64),
+    created_at   TEXT NOT NULL CHECK (created_at GLOB ${UTC_MS}),
+    last_used_at TEXT CHECK (last_used_at IS NULL OR last_used_at GLOB ${UTC_MS})
+  );
+  CREATE INDEX api_tokens_user ON api_tokens(user_id);
+
+  CREATE TABLE calendar_feeds (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    secret      TEXT NOT NULL CHECK (length(secret) = 43),
+    secret_hash TEXT NOT NULL UNIQUE CHECK (length(secret_hash) = 64),
+    created_at  TEXT NOT NULL CHECK (created_at GLOB ${UTC_MS})
+  );
   `,
 ];
 

@@ -146,7 +146,8 @@ function refuseNul(f: Fields, key: string, value: string | undefined): void {
   if (value?.includes('\0')) f.fail(key, 'invalid_value');
 }
 
-function apkOf(db: Db, tz: string, now: Date): ApkDto {
+/** The APK record as the screens and the token API show it: the date, the days left, who entered it. */
+export function apkOf(db: Db, tz: string, now: Date): ApkDto {
   const row = one<ApkRow & { updated_by_name: string }>(
     db,
     'SELECT a.*, u.display_name AS updated_by_name FROM car_apk a JOIN users u ON u.id = a.updated_by WHERE a.id = 1',
@@ -158,6 +159,11 @@ function apkOf(db: Db, tz: string, now: Date): ApkDto {
     updatedBy: { id: row.updated_by, name: row.updated_by_name },
     updatedAt: row.updated_at,
   };
+}
+
+/** How many damage reports are open (the number the Start screen and the token API show). */
+export function openDamageCount(db: Db): number {
+  return one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM damage_reports WHERE status = 'open'")?.n ?? 0;
 }
 
 export function registerCarRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {

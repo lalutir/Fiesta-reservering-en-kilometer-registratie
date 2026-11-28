@@ -136,8 +136,17 @@ export class LoginLimiter {
   private perKey = new Map<string, number[]>();
   private perIp = new Map<string, number[]>();
   readonly windowMs = 15 * 60_000;
-  readonly maxPerKey = 5;
-  readonly maxPerIp = 30;
+  readonly maxPerKey: number;
+  readonly maxPerIp: number;
+
+  /**
+   * The defaults are the login's. The token API and the calendar feed make their own instances, so a polled stale
+   * feed address cannot lock a valid token out, and neither can lock anybody out of the login.
+   */
+  constructor(maxPerKey = 5, maxPerIp = 30) {
+    this.maxPerKey = maxPerKey;
+    this.maxPerIp = maxPerIp;
+  }
 
   private recent(map: Map<string, number[]>, key: string, now: number): number[] {
     const list = (map.get(key) ?? []).filter((t) => t > now - this.windowMs);
@@ -225,8 +234,9 @@ export function clearedSessionCookie(config: Config): string {
 
 const sessionExpiry = (now: Date): string => new Date(now.getTime() + SESSION_MAX_AGE_S * 1000).toISOString();
 
-function hashToken(token: string): string {
-  return crypto.createHash('sha256').update(token).digest('hex');
+/** The SHA-256 digest (hex) of a string: how session tokens, access tokens and calendar secrets are stored and looked up. */
+export function sha256Hex(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex');
 }
 
 export function createSession(ctx: Ctx, userId: number): { token: string; cookie: string } {
@@ -236,7 +246,7 @@ export function createSession(ctx: Ctx, userId: number): { token: string; cookie
   run(
     ctx.db,
     'INSERT INTO sessions (token_hash, user_id, created_at, expires_at, refreshed_at) VALUES (?, ?, ?, ?, ?)',
-    hashToken(token),
+    sha256Hex(token),
     userId,
     nowIso,
     sessionExpiry(now),
@@ -265,7 +275,7 @@ export function authenticate(ctx: Ctx, req: IncomingMessage): Principal | null {
     `SELECT s.id AS session_id, s.refreshed_at, u.id, u.username, u.display_name, u.role
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND u.active = 1 AND s.expires_at > ?`,
-    hashToken(token),
+    sha256Hex(token),
     nowIso,
   );
   if (!row) return null;

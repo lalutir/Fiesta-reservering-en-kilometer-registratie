@@ -1392,6 +1392,115 @@ Defaults taken for seven open questions (none scope-changing; no one was asked):
 - Audit directory: `.claude/runs/statistics-monthly-totals-retention` (git-excluded). Base commit `a025d50ec04bfac436d1857fd1541ae408dded49`.
 <!-- implement:run:statistics-monthly-totals-retention:end -->
 
+<!-- implement:run:api-tokens-and-ics-calendar-feed:start -->
+### Personal access tokens, a read-only /api/v1 JSON API and a private ICS calendar feed (api-tokens-and-ics-calendar-feed)
+
+Date 2026-11-27. Branch `implement/api-tokens-and-ics-calendar-feed`. Base branch `main`, base commit `a86f46d3a094a8cae158774fc67a608103fb39f5`.
+
+### Request
+
+> Add two integrations for my own tools: a read-only JSON API with personal access tokens (for Home Assistant, spreadsheets, Grafana) and a private calendar feed (ICS) so reservations show up in Google or Apple Calendar. The statistics endpoint from the previous change is part of the API.
+>
+> Tokens (Account page, Dutch UI texts in the central dictionary): - A user can create, list and revoke personal access tokens, with a name, a maximum of 5 each. The token is shown once. Store only a hash (256-bit random token, SHA-256, constant-time compare). Show created and last-used times, updating last-used at most once per hour. - Tokens authenticate with `Authorization: Bearer ...` ONLY on a new read-only prefix `/api/v1/` and never on the normal cookie API. Cookies never work on `/api/v1/`. - A token acts as its owner, read-only, on an explicit allow-list, and never exposes more than the app already shows that person. No admin or user-management endpoints, even for an admin's token, and no password hashes. - Allow-list: `status` (who has the car now or until when it is free, next reservation, km still to register for the token owner, open damage count, APK expiry), `reservations` (the window), `stats` (the statistics endpoint) and `me` (own km totals and fuel balance). - Revocation: deactivating a user kills their tokens, an admin can revoke any token, and an admin password reset revokes the user's tokens. - Failed token attempts go through the same kind of throttle as the login. Rate-limit per token. Audit-log events never contain the token. - Document it in `docs/API.md` with curl examples plus a Home Assistant REST-sensor example and a Google Apps Script example. Say plainly that those examples were not run on the real systems.
+>
+> Calendar feed: - A per-user private subscription URL with its own unguessable secret (calendar apps cannot send headers), shown on the Account page with copy and "make a new link" (which invalidates the old one). - The feed lists the car's confirmed reservations for the whole window (everyone's, like the Agenda), and the user's own pending suggestions as TENTATIVE. - Use UTC timestamps, stable UIDs, LAST-MODIFIED from updated_at, a calendar name, and refresh hints. Cancelled reservations disappear. Support ETag and If-None-Match. - Privacy: summary and times only, no notes, because calendar apps sync to third-party clouds. Document that Google Calendar refreshes subscribed feeds slowly (often many hours).
+>
+> Security and plumbing, which matter more than the features: - The feed secret sits in the URL, so check that it never reaches app logs, request-id logs or Caddy access logs (read the Caddyfile and compose logging, and redact if needed). Add `Cache-Control: no-store` and `Referrer-Policy: no-referrer` where relevant. - The service worker must never cache `/api/v1/` or the feed (update its exclusions and the test). - Additive migration with the pre-migrate backup. Backups now hold token hashes and feed secrets, so update the DEPLOYMENT note on backups. - Tests: token lifecycle, hash-only storage, read-only enforcement (bearer on the cookie API fails, cookie on `/api/v1/` fails), allow-list and per-owner visibility, revocation cases, throttling, ICS output validity (parse it with a strict check, include DST edge cases), the log-redaction check, and no new runtime dependency. - Extend the smoke check, the e2e suite for the Account page and a headless Chromium pass at 390 and 320 px. State what could not be verified: real calendar apps, Home Assistant, and real phones.
+
+### What was built
+
+Each person can make up to 5 personal access tokens on the Account page (shown once, only a SHA-256 digest stored) that authenticate with `Authorization: Bearer` on a new GET-only prefix: `/api/v1/status`, `reservations`, `stats` and `me`, role-blind and read-only. Cookies never work there and a bearer never works anywhere else. Each person can also create a private calendar link (`/api/calendar/<secret>.ics`, 256-bit secret, "new link" kills the old one) listing everyone's confirmed reservations in the window plus their own waiting suggestions as TENTATIVE, summary and times only. Migration 8 adds `api_tokens` and `calendar_feeds`; the secret is redacted in the app access log and by a Caddyfile global log filter. Nothing is committed: HEAD equals `main` (`a86f46d`); git shows 37 modified tracked files (+1240/-136) and 15 untracked (8 source, view, doc and e2e files, 6 test files and a strict ICS reader) before this entry.
+
+### Why this approach
+
+- Chosen: minimal (mean score 7.7). A `token` auth level in the existing Router, three small modules plus a pure ICS writer, a path-secret feed, additive migration 8. Smallest blast radius (no `Ctx` change, `/api/stats` untouched, fewest pin edits); the judges' weaknesses were folded in.
+- Rejected: idiomatic (self-authenticating public feed route, extra attribution and DTO layers): wider surface, more test churn. Robust (router-enforced bearer and feed auth, extraction layers): more modules and churn than the criteria need.
+- Rejected: a fifth admin tab (breaks the 2 by 2 phone grid, five tab-count pins; a token section in the Users tab instead); a `webcal://` link (clients may first fetch over plain http, secret in clear); one limiter for bearer failures and feed misses (a stale polled feed URL could lock tokens out); a Caddy regexp anchored on `^/api/calendar/` or using `{32,}`.
+
+### How it works
+
+Start with the `token` level and `Router.add` guard in `src/http.ts`, then `src/tokens.ts`, `src/v1.ts`, `src/calendar.ts` with `src/ics.ts`, and `docs/API.md`.
+
+- Auth: `Router.add` refuses a `token` route that is not a GET under `/api/v1/` and any other route under that prefix; the cookie is never read for a token route and `authenticate()` never reads the header. A token is `pat_` plus 43 base64url characters; lookup is by digest, then `timingSafeEqual`; the owner must be active; the principal is always a member. Failures are counted per address (IPv6 /64) in an own limiter before the lookup (30, then 429 with Retry-After); 60 requests per minute per token; last-used is written at most hourly, best effort.
+- Visibility: `reservations` runs the same `listReservations` as the cookie route; `stats` is `statsReport` as `GET /api/stats` (byte-equal test); `me` holds the owner's totals and balances; `status` ports the Start screen's `carNow` server-side (parity test over 150 seeded households, `next` not capped at 60 days).
+- Revocation: deactivation deletes the person's tokens and feed row in the same transaction; an admin password reset and the CLI `reset-password` revoke tokens; the person's own password change does not. Admins list and revoke tokens at `/api/admin/tokens` (a section of the Users tab).
+- Feed: own-link routes (`GET` gives `{feed:null}` when none, idempotent `POST`, `POST /new-link`, `DELETE`) and public `GET`/`HEAD /api/calendar/:file` with its own limiter, one identical 404 for every miss, strong ETag and `If-None-Match` (list, `*`, `W/`) with 304, `no-store`, `no-referrer`. UTC only, `METHOD:PUBLISH`, one-hour refresh hint, DTSTAMP and LAST-MODIFIED from `updated_at`.
+- Redaction: `logPath()` collapses slashes and replaces what follows `calendar/` and any 32+ character run; the Caddyfile global `log` filter replaces it in whatever Caddy logs (no access log today, only its error logger). Backups now hold token digests and plaintext feed secrets (DEPLOYMENT). Cache `car-static-v10`, `/views/integrations.js` precached, `/api/` stays outside the service worker.
+
+### Files
+
+| Path | Change | Purpose |
+| --- | --- | --- |
+| `src/tokens.ts`, `v1.ts`, `calendar.ts`, `ics.ts`, `calendar-texts.ts` | added | Token routes and bearer auth; four v1 routes; feed routes and query; pure ICS writer; Dutch feed words |
+| `src/http.ts`, `auth.ts`, `app.ts` | modified | `token` level and registration guard, raw replies, `logPath`; `sha256Hex`, limiter constructor; route wiring |
+| `src/db.ts` | modified | Migration 8 (`api_tokens`, `calendar_feeds`, one index); `pre-migrate-v7.db` written first |
+| `src/users.ts`, `cli.ts`, `reservations.ts`, `usage.ts`, `car.ts` | modified | Revocation hooks and log counts; behaviour-neutral extractions (`listReservations`, `usageSummary`, `pendingKmFor`, `apkOf`, `openDamageCount`) |
+| `public/views/integrations.js` | added | Calendar and token cards (show-once sheet, copy, confirm sheets) |
+| `public/views/account.js`, `admin/admin.js`, `api.js`, `strings.js`, `style.css`, `sw.js` | modified | Cards mounted, admin token section, typedefs, Dutch texts, styles, cache v10 |
+| `Caddyfile` | modified | Global log filter that redacts the feed secret |
+| `docs/API.md` | added | Contract, curl, Home Assistant and Apps Script examples (323 lines) |
+| `README.md`, `docs/DEPLOYMENT.md`, `GLOSSARY.md`, `STATS-API.md` | modified | Features and limits; backup note, v8 upgrade, checklist, Caddy note; two terms; one sentence |
+| `test/tokens`, `v1`, `ics`, `calendar-feed`, `integrations-view`, `integrations-docs` tests, `ics-strict.ts` | added | 28, 12, 12, 21, 14 and 8 tests; strict byte-level RFC 5545 reader |
+| 14 existing `test/*.ts` files, `dutch-keys.txt` | modified | Schema 8 pins, router, backup, Caddy, service worker, Dutch guard, admin (see Honesty flags) |
+| `scripts/smoke.mjs`, `e2e/integrations.spec.ts`, `e2e/touch-targets.spec.ts` | modified, added | One smoke check; token and link lifecycle; 44 px targets |
+
+`package.json`, the lock file, `Dockerfile`, compose, `.env.example`, `.github` and `src/config.ts` are unchanged (empty `git diff`); no dependency was added.
+
+### How to run and test
+
+Windows, Node 22.23.1. Test stage, final tree, all exit 0 (this documentation step ran no test command):
+
+- `npm run check` (typecheck of server, client and e2e, lint, test, build, smoke): `npm test` 1465 of 1465, 0 skipped, 0 todo (1355 on `main`; 1444 after build, 1446 after UI, 1447 after backend); `npm run smoke` 23 of 23. Also `TZ=UTC` and `TZ=PST8PDT` npm test, and a CRLF copy of the whole tree: 1465 of 1465.
+- `npm run e2e` (installed Chromium via `E2E_CHROMIUM_PATH`): 84 passed at 390 and 320 px (78 before). `npm audit --omit=dev`: 0 vulnerabilities.
+- Mutation checks, files restored and SHA-256 compared: 53 in build (52 killed at once; the survivor, a reservation ending exactly now counted as current, got a boundary test), 22 of 22 in the test stage, plus 3 backend and 1 DevOps. Headless Chromium at 390 and 320 px, light and dark, 11 states: no findings, re-run on the final tree.
+
+### Specialist passes
+
+| Concern | Skill used | Built-in rubric instead | Effect |
+| --- | --- | --- | --- |
+| UI and UX | frontend-design:frontend-design | No | 5 fixes: calendar link no longer cut off at 320 px, message under the buttons, focus kept after the 5th token, revoke names start with the visible text, intro reworded; 2 tests |
+| Backend | engineering-skills:senior-backend | No | Last-used no longer runs an UPDATE on every request (checked in code, best-effort write); `user.updated` log carries `tokensRevoked`; tests added |
+| Data | engineering-advanced-skills:database-designer | No | No schema change (EXPLAIN on 3,000 reservations, integrity and foreign-key checks clean); one test message corrected |
+| DevOps | docker-development:docker-development | No | Caddy filter syntax read against saved Caddy source; pin that no active Caddyfile line enables `log_credentials`; two DEPLOYMENT wording fixes |
+| Security | security-review | No | No finding at confidence 8 or higher; no change; files read directly, filtering inline |
+| Simplicity | simplify | No | Single inline pass: one exported `sha256Hex` instead of three copies; raw reply branch ends in `res.end(body)` |
+
+### Verification
+
+Verified (ran and saw pass): the commands above; the correctness review traced all 23 acceptance criteria to code and to a test; feed versus `GET /api/reservations` over 60 seeded households; log-grep with induced 500s; a v7 file with rows upgrades to v8 with one `pre-migrate-v7.db`, a failing v8 rolls back, a v7 backup restores; docs pinned to responses; `package.json` untouched.
+
+NOT verified: real calendar apps (Google, Apple, Outlook), Home Assistant and Google Apps Script (the examples are written from documentation and were never run), real phones, iOS and Android clipboard, screen readers, Firefox and WebKit. Docker, `caddy validate` and a running Caddy writing a redacted line: not installed here and nothing is pushed, so the CI Docker job has not run on this change; the filter syntax was read against Caddy source, not run, and a slip would stop Caddy from starting, so that job must be green before a deploy. Also not verified: Linux and the GitHub runners, a live v7 database, the constant-time compare (source check only), whether any client fetches the feed over http first, axe or Lighthouse. Test confidence: high for what the commands cover; not for the items above.
+
+### Review
+
+One round, three lenses (correctness, maintainability, risk; `engineering-skills:code-reviewer`, `engineering-skills:adversarial-reviewer`): 19 findings, 0 confirmed, verdict pass in all three, no review fix.
+
+Remaining notes (not fixed): `docs/API.md` says any other method on `/api/v1/` is 404, but a write with no JSON Content-Type gets 415; `docs/API.md` says a good token is unaffected by other people's scripts on a shared address, but an address with 30 failures gets 429 for every request; the pending-km rule is written twice and a `pendingKmFor` docstring is untrue; a DEPLOYMENT comment on reset-password is stale; what ends with a person sits in three places in two shapes; a token or link made by a hijacked session survives the victim's password change, and an admin reset leaves the calendar link alive (a decision for the owner, pinned by a test). Nits: empty feed has no component; limiter maps are unbounded (now three exposed instances); the rate limit is per token, not per person; one malformed `updated_at` turns the whole feed into a 500; the show-once sheet closes on Escape with no warning; one test ("two requests at once cannot both take the last slot") passes without the transaction; admins cannot revoke calendar links; a lost space in `test/dutch.test.ts`, `src/calendar.ts` shares a name with client `calendar.js`, duplicate limiter set-up, untyped answers in `v1.ts`.
+
+### Assumptions and open questions
+
+Defaults taken for six open questions (none scope-changing; no one was asked):
+- Feed address is `/api/calendar/<secret>.ics`, created only on request, https only, secret stored readable; an own password change does not revoke tokens; an admin's token is role-blind.
+- "Own pending suggestions" are pending, not lapsed, where the user is target or suggester. Limits: 5 tokens, 60 requests per minute per token, 30 failures per address; no expiry; revoking deletes the row; the list shows no token fragment. Error bodies and docs stay English; no CORS.
+- Follow-ups for the owner: whether a reset should also end the calendar link, an admin remedy for links, revoke-all, token expiry or rotation reminders.
+
+### Honesty flags
+
+- Restarts 0, degraded stages none, debug attempts 0, ledger caveats none; the test stage ran once and the review one round.
+- Ledger and git agree on the changed files (37 plus 15). Tests: git has 95 declarations in the six new test files and 15 in modified ones, matching 1355 to 1465; the backend summary names two new tests in `test/tokens.test.ts` but the suite grew by one that stage (1446 to 1447). Git is trusted.
+- Ledger and git disagree on the checkout: the build, test and review records say detached HEAD `a86f46d`; `git branch` shows the `implement/` branch checked out in this worktree at the same commit. Nothing is committed or pushed.
+- The test stage loaded `engineering-skills:tdd-guide` after the main authoring pass, so the built-in rubric guided it (`fallback_used` true); its scripts were not run. It found no product defect and changed no source file. Tests that passed first time (docs, CORS, query string) rest on mutation checks, not a red run.
+- Existing tests changed only where tied to the change: schema pins moved to 8 (v7-era tests open `MIGRATIONS.slice(0, 7)`; one `schemaVersion(v7) === SCHEMA_VERSION` assertion became `>= 7`), README pins, `PUBLIC_ROUTES`, service worker names and paths, Dutch scans and keys, a default `stubApi` answer. No `.skip`, `.only` or `.todo`; nothing loosened.
+- Deviations: `npm ci` in the worktree instead of a junction; limiter keys are constants (`BEARER_KEY`, `FEED_KEY`) for the field-code scan; `Principal.tokenId` is set but unread; the `a11y-audit` skill was not invoked (own checks instead). Security and simplify ran inline (no Agent tool). The Request quote has its line breaks collapsed.
+- Two sentences in `docs/API.md` are known to be wrong (404 and shared-address claims, see Review).
+
+### Reproduce
+
+- Invocation: `/implement` with the Request text above as the argument, flags `gate_plan=false`, `stop_before_ship=false`, `claude_md=true`, `specialists=auto`. Skill `implement` 1.0.0.
+- Limits: totalRestarts 6, build 3, debug 3, review 3, test 3, planRounds 3. Models: inherit for analyse, propose, plan, judge, build, specialist, test, debug, review, verify; `sonnet` for docs and git.
+- Audit directory: `.claude/runs/api-tokens-and-ics-calendar-feed` (git-excluded). Base commit `a86f46d3a094a8cae158774fc67a608103fb39f5`.
+<!-- implement:run:api-tokens-and-ics-calendar-feed:end -->
+
 ## /implement run log: km registration, fuel split, notes and reminders
 
 ### Mandatory km registration with drafts, fuel cost split with payment requests, recommended notes and start/end push reminders (km-registration-fuel-split-notifications)

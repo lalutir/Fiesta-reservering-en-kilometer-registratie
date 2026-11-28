@@ -1,9 +1,10 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { HttpError } from '../src/http.ts';
+import { HttpError, logPath, sendReply, type Reply } from '../src/http.ts';
 import { safeSegments } from '../src/static.ts';
 import { PASSWORD, createTestApp, rawRequest, type TestApp, type TestAppOptions } from './helpers.ts';
 
@@ -339,4 +340,64 @@ test('health reports ok with a working database', async (tctx) => {
   const { t } = await withSite(tctx);
   const res = await t.client().get('/api/health');
   assert.equal(res.status, 200);
+});
+
+// ------------------------------------------------------------- the logged path (logPath)
+
+test('logPath: ordinary paths stay readable, the feed secret and any long opaque run are replaced, however the slashes are written', () => {
+  const secret = 'abcDEF0123456789_-abcDEF0123456789_-abc';
+  assert.equal(logPath('/api/reservations'), '/api/reservations');
+  assert.equal(logPath('/api/reservations/12'), '/api/reservations/12');
+  assert.equal(logPath('/views/integrations.js'), '/views/integrations.js');
+  assert.equal(logPath('/api/calendar-feed'), '/api/calendar-feed', 'the link routes of the Account page are not the feed');
+  assert.equal(logPath('/api/v1/status'), '/api/v1/status');
+  // The feed address.
+  assert.equal(logPath(`/api/calendar/${secret}.ics`), '/api/calendar/[redacted]');
+  assert.equal(logPath(`/api//calendar/${secret}.ics`), '/api/calendar/[redacted]');
+  assert.equal(logPath(`/api/calendar//${secret}.ics`), '/api/calendar/[redacted]');
+  assert.equal(logPath(`/api///calendar///${secret}.ics`), '/api/calendar/[redacted]');
+  assert.equal(logPath('/api/calendar/short.ics'), '/api/calendar/[redacted]', 'whatever stands there, short or not');
+  assert.equal(logPath('/API/CALENDAR/whatever'), '/API/CALENDAR/[redacted]', 'the router is case sensitive, but a log line never leaks on a guess');
+  // A secret that ended up somewhere else is caught by its shape.
+  assert.equal(logPath(`/somewhere/${secret}`), '/somewhere/[redacted]');
+  assert.equal(logPath(`/x/pat_${'t'.repeat(43)}/y`), '/x/[redacted]/y');
+  assert.equal(logPath(`/${'a'.repeat(31)}`), `/${'a'.repeat(31)}`, 'a run of 31 is not long enough to be a secret');
+  assert.equal(logPath(`/${'a'.repeat(32)}`), '/[redacted]');
+  // Cut at 200 characters.
+  assert.equal(logPath(`/${'a/'.repeat(300)}`).length, 200);
+});
+
+test('sendReply: a raw reply is sent as it is, a 304 and an empty body send no body, JSON is unchanged', async () => {
+  const replies: Array<{ status: number; headers?: Record<string, string>; body?: unknown; raw?: Buffer }> = [
+    { status: 200, headers: { 'Content-Type': 'text/calendar; charset=utf-8', ETag: '"x"' }, raw: Buffer.from('BEGIN:VCALENDAR\r\n', 'utf8') },
+    { status: 304, headers: { ETag: '"x"' }, raw: Buffer.alloc(0) },
+    { status: 200, headers: { 'Content-Type': 'text/calendar', 'Content-Length': '17' }, raw: Buffer.alloc(0) },
+    { status: 200, body: { ok: true } },
+    { status: 204 },
+  ];
+  let next = 0;
+  const server = http.createServer((_req, res) => sendReply(res, replies[next++] as Reply));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const first = await rawRequest(port, 'GET', '/');
+    assert.equal(first.status, 200);
+    assert.equal(first.text, 'BEGIN:VCALENDAR\r\n');
+    assert.equal(first.headers['content-type'], 'text/calendar; charset=utf-8');
+    assert.equal(first.headers['content-length'], '17', 'the length is set from the bytes');
+    const notModified = await rawRequest(port, 'GET', '/');
+    assert.equal(notModified.status, 304);
+    assert.equal(notModified.text, '');
+    assert.equal(notModified.headers['content-length'], undefined);
+    assert.equal(notModified.headers['etag'], '"x"');
+    const head = await rawRequest(port, 'HEAD', '/');
+    assert.equal(head.status, 200);
+    assert.equal(head.text, '');
+    assert.equal(head.headers['content-length'], '17', 'a handler that sets the length itself keeps it (HEAD)');
+    const json = await rawRequest(port, 'GET', '/');
+    assert.deepEqual(json.body, { ok: true });
+    assert.equal((await rawRequest(port, 'GET', '/')).status, 204);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

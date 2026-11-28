@@ -429,6 +429,52 @@ test('a backup taken at schema v6 restores, and the app then upgrades it to v7 w
   before.close();
 });
 
+test('a backup taken at schema v7 restores, and the app then upgrades it to v8 with the data intact and the token and feed tables empty', (tctx) => {
+  const e = setup(tctx);
+  e.db.close();
+  // What the release before the tokens wrote: a v7 file with a drive and a stored statistics month.
+  const v7File = path.join(e.dir, 'old-v7.db');
+  const old = openDb(v7File, MIGRATIONS.slice(0, 7));
+  addUser(old, 'anna');
+  run(old, "INSERT INTO usage (user_id, start_utc, end_utc, odometer_start, odometer_end, created_by, created_at, updated_at) VALUES (1, '2026-06-14T08:00:00.000Z', '2026-06-14T10:00:00.000Z', 100, 160, 1, 'now', 'now')");
+  run(old, "INSERT INTO stats_months (month, complete, frozen) VALUES ('2025-11', 0, 1)");
+  assert.equal(schemaVersion(old), 7);
+  old.close();
+
+  restoreBackup(e.config, v7File, e.clock.now());
+  const upgraded = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(upgraded), SCHEMA_VERSION);
+  assert.deepEqual(many(upgraded, 'SELECT odometer_start, odometer_end FROM usage'), [{ odometer_start: 100, odometer_end: 160 }]);
+  assert.deepEqual(many(upgraded, 'SELECT month FROM stats_months'), [{ month: '2025-11' }]);
+  assert.deepEqual(many(upgraded, 'SELECT id FROM api_tokens'), [], 'nobody has a token after the upgrade');
+  assert.deepEqual(many(upgraded, 'SELECT user_id FROM calendar_feeds'), []);
+  const copy = path.join(backupDir(e.dir), 'pre-migrate-v7.db');
+  assert.ok(fs.existsSync(copy), 'the upgrade left its own copy');
+  upgraded.close();
+  const before = openDb(copy, MIGRATIONS.slice(0, 7));
+  assert.equal(schemaVersion(before), 7);
+  assert.deepEqual(many(before, "SELECT name FROM sqlite_master WHERE name IN ('api_tokens', 'calendar_feeds')"), []);
+  before.close();
+});
+
+test('a backup holds the token digests and the feed secrets, and a restore brings back the tokens and links it was taken with', (tctx) => {
+  const e = setup(tctx);
+  addUser(e.db, 'anna');
+  run(e.db, "INSERT INTO api_tokens (user_id, name, token_hash, created_at) VALUES (1, 'Home Assistant', ?, '2026-06-15T09:00:00.000Z')", 'a'.repeat(64));
+  run(e.db, "INSERT INTO calendar_feeds (user_id, secret, secret_hash, created_at) VALUES (1, ?, ?, '2026-06-15T09:00:00.000Z')", 'F'.repeat(43), 'b'.repeat(64));
+  const backup = createBackup(e.ctx);
+  run(e.db, 'DELETE FROM api_tokens');
+  run(e.db, 'DELETE FROM calendar_feeds');
+  e.db.close();
+
+  restoreBackup(e.config, backup.path, e.clock.now());
+  const restored = openDb(dbPath(e.dir));
+  assert.equal(schemaVersion(restored), SCHEMA_VERSION);
+  assert.deepEqual(many(restored, 'SELECT name, token_hash FROM api_tokens'), [{ name: 'Home Assistant', token_hash: 'a'.repeat(64) }], 'an old token works again after a restore');
+  assert.deepEqual(many(restored, 'SELECT secret FROM calendar_feeds'), [{ secret: 'F'.repeat(43) }], 'the feed secret is in the backup in plain text');
+  restored.close();
+});
+
 test('a backup of v7 carries the stored monthly totals and the two baseline keys, and a restore brings back exactly those', (tctx) => {
   const e = setup(tctx);
   addUser(e.db, 'anna');

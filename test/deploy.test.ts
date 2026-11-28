@@ -190,6 +190,53 @@ test('Caddyfile: automatic HTTPS for $DOMAIN in front of the app, with HSTS', ()
   assert.doesNotMatch(caddyfile, /auto_https\s+(off|disable_redirects)|tls\s+internal|http:\/\//, 'nothing switches automatic HTTPS off');
 });
 
+test('Caddyfile: the secret of a private calendar feed is redacted in everything Caddy logs, also with repeated slashes', () => {
+  const text = read('Caddyfile');
+  const active = activeLines(text);
+  // The global options block comes first and holds the log filter; the site block follows.
+  const globalAt = active.indexOf('{');
+  const siteAt = active.findIndex((l) => l === '{$DOMAIN} {');
+  assert.ok(globalAt >= 0 && globalAt < siteAt, 'a global options block precedes the site');
+  const options = active.slice(globalAt, siteAt).join('\n');
+  assert.match(options, /^log \{$/m, 'it configures the default logger');
+  assert.match(options, /^format filter \{$/m);
+  assert.match(options, /^wrap json$/m, 'the lines stay JSON');
+  assert.match(options, /^fields \{$/m);
+  // Braces balance (a typo here would only show in the CI job that runs caddy validate).
+  const stripped = active.join('\n').replace(/\{\$DOMAIN\}/g, 'DOMAIN');
+  assert.equal((stripped.match(/\{/g) ?? []).length, (stripped.match(/\}/g) ?? []).length);
+  // The one filter line: field, filter, pattern, replacement. Run the pattern the way Caddy would.
+  const line = active.find((l) => l.startsWith('request>uri regexp '));
+  assert.ok(line, 'the request address is filtered');
+  const [, , pattern, replacement, ...rest] = line.split(/\s+/);
+  assert.deepEqual(rest, [], 'a pattern and a replacement, nothing else');
+  assert.ok(pattern && replacement);
+  assert.doesNotMatch(pattern as string, /[{}]/, 'no braces in the pattern (the Caddyfile lexer would read them)');
+  const re = new RegExp(pattern as string, 'g');
+  const secret = 'abcDEF0123456789_-abcDEF0123456789_-abc';
+  for (const uri of [
+    `/api/calendar/${secret}.ics`,
+    `/api//calendar/${secret}.ics`,
+    `/api/calendar//${secret}.ics`,
+    `/api///calendar///${secret}.ics`,
+    `//api/calendar/${secret}.ics`,
+    `/api/calendar/${secret}.ics?refresh=1&x=${secret}`.replace(`x=${secret}`, 'x=1'),
+  ]) {
+    const out = uri.replace(re, replacement as string);
+    assert.ok(!out.includes(secret), `${uri} is redacted: ${out}`);
+    assert.ok(out.includes('calendar/REDACTED'), out);
+  }
+  assert.equal('/api/calendar/abc.ics?x=1'.replace(re, replacement as string), '/api/calendar/REDACTED?x=1', 'the query string after it is kept');
+  // Nothing else is touched.
+  for (const uri of ['/api/calendar-feed', '/api/reservations?from=2026-01-01', '/', '/views/car.js', '/api/v1/me']) assert.equal(uri.replace(re, replacement as string), uri, uri);
+  assert.match(text, /writes no access log/i, 'the file says why a site-level log directive would need the same filter');
+  // An access token travels in the Authorization header. Caddy logs that header as REDACTED unless the global `servers`
+  // option log_credentials is switched on, so nothing may switch it on.
+  assert.ok(!active.some((l) => /\blog_credentials\b/.test(l)), 'log_credentials would put the Authorization header (the access tokens) into the Caddy logs');
+  // The site writes no access log. If somebody adds one, the secret is in it unless the same filter is added there.
+  assert.ok(!active.slice(siteAt).some((l) => /^log\b/.test(l)), 'a log directive in the site block needs the same request>uri filter (this test must then be extended)');
+});
+
 // ----------------------------------------------------------------- Dockerfile
 
 test('Dockerfile: pinned Node that satisfies engines, two stages, unprivileged runtime user, reproducible install', () => {
@@ -311,6 +358,8 @@ test('no private key or well-known API token is in any file that could be commit
     ['GitHub token', /\bgh[pousr]_[A-Za-z0-9]{36,}\b/],
     ['Slack token', /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/],
     ['Anthropic/OpenAI style key', /\bsk-[A-Za-z0-9_-]{32,}\b/],
+    // A personal access token of this app (src/tokens.ts): pat_ and 43 base64url characters. The docs show placeholders.
+    ['personal access token', /\bpat_[A-Za-z0-9_-]{43}\b/],
   ];
   const files = textFiles(root);
   assert.ok(files.length > 30, `scanned ${files.length} files`);

@@ -1076,9 +1076,10 @@ test('a v6 file with rows upgrades to v7 without losing anything, and leaves one
   const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v6.db');
   assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
 
-  const v7 = openDb(file);
+  // The v7-era tests stop at the seventh migration: the app has moved on (v8), these are about the v6 to v7 step.
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
   assert.equal(schemaVersion(v7), 7);
-  assert.equal(schemaVersion(v7), SCHEMA_VERSION);
+  assert.ok(SCHEMA_VERSION >= 7, 'the app is at v7 or later');
   assert.deepEqual(many(v7, 'SELECT month FROM stats_months'), [], 'the new tables start empty: nothing is back-filled');
   assert.deepEqual(many(v7, 'SELECT month FROM stats_totals'), []);
   assert.deepEqual(many(v7, 'SELECT id, odometer_end FROM usage'), [{ id: drive, odometer_end: 160 }], 'drives are untouched');
@@ -1104,7 +1105,7 @@ test('a v6 file with rows upgrades to v7 without losing anything, and leaves one
 
   // Opening again changes nothing and does not touch the copy.
   const mtime = fs.statSync(copy).mtimeMs;
-  openDb(file).close();
+  openDb(file, MIGRATIONS.slice(0, 7)).close();
   assert.equal(fs.statSync(copy).mtimeMs, mtime);
 });
 
@@ -1116,7 +1117,7 @@ test('migration 7 is purely additive: every table and index of a v6 file is exac
   const before = objects(v6);
   v6.close();
 
-  const v7 = openDb(file);
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
   const after = objects(v7);
   v7.close();
 
@@ -1135,7 +1136,7 @@ test('a v4 file goes straight to v7 in one open, with the one copy of what it wa
   addUser(v4);
   v4.close();
 
-  const db = openDb(file);
+  const db = openDb(file, MIGRATIONS.slice(0, 7));
   assert.equal(schemaVersion(db), 7);
   assert.ok(tablesOf(db).includes('stats_months') && tablesOf(db).includes('stats_totals'));
   assert.ok(tablesOf(db).includes('damage_reports'), 'the v6 step ran first');
@@ -1156,7 +1157,7 @@ test('the real v7 upgrade is all or nothing: a table already in the way leaves t
   v6.exec('CREATE TABLE stats_totals (stranger INTEGER)');
   v6.close();
 
-  assert.throws(() => openDb(file), /table stats_totals already exists/);
+  assert.throws(() => openDb(file, MIGRATIONS.slice(0, 7)), /table stats_totals already exists/);
 
   const after = openDb(file, MIGRATIONS.slice(0, 6));
   assert.equal(schemaVersion(after), 6, 'the version was not bumped');
@@ -1166,7 +1167,7 @@ test('the real v7 upgrade is all or nothing: a table already in the way leaves t
   // The way out is to clear the obstacle: the same upgrade then runs from the top.
   after.exec('DROP TABLE stats_totals');
   after.close();
-  const v7 = openDb(file);
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
   assert.equal(schemaVersion(v7), 7);
   assert.ok(tablesOf(v7).includes('stats_months'));
   assert.equal(columnsOf(v7, 'stats_totals')[0], 'month');
@@ -1233,5 +1234,161 @@ test('the statistics tables hold numbers only: no time of an event, no note, des
     ['user_id'],
     'user_id is the only id',
   );
+  db.close();
+});
+
+// ------------------------------------------ schema v8 (personal access tokens and the private calendar feed)
+
+const TOKEN_HASH = 'a'.repeat(64);
+const SECRET = 'S'.repeat(43);
+
+test('a v7 file with rows upgrades to v8 without losing anything, and leaves one pre-migrate-v7 copy that has neither new table', (tctx) => {
+  const file = tempFile(tctx);
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
+  assert.equal(schemaVersion(v7), 7);
+  const anna = addUser(v7, 'anna');
+  const drive = addUsage(v7, anna);
+  const reservation = addReservation(v7, anna);
+  run(v7, "INSERT INTO stats_months (month, complete, frozen) VALUES ('2026-01', 1, 1)");
+  v7.close();
+
+  const copy = path.join(path.dirname(file), 'backups', 'pre-migrate-v7.db');
+  assert.equal(fs.existsSync(copy), false, 'opening a database at its own version writes no copy');
+
+  const v8 = openDb(file);
+  assert.equal(schemaVersion(v8), 8);
+  assert.equal(schemaVersion(v8), SCHEMA_VERSION);
+  assert.deepEqual(many(v8, 'SELECT id FROM api_tokens'), [], 'the new tables start empty: nobody has a token or a feed yet');
+  assert.deepEqual(many(v8, 'SELECT user_id FROM calendar_feeds'), []);
+  assert.deepEqual(many(v8, 'SELECT id FROM usage'), [{ id: drive }], 'drives are untouched');
+  assert.deepEqual(many(v8, 'SELECT id FROM reservations'), [{ id: reservation }]);
+  assert.deepEqual(many(v8, 'SELECT month FROM stats_months'), [{ month: '2026-01' }]);
+  v8.close();
+
+  assert.ok(fs.existsSync(copy), 'backups/pre-migrate-v7.db was written');
+  const old = openDb(copy, MIGRATIONS.slice(0, 7));
+  assert.equal(schemaVersion(old), 7);
+  assert.ok(!tablesOf(old).includes('api_tokens') && !tablesOf(old).includes('calendar_feeds'));
+  assert.equal(many(old, 'SELECT id FROM usage').length, 1);
+  old.close();
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(copy)).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v7.db'],
+    'no temporary file is left behind',
+  );
+
+  const mtime = fs.statSync(copy).mtimeMs;
+  openDb(file).close();
+  assert.equal(fs.statSync(copy).mtimeMs, mtime, 'opening again does not touch the copy');
+});
+
+test('migration 8 is purely additive: every table and index of a v7 file is exactly as it was, and the only new objects are the two token and feed tables and one index', (tctx) => {
+  const file = tempFile(tctx);
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
+  const objects = (db: Db): Array<{ type: string; name: string; tbl_name: string; sql: string | null }> =>
+    many(db, "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name");
+  const before = objects(v7);
+  v7.close();
+
+  const v8 = openDb(file);
+  const after = objects(v8);
+  v8.close();
+
+  for (const object of before) {
+    assert.deepEqual(after.find((o) => o.type === object.type && o.name === object.name), object, `${object.type} ${object.name} is untouched (same definition, nothing altered or rebuilt)`);
+  }
+  const known = new Set(before.map((o) => `${o.type}:${o.name}`));
+  const added = after.filter((o) => !known.has(`${o.type}:${o.name}`)).map((o) => `${o.type}:${o.name} on ${o.tbl_name}`);
+  assert.deepEqual(added.sort(), ['index:api_tokens_user on api_tokens', 'table:api_tokens on api_tokens', 'table:calendar_feeds on calendar_feeds']);
+});
+
+test('a v4 file goes straight to v8 in one open, with the one copy of what it was', (tctx) => {
+  const file = tempFile(tctx);
+  const v4 = openDb(file, MIGRATIONS.slice(0, 4));
+  addUser(v4);
+  v4.close();
+
+  const db = openDb(file);
+  assert.equal(schemaVersion(db), 8);
+  assert.ok(tablesOf(db).includes('api_tokens') && tablesOf(db).includes('calendar_feeds'));
+  assert.ok(tablesOf(db).includes('stats_months'), 'the v7 step ran first');
+  db.close();
+  assert.deepEqual(
+    fs.readdirSync(path.join(path.dirname(file), 'backups')).filter((name) => !name.endsWith('-wal') && !name.endsWith('-shm')),
+    ['pre-migrate-v4.db'],
+    'one copy, of the version the file was at, before the first step',
+  );
+});
+
+test('the real v8 upgrade is all or nothing: a table already in the way leaves the v7 file as it was, with neither new table, and a retry works', (tctx) => {
+  const file = tempFile(tctx);
+  const v7 = openDb(file, MIGRATIONS.slice(0, 7));
+  const anna = addUser(v7);
+  const drive = addUsage(v7, anna);
+  // The second table of the step is the one in the way: the first one was already created when it fails.
+  v7.exec('CREATE TABLE calendar_feeds (stranger INTEGER)');
+  v7.close();
+
+  assert.throws(() => openDb(file), /table calendar_feeds already exists/);
+
+  const after = openDb(file, MIGRATIONS.slice(0, 7));
+  assert.equal(schemaVersion(after), 7, 'the version was not bumped');
+  assert.ok(!tablesOf(after).includes('api_tokens'), 'the first CREATE TABLE was rolled back with the rest of the step');
+  assert.deepEqual(columnsOf(after, 'calendar_feeds'), ['stranger'], 'the stranger table is untouched');
+  assert.deepEqual(many(after, 'SELECT id, user_id FROM usage'), [{ id: drive, user_id: anna }], 'the data is untouched');
+  after.exec('DROP TABLE calendar_feeds');
+  after.close();
+  const v8 = openDb(file);
+  assert.equal(schemaVersion(v8), 8);
+  assert.ok(tablesOf(v8).includes('api_tokens'));
+  assert.equal(columnsOf(v8, 'calendar_feeds')[0], 'user_id');
+  v8.close();
+});
+
+test('api_tokens: a name of 1 to 60 characters, a 64-character digest that is unique, UTC times, deleted with the person', () => {
+  const db = memoryDb();
+  const anna = addUser(db);
+  const insert = (over: { name?: string; hash?: string; created?: string; used?: string | null; user?: number } = {}): number =>
+    run(
+      db,
+      'INSERT INTO api_tokens (user_id, name, token_hash, created_at, last_used_at) VALUES (?, ?, ?, ?, ?)',
+      over.user ?? anna,
+      over.name ?? 'Home Assistant',
+      over.hash ?? TOKEN_HASH,
+      over.created ?? GOOD,
+      over.used ?? null,
+    ).lastInsertRowid;
+  assert.ok(insert() > 0);
+  assert.throws(() => insert(), (err: unknown) => isUniqueViolation(err), 'one row per digest');
+  assert.throws(() => insert({ hash: 'b'.repeat(63) }), /CHECK constraint failed/, 'a digest is 64 characters long (hex by construction in tokens.ts; the table checks the length only)');
+  assert.throws(() => insert({ hash: 'b'.repeat(65) }), /CHECK constraint failed/);
+  assert.throws(() => insert({ hash: 'c'.repeat(64), name: '' }), /CHECK constraint failed/, 'a name is at least one character');
+  assert.throws(() => insert({ hash: 'c'.repeat(64), name: '   ' }), /CHECK constraint failed/, 'and not only spaces');
+  assert.throws(() => insert({ hash: 'c'.repeat(64), name: 'x'.repeat(61) }), /CHECK constraint failed/, 'and at most 60');
+  assert.ok(insert({ hash: 'd'.repeat(64), name: 'x'.repeat(60) }) > 0);
+  assert.throws(() => insert({ hash: 'e'.repeat(64), created: '2026-06-15 10:00:00' }), /CHECK constraint failed/, 'the creation time has the UTC shape');
+  assert.throws(() => insert({ hash: 'e'.repeat(64), used: '2026-06-15 10:00:00' }), /CHECK constraint failed/, 'the last-used time has the UTC shape');
+  assert.ok(insert({ hash: 'f'.repeat(64), used: LATER }) > 0);
+  assert.throws(() => insert({ hash: '1'.repeat(64), user: 999 }), /FOREIGN KEY constraint failed/, 'a token belongs to a person');
+  run(db, 'DELETE FROM users WHERE id = ?', anna);
+  assert.deepEqual(many(db, 'SELECT id FROM api_tokens'), [], 'the tokens go with the person');
+  db.close();
+});
+
+test('calendar_feeds: one row per person, a 43-character secret, a unique digest, deleted with the person', () => {
+  const db = memoryDb();
+  const anna = addUser(db, 'anna');
+  const ben = addUser(db, 'ben');
+  const insert = (user: number, secret = SECRET, hash = TOKEN_HASH, created = GOOD): number =>
+    run(db, 'INSERT INTO calendar_feeds (user_id, secret, secret_hash, created_at) VALUES (?, ?, ?, ?)', user, secret, hash, created).changes;
+  assert.equal(insert(anna), 1);
+  assert.throws(() => insert(anna, 'T'.repeat(43), 'b'.repeat(64)), (err: unknown) => isUniqueViolation(err), 'one feed per person');
+  assert.throws(() => insert(ben), (err: unknown) => isUniqueViolation(err), 'a digest belongs to one feed');
+  assert.throws(() => insert(ben, 'short', 'c'.repeat(64)), /CHECK constraint failed/, 'the secret is 43 characters');
+  assert.throws(() => insert(ben, SECRET, 'c'.repeat(10)), /CHECK constraint failed/);
+  assert.throws(() => insert(ben, 'U'.repeat(43), 'c'.repeat(64), '2026-06-15'), /CHECK constraint failed/);
+  assert.throws(() => insert(999, 'U'.repeat(43), 'c'.repeat(64)), /FOREIGN KEY constraint failed/);
+  run(db, 'DELETE FROM users WHERE id = ?', anna);
+  assert.deepEqual(many(db, 'SELECT user_id FROM calendar_feeds'), []);
   db.close();
 });

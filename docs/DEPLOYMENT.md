@@ -251,7 +251,11 @@ Three things to know:
 1. **Retention caveat.** The app deletes data older than 6 months every day, but a
    backup made earlier still contains it. Old data therefore lingers in backups
    for up to 14 days. Lower `BACKUP_KEEP_DAYS` if that matters.
-2. **Backups hold password hashes**, the push signing key and every phone's push subscription. Treat copies like secrets.
+2. **Backups hold password hashes**, the push signing key, every phone's push subscription, the SHA-256 digests of
+   the access tokens (not the tokens, which nobody can read back) and **the calendar feed secrets in plain text**
+   (a feed address is its own secret, so the database must hold it to show it again). Treat copies like passwords.
+   A restore brings back the tokens and links the backup was taken with, also ones that were revoked or replaced
+   since (section 18).
 3. **Upgrade copies.** When an update changes the database layout, the app first
    writes `pre-migrate-v<old version>.db` into the same folder. Those are not
    rotated or deleted by themselves (section 18).
@@ -392,6 +396,10 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 - [ ] After an update from the version with the Car tab: `docker compose exec app ls -l /data/backups`
       lists `pre-migrate-v6.db`. Drives > **Statistieken** opens and draws the charts; the admin Retention tab
       shows how many monthly totals are stored (section 18).
+- [ ] After an update from the version with the statistics: `docker compose exec app ls -l /data/backups`
+      lists `pre-migrate-v7.db`. On the Account page, *Toegangstokens* makes a token that works on `/api/v1/status`
+      until it is revoked, and *Agendalink maken* gives an `https://` calendar address that *Nieuwe link maken*
+      replaces at once (section 18).
 - [ ] **Login speed:** run this (an unknown user still pays for one password hash).
       If it takes clearly more than 0.5 s, set `SCRYPT_P=1` (or 2) in `.env` and
       run `docker compose up -d`; existing passwords keep working.
@@ -416,6 +424,7 @@ Treat a new Caddy minor the same way (edit the `image:` line).
 | One person never gets the notifications for what others change, while the test notification works | They are only sent to **active** people with a device signed up, and never to the person who made the change. Check that the person is not deactivated, that they enabled reminders on that device, and `docker compose logs app | grep notify`: `notify.sent` lines say how many devices were reached, `notify.error` lines say that something failed (by the name of the error only). |
 | Old data is not deleted and `docker compose logs app` shows `maintenance.error` with `"step":"purge"` | The purge could not store a monthly total, so it deleted nothing (it is one transaction) and retries every 30 minutes; the daily backup is still written. The `message` says why (a full disk is the usual cause). Fix that and it recovers by itself; restoring `pre-migrate-v6.db` is the way back (section 18). |
 | The Account page says this browser's push service is not supported | Only Google (Chrome, Edge, Android), Apple, Mozilla and Microsoft push services are used (section 18). |
+| A calendar app says the address does not work, or the token API answers 401 or 404 | The calendar address was replaced or turned off (*Nieuwe link maken* kills the old one at once), the person was deactivated, or the address is not the `https://` one. A token answers 401 when it was revoked, its owner was deactivated or an admin reset their password. Both answer 429 after 30 failed attempts from one address in 15 minutes; that clears by itself (section 18). |
 | Times look an hour off | `HOUSEHOLD_TZ` is wrong in `.env`; times are shown in that zone whatever the phone is set to. |
 | Disk is filling up | `docker system df` shows where. Container logs are capped at 3 x 10 MB each; old images and build cache are the usual cause: `docker image prune -f` and `docker builder prune -f`. Do not prune volumes (`docker volume prune`, `docker system prune --volumes`): with the stack down they can remove the database volume. |
 
@@ -1046,10 +1055,88 @@ smallest droplet. A test times a household of about 3,000 drives, 150 fill-ups, 
 about 0.12 s to work out all months and about 0.10 s for the request on a development machine (the budget in the test
 is 1.5 s), and the purge works the months out twice.
 
+### Access tokens and the calendar feed
+
+**Updating from the version with the statistics (schema v7).** The first start of this version upgrades the
+database once more, to schema v8: two new tables (`api_tokens` and `calendar_feeds`), one index, and nothing else.
+No existing table, row or index is changed. The same rules apply as for the earlier upgrades, with another copy,
+`/data/backups/pre-migrate-v7.db`:
+
+- Take a backup first (section 12). Right before the upgrade the app writes a full copy of the database as it was
+  to `/data/backups/pre-migrate-v7.db`, once, not rotated and not deleted by the daily clean-up. It holds password
+  hashes like every backup, so treat it as a secret and delete it
+  (`docker compose exec app rm /data/backups/pre-migrate-v7.db`) once you are happy with the new version. If it
+  cannot be written (disk full) the app refuses to start and the database is left untouched.
+- **Going back:** stop the app, restore that file with the restore command from section 11, and start the
+  previous version. That loses everything written after the upgrade, **including every access token and calendar
+  link**, and an older app refuses to open a v8 database. If you go back and later try the update again, delete
+  `pre-migrate-v7.db` first: the app never overwrites an existing copy.
+- If you come from an older version than v7, the app upgrades straight to v8 in one start and writes only the copy
+  of the version it found.
+- The phones pick up the new Account cards by themselves: the app files are cached under a new name
+  (`car-static-v10`), so the old copy is dropped the next time the app is opened with a connection.
+
+**What it does** (the contract is in [API.md](API.md)).
+
+- **Access tokens** (Account page, card *Toegangstokens*). A person makes up to 5 tokens for their own tools (a
+  Google script, a home-automation system). A token is shown once; the database keeps only its SHA-256 digest. It
+  works on four read-only `GET` routes under `/api/v1/` (`status`, `reservations`, `stats`, `me`) with
+  `Authorization: Bearer <token>`, acts as its owner and always as a member (also for an admin), and shows nothing the
+  app does not show that person. A session cookie does not work on `/api/v1/` and a token works nowhere else. An
+  admin sees every token (never its secret) in the admin page, Users tab, and can revoke any. A token ends when its
+  owner is deactivated, when an admin resets their password (also with the `reset-password` command), and when it
+  is revoked; the owner changing their own password does not end it.
+- **The calendar feed** (Account page, card *Agenda-abonnement*). Each person can make one private `.ics` address
+  to subscribe a calendar app to: all confirmed reservations of the 6-month window, and their own waiting
+  suggestions as tentative. No notes. Making a new link kills the old one at once; turning it off or deactivating the
+  person deletes it.
+- **Limits, in memory** (they reset when the app restarts, like the login limiter): a token may make 60 requests a
+  minute; a client address may fail 30 times in 15 minutes against the token API, and 30 times against the feed
+  (counted separately from each other and from the login, so a stale calendar address that something keeps
+  polling cannot lock a token or a login out). Failures are counted per IPv6 /64, or per IPv4 address, as behind the
+  proxy the app sees it (section 6: the DNS record must be **DNS only**).
+- **Logs.** The app logs ids and client addresses, never a token, a digest, a token name or the feed secret; the
+  request path is logged as `/api/calendar/[redacted]`. Watch for `token.auth_failed`, `token.rate_limited`,
+  `calendar.miss` and `calendar.rate_limited` lines (a client address, or for one busy token its id). A `token.last_used_failed` line (a token id)
+  means the "last used" time of a token could not be written, for example while another process held the database
+  locked; the request itself was answered normally. `user.updated` and `user.password_reset` lines carry
+  `tokensRevoked`, the number of access tokens that a deactivation or a password reset ended.
+- **Caddy.** The Caddyfile has a global log filter that replaces the secret part of `/api/calendar/<secret>.ics` in
+  every request address Caddy logs (also `/api//calendar//...`, which the app accepts too). **Caddy writes no
+  access log today** (the site block has no `log` directive); its default logger writes errors, for example when
+  the app is down, and those lines name the request address. If you ever add a `log` directive to the site block,
+  give it the same `request>uri` filter, or the secret will be in the access log. An access token travels in the
+  `Authorization` header, which Caddy logs as `REDACTED` unless the global `servers` option `log_credentials` is
+  switched on; the Caddyfile does not switch it on and a test fails if it ever does, so do not add it.
+  `caddy validate` runs in the CI Docker job and checks the syntax; nobody has watched a running Caddy write a
+  redacted line.
+- **Backups.** A backup now holds the token digests and **the feed secrets in plain text** (a feed address is its own
+  secret, so the app must keep it readable to show it again). Treat every backup, every `pre-migrate-*.db` copy and
+  every off-site copy like a password file. **A restore brings back the tokens and links the backup was taken with**,
+  including ones revoked or replaced since: after restoring an old backup, revoke tokens in the admin Users tab and
+  have people press *Nieuwe link maken* wherever a token or link should no longer work.
+- **Use `https://` addresses only** for the feed. A `webcal://` address is fetched over plain `http://` first by many
+  clients, which would send the secret before the redirect.
+
+**Checklist after the update:** [ ] `docker compose exec app ls -l /data/backups` lists `pre-migrate-v7.db`;
+[ ] Account > *Toegangstokens*: make a token, call
+`curl -sS -H "Authorization: Bearer $TOKEN" https://fiesta-reserveringen.lalutir.com/api/v1/status` and see JSON;
+revoke the token and the same call answers `401`; [ ] Account > *Agendalink maken* gives an `https://` address
+that returns a calendar file when opened; *Nieuwe link maken* makes the first address answer `404`;
+[ ] `docker compose logs app | grep calendar` shows only `[redacted]` paths, never a secret; [ ] if you use Docker
+logs of Caddy: `docker compose logs caddy` never shows a `/api/calendar/` address with a 43-character tail.
+
+**Not verified:** real calendar apps (how often Google, Apple and Outlook refresh, and that they accept the feed),
+Home Assistant and Google Apps Script (the examples in [API.md](API.md) were never run), real phones and a screen
+reader on the new cards, a running Caddy writing redacted lines, Docker and the live database (the upgrade is tested
+on synthetic v7 files and a v7 backup).
+
 ### Switching things off
 
 - Reminders and every other push (a new fill-up, and everything somebody else does on your behalf):
   `PUSH_ENABLED=false` in `.env`, then `docker compose up -d`.
 - Tikkie: empty the three variables.
+- Access tokens and calendar links have no global switch: revoke the tokens in the admin Users tab and have each
+  person press *Link uitzetten* (a follow-up would be one setting that switches both off).
 - Nothing else needs a rollback; fuel costs, drafts, traffic tickets, the kilometre check and the Car tab are simply not used
   (the check has no switch: it shows findings and changes nothing).

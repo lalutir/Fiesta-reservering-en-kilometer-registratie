@@ -9,7 +9,7 @@
 // that DESIGN.md names and that no size can express are written out in EXEMPT_CLASSES: if a class is renamed the cells or the
 // table wrapper are measured like everything else and this fails loudly, which is the moment to update DESIGN.md and this list.
 // A failing check is a rule to fix in public/style.css, never a reason to loosen this list.
-import { expect, expectNoHorizontalScroll, test } from './fixtures.ts';
+import { NAV_NAME, expect, expectNoHorizontalScroll, test } from './fixtures.ts';
 import { openScreen, signInAsAdmin } from './session.ts';
 import type { Page } from '@playwright/test';
 
@@ -144,4 +144,70 @@ test('a long word in a ticket wraps inside its card instead of widening the page
   await page.getByRole('dialog').getByRole('button', { name: 'Verwijderen', exact: true }).click();
   await expect(page.getByText('Verkeersboete verwijderd.')).toBeVisible();
   await expect(page.getByText(word)).toHaveCount(0);
+});
+
+test('the Account page and the admin Users tab keep 44 px targets with a calendar link, a token in the list and every sheet that goes with them', async ({ page }, testInfo) => {
+  // Short on purpose: a value longer than its field scrolls inside it, which the "cut off" measurement would report.
+  const name = `E2E 44px ${testInfo.project.name.slice(-3)}`;
+  await signInAsAdmin(page);
+  await openScreen(page, '#/account', /^Account/);
+
+  await test.step('a calendar link is on the page', async () => {
+    await page.getByRole('button', { name: 'Agendalink maken' }).click();
+    await expect(page.getByLabel('Jouw agendalink')).toBeVisible();
+    await page.waitForLoadState('networkidle');
+    expectFits(await measure(page), 'account with a calendar link');
+    await expectNoHorizontalScroll(page, 'account with a calendar link');
+  });
+
+  await test.step('the sheet that makes a token, and the sheet that shows it once', async () => {
+    await page.getByRole('button', { name: 'Token maken' }).click();
+    const form = page.getByRole('dialog', { name: 'Nieuw toegangstoken' });
+    await expect(form).toBeVisible();
+    await form.getByLabel('Naam van het token').fill(name);
+    expectFits(await measure(page), 'the make-a-token sheet');
+    await expectNoHorizontalScroll(page, 'the make-a-token sheet');
+    await form.getByRole('button', { name: 'Token maken' }).click();
+    const shown = page.getByRole('dialog', { name: 'Je nieuwe token' });
+    await expect(shown).toBeVisible();
+    expectFits(await measure(page), 'the sheet that shows the token');
+    await expectNoHorizontalScroll(page, 'the sheet that shows the token');
+    await shown.getByRole('button', { name: 'Klaar' }).click();
+    await expect(shown).toBeHidden();
+  });
+
+  await test.step('the token in the list, and the question before it is revoked', async () => {
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    expectFits(await measure(page), 'account with a token in the list');
+    await expectNoHorizontalScroll(page, 'account with a token in the list');
+    await page.getByRole('button', { name: `Intrekken: token ${name}` }).click();
+    const sure = page.getByRole('dialog');
+    await expect(sure).toBeVisible();
+    expectFits(await measure(page), 'the question before a token is revoked');
+    await expectNoHorizontalScroll(page, 'the question before a token is revoked');
+    await sure.getByRole('button', { name: 'Annuleren' }).click();
+    await expect(sure).toBeHidden();
+  });
+
+  await test.step('the admin Users tab lists the token among every token of the household', async () => {
+    await page.goto('/admin/');
+    await expect(page.getByRole('heading', { name: 'Admin', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Gebruikers', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Toegangstokens', exact: true })).toBeVisible();
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.waitForLoadState('networkidle');
+    expectFits(await measure(page), 'admin Users tab with a token');
+    await expectNoHorizontalScroll(page, 'admin Users tab with a token');
+  });
+
+  // Leave the database as it was found: the other specs share it. Back to the Account page of the member app.
+  await page.goto('/');
+  await expect(page.getByRole('navigation', { name: NAV_NAME })).toBeVisible();
+  await openScreen(page, '#/account', /^Account/);
+  await page.getByRole('button', { name: `Intrekken: token ${name}` }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Intrekken', exact: true }).click();
+  await expect(page.getByText(name, { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Link uitzetten' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Link uitzetten', exact: true }).click();
+  await expect(page.getByText('Je hebt nog geen agendalink.', { exact: true })).toBeVisible();
 });

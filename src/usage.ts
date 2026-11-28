@@ -2,7 +2,7 @@ import { isUniqueViolation, many, one, run, tx, type Db, type KmFor, type UsageR
 import { requestedPeriods } from './fuel.ts';
 import { HttpError, idParam, me, noContent, ok, type Ctx, type Principal, type Router } from './http.ts';
 import type { Notifier, UsageSnap } from './notify.ts';
-import { listConfirmed, listUnregistered } from './reservations.ts';
+import { listConfirmed, listUnregistered, type ReservationDto } from './reservations.ts';
 import { Fields, MAX_ODOMETER, ValidationError, assertInsideWindow, failIfAny, queryRange, queryUserId, windowBounds } from './validate.ts';
 
 /** A usage record may end (a draft may start) at most this far in the future (clock skew, "just got back"). */
@@ -291,6 +291,94 @@ function readDays(query: URLSearchParams): number {
   return n;
 }
 
+export interface UsageSummaryPerson {
+  userId: number;
+  userName: string;
+  trips: number;
+  tripsWithKm: number;
+  km: number;
+}
+
+export interface UsageSummary {
+  items: UsageSummaryPerson[];
+  together: { trips: number; tripsWithKm: number; km: number };
+  totalTrips: number;
+  totalKm: number;
+  window: { from: string; to: string };
+}
+
+/**
+ * Kilometres per person in a window, as GET /api/usage/summary answers. Only finished drives count; a draft is a
+ * drive that has not ended yet. Trips follow the driver (every drive is one trip, counted once, so totalTrips
+ * includes the together drives); kilometres follow whose they are: the driver's own, another person's, or the
+ * shared "together" pool, which is reported on its own. totalKm is items plus together.
+ */
+export function usageSummary(ctx: Ctx, range: { from: string; to: string }): UsageSummary {
+  const { db } = ctx;
+  const rows = many<{ user_id: number; km_for: KmFor; km_user_id: number | null; trips: number; trips_with_km: number; km: number }>(
+    db,
+    `SELECT g.user_id, g.km_for, g.km_user_id, COUNT(*) AS trips,
+            SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL THEN 1 ELSE 0 END) AS trips_with_km,
+            COALESCE(SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL
+                              THEN g.odometer_end - g.odometer_start END), 0) AS km
+       FROM usage g
+      WHERE g.status = 'completed' AND g.end_utc >= ? AND g.start_utc <= ?
+      GROUP BY g.user_id, g.km_for, g.km_user_id`,
+    range.from,
+    range.to,
+  );
+  const names = new Map(many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users').map((u) => [u.id, u.display_name]));
+  const people = new Map<number, UsageSummaryPerson>();
+  const person = (userId: number): UsageSummaryPerson => {
+    let entry = people.get(userId);
+    if (!entry) people.set(userId, (entry = { userId, userName: names.get(userId) ?? '?', trips: 0, tripsWithKm: 0, km: 0 }));
+    return entry;
+  };
+  const together = { trips: 0, tripsWithKm: 0, km: 0 };
+  for (const r of rows) {
+    const driver = person(r.user_id);
+    driver.trips += r.trips;
+    driver.tripsWithKm += r.trips_with_km;
+    if (r.km_for === 'together') {
+      together.trips += r.trips;
+      together.tripsWithKm += r.trips_with_km;
+      together.km += r.km;
+    } else {
+      person(r.km_for === 'person' ? (r.km_user_id as number) : r.user_id).km += r.km;
+    }
+  }
+  const items = [...people.values()].sort((a, b) => b.km - a.km || b.trips - a.trips || (a.userName < b.userName ? -1 : a.userName > b.userName ? 1 : 0));
+  return {
+    items,
+    together,
+    totalTrips: items.reduce((n, r) => n + r.trips, 0),
+    totalKm: items.reduce((n, r) => n + r.km, 0) + together.km,
+    window: range,
+  };
+}
+
+/**
+ * The kilometres one person still has to register: their ended reservations without a completed registration
+ * (looked at over the last `days` days, never beyond the window) and their open drafts. The count is the same
+ * number GET /api/usage/pending reports, which is built from this.
+ */
+export function pendingKmFor(
+  ctx: Ctx,
+  actor: Principal,
+  userId: number,
+  days: number = PENDING_DEFAULT_DAYS,
+  now: Date = ctx.clock.now(),
+): { reservations: ReservationDto[]; drafts: UsageDto[]; count: number } {
+  const nowIso = now.toISOString();
+  const windowStart = windowBounds(now, ctx.config.tz, ctx.config.windowMonths).from;
+  const lookBack = new Date(now.getTime() - days * DAY_MS).toISOString();
+  const from = lookBack > windowStart ? lookBack : windowStart;
+  const reservations = listUnregistered(ctx.db, actor, nowIso, userId, from);
+  const drafts = many<UsageJoin>(ctx.db, `${SELECT} WHERE g.user_id = ? AND g.status = 'draft' ORDER BY g.start_utc, g.id`, userId).map((d) => toDto(d, actor, false)); // a draft is not billed to anyone yet
+  // A reservation that already has a draft is the same piece of work as that draft.
+  return { reservations, drafts, count: drafts.length + reservations.filter((r) => r.kmState !== 'draft').length };
+}
+
 export function registerUsageRoutes(router: Router, ctx: Ctx, notifier?: Notifier): void {
   const { db, config } = ctx;
 
@@ -314,47 +402,7 @@ export function registerUsageRoutes(router: Router, ctx: Ctx, notifier?: Notifie
   // together drives); kilometres follow whose they are: the driver's own, another person's, or the
   // shared "together" pool, which is reported on its own. totalKm is items plus together.
   router.add('GET', '/api/usage/summary', 'user', (req) => {
-    const range = queryRange(req.query, ctx.clock.now(), config.tz, config.windowMonths);
-    const rows = many<{ user_id: number; km_for: KmFor; km_user_id: number | null; trips: number; trips_with_km: number; km: number }>(
-      db,
-      `SELECT g.user_id, g.km_for, g.km_user_id, COUNT(*) AS trips,
-              SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL THEN 1 ELSE 0 END) AS trips_with_km,
-              COALESCE(SUM(CASE WHEN g.odometer_start IS NOT NULL AND g.odometer_end IS NOT NULL
-                                THEN g.odometer_end - g.odometer_start END), 0) AS km
-         FROM usage g
-        WHERE g.status = 'completed' AND g.end_utc >= ? AND g.start_utc <= ?
-        GROUP BY g.user_id, g.km_for, g.km_user_id`,
-      range.from,
-      range.to,
-    );
-    const names = new Map(many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users').map((u) => [u.id, u.display_name]));
-    const people = new Map<number, { userId: number; userName: string; trips: number; tripsWithKm: number; km: number }>();
-    const person = (userId: number) => {
-      let entry = people.get(userId);
-      if (!entry) people.set(userId, (entry = { userId, userName: names.get(userId) ?? '?', trips: 0, tripsWithKm: 0, km: 0 }));
-      return entry;
-    };
-    const together = { trips: 0, tripsWithKm: 0, km: 0 };
-    for (const r of rows) {
-      const driver = person(r.user_id);
-      driver.trips += r.trips;
-      driver.tripsWithKm += r.trips_with_km;
-      if (r.km_for === 'together') {
-        together.trips += r.trips;
-        together.tripsWithKm += r.trips_with_km;
-        together.km += r.km;
-      } else {
-        person(r.km_for === 'person' ? (r.km_user_id as number) : r.user_id).km += r.km;
-      }
-    }
-    const items = [...people.values()].sort((a, b) => b.km - a.km || b.trips - a.trips || (a.userName < b.userName ? -1 : a.userName > b.userName ? 1 : 0));
-    return ok({
-      items,
-      together,
-      totalTrips: items.reduce((n, r) => n + r.trips, 0),
-      totalKm: items.reduce((n, r) => n + r.km, 0) + together.km,
-      window: range,
-    });
+    return ok(usageSummary(ctx, queryRange(req.query, ctx.clock.now(), config.tz, config.windowMonths)));
   });
 
   // The kilometres still to register: unfinished drafts, and ended reservations with no completed
@@ -362,7 +410,6 @@ export function registerUsageRoutes(router: Router, ctx: Ctx, notifier?: Notifie
   router.add('GET', '/api/usage/pending', 'user', (req) => {
     const actor = me(req);
     const now = ctx.clock.now();
-    const nowIso = now.toISOString();
     const days = readDays(req.query);
     const all = ['1', 'true'].includes(req.query.get('all') ?? '');
     const asked = queryUserId(req.query);
@@ -370,18 +417,13 @@ export function registerUsageRoutes(router: Router, ctx: Ctx, notifier?: Notifie
     if (!isAdmin && (all || (asked !== undefined && asked !== actor.id))) {
       throw new HttpError(403, 'forbidden', 'You can only see your own kilometres to register');
     }
-    const windowStart = windowBounds(now, config.tz, config.windowMonths).from;
-    const lookBack = new Date(now.getTime() - days * DAY_MS).toISOString();
-    const from = lookBack > windowStart ? lookBack : windowStart;
-
     const targets = all
       ? many<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users WHERE active = 1 ORDER BY display_name COLLATE NOCASE, id')
       : [one<{ id: number; display_name: string }>(db, 'SELECT id, display_name FROM users WHERE id = ?', asked ?? actor.id)];
     if (targets.some((t) => t === undefined)) throw new ValidationError({ userId: 'unknown_user' });
 
     const entries = (targets as Array<{ id: number; display_name: string }>).map((u) => {
-      const reservations = listUnregistered(db, actor, nowIso, u.id, from);
-      const drafts = many<UsageJoin>(db, `${SELECT} WHERE g.user_id = ? AND g.status = 'draft' ORDER BY g.start_utc, g.id`, u.id).map((d) => toDto(d, actor, false)); // a draft is not billed to anyone yet
+      const { reservations, drafts } = pendingKmFor(ctx, actor, u.id, days, now);
       return { userId: u.id, userName: u.display_name, reservations, drafts };
     });
     // A reservation that already has a draft is the same piece of work as that draft.

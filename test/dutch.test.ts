@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { S } from '../public/strings.js';
 import { fit } from '../src/notify.ts';
 import * as T from '../src/notify-texts.ts';
+import * as CAL from '../src/calendar-texts.ts';
 import { requestMessage, tikkieProvider, type PaymentInput } from '../src/payments.ts';
 import { REPEAT_AFTER_END_MS, START_LEAD_MS } from '../src/reminders.ts';
 import { formatLocal } from '../shared/time.js';
@@ -260,7 +261,7 @@ test('the text literals of the server texts (push messages, payment request) are
   // An exact list of literals that are code and not words for a person.
   const allowed = new Set(['Bearer ', 'API-Key', 'Content-Type']);
   const found: string[] = [];
-  for (const file of ['src/notify-texts.ts', 'src/payments.ts']) {
+  for (const file of ['src/notify-texts.ts', 'src/payments.ts', 'src/calendar-texts.ts']) {
     for (const l of literals(read(file), file)) {
       if (l.isKey || !isTextBearing(l.text) || allowed.has(l.text)) continue;
       for (const p of problems([{ where: `${file}:${l.line}`, text: l.text }])) found.push(p);
@@ -269,9 +270,19 @@ test('the text literals of the server texts (push messages, payment request) are
   assert.deepEqual(found, []);
 });
 
+test('the calendar feed texts (src/calendar-texts.ts) are Dutch, whatever the name is', () => {
+  const texts = [CAL.CALENDAR_NAME, CAL.confirmedSummary('Ben'), CAL.tentativeSummary('Ben'), CAL.confirmedSummary(WHO_LONG), CAL.tentativeSummary(WHO_LONG)];
+  assert.deepEqual(problems(texts.map((text, i) => ({ where: `calendar text #${i}`, text }))), []);
+  assert.equal(CAL.confirmedSummary('Ben'), 'Auto: Ben');
+  assert.equal(CAL.tentativeSummary('Ben'), 'Voorstel: Ben');
+  assert.equal(CAL.CALENDAR_NAME, 'Gedeelde auto');
+  assert.ok(!/[!]/.test(texts.join(' ')), 'no exclamation mark');
+});
+
 // ------------------------------------------------------------------------ push texts
 
-const WHO = '€'.repeat(40); // 40 characters of 3 bytes each: the worst case for the byte cap
+const WHO_LONG = 'Zoë '.repeat(15).trim();
+const WHO ='€'.repeat(40); // 40 characters of 3 bytes each: the worst case for the byte cap
 const OTHER = `${'é'.repeat(20)}${'–'.repeat(20)}`;
 const TZ = 'Europe/Amsterdam';
 const A = '2026-11-16T13:05:00.000Z';
@@ -443,6 +454,7 @@ test('docs/GLOSSARY.md: the terms to use occur in the texts and the discouraged 
     ...literals(read('public/strings.js'), 'strings.js').filter((l) => !l.isKey).map((l) => l.text),
     ...textLiterals('src/notify-texts.ts').map((l) => l.text),
     ...textLiterals('src/payments.ts').map((l) => l.text),
+    ...textLiterals('src/calendar-texts.ts').map((l) => l.text),
   ].join('\n');
   const lower = corpus.toLowerCase();
   const terms = (cell: string): string[] => cell.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
@@ -466,7 +478,7 @@ test('ALSO_DUTCH stays honest: every entry is a former English word, has a reaso
   const used = new Set<string>();
   const add = (text: string): void => wordsOf(text).forEach((w) => used.add(w));
   dictionary.texts.forEach((t) => add(t.text));
-  for (const file of ['public/strings.js', 'src/notify-texts.ts', 'src/payments.ts', 'public/sw.js']) textLiterals(file).forEach((l) => add(l.text));
+  for (const file of ['public/strings.js', 'src/notify-texts.ts', 'src/payments.ts', 'src/calendar-texts.ts', 'public/sw.js']) textLiterals(file).forEach((l) => add(l.text));
   pushCases().forEach((c) => add(`${c.text.title} ${c.text.body}`));
   const stale: string[] = [];
   for (const [word, reason] of Object.entries(ALSO_DUTCH)) {

@@ -713,3 +713,56 @@ admin.retention.statsNote (function 1)
 fieldErrors.invalid_month
 fieldErrors.after_to
 fieldErrors.outside_retention
+account.calendar.title
+account.calendar.intro
+account.calendar.none
+account.calendar.create
+account.calendar.linkLabel
+account.calendar.copy
+account.calendar.copied
+account.calendar.copyFailed
+account.calendar.renew
+account.calendar.confirmRenew
+account.calendar.turnOff
+account.calendar.confirmOff
+account.calendar.createdToast
+account.calendar.renewedToast
+account.calendar.offToast
+account.calendar.secretNote
+account.calendar.slow
+account.tokens.title
+account.tokens.intro
+account.tokens.none
+account.tokens.create
+account.tokens.limit
+account.tokens.made (function 1)
+account.tokens.lastUsed (function 1)
+account.tokens.neverUsed
+account.tokens.revoke
+account.tokens.revokeLabel (function 1)
+account.tokens.confirmRevoke (function 1)
+account.tokens.revokedToast
+account.tokens.makeTitle
+account.tokens.nameLabel
+account.tokens.nameHint
+account.tokens.shownTitle
+account.tokens.shownIntro
+account.tokens.tokenLabel
+account.tokens.copy
+account.tokens.copied
+account.tokens.copyFailed
+account.tokens.done
+account.tokens.secretNote
+admin.tokens.title
+admin.tokens.intro
+admin.tokens.person
+admin.tokens.name
+admin.tokens.made
+admin.tokens.lastUsed
+admin.tokens.neverUsed
+admin.tokens.none
+admin.tokens.revoke
+admin.tokens.revokeLabel (function 2)
+admin.tokens.confirmRevoke (function 2)
+admin.tokens.revokedToast
+errors.too_many_tokens

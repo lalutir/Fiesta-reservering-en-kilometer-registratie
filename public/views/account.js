@@ -3,6 +3,7 @@ import { field, h } from '../dom.js';
 import { S, errorText } from '../strings.js';
 import { themeCard } from '../theme.js';
 import { button as uiButton } from '../ui.js';
+import { calendarCard, tokensCard } from './integrations.js';
 
 export const live = false;
 
@@ -245,6 +246,8 @@ export async function render(app) {
   const signOutButton = uiButton({ label: S.account.signOut, block: true, onclick: () => signOut(app) });
 
   const reminders = await remindersCard(app);
+  // The calendar link and the access tokens: each is left out quietly when the server cannot be asked.
+  const [calendar, tokens] = await Promise.all([calendarCard(app), tokensCard(app)]);
 
   return h('div', { class: 'account' }, [
     h('h2', { text: S.account.title }),
@@ -258,6 +261,8 @@ export async function render(app) {
     reminders,
     // Shown wherever the server has notifications on, also on a phone that cannot get them (it says why in the card above).
     reminders ? notificationsCard() : null,
+    calendar,
+    tokens,
     form,
     signOutButton,
     h('section', { class: 'card' }, [

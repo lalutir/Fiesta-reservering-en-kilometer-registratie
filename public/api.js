@@ -181,6 +181,24 @@ import { flushPending } from './undo.js';
  */
 
 /**
+ * A personal access token as the lists show it: never the token itself, which is shown once when it is made.
+ * @typedef {object} AccessToken
+ * @property {number} id
+ * @property {string} name
+ * @property {string} createdAt UTC ISO
+ * @property {string | null} lastUsedAt UTC ISO, written at most once an hour; null while unused
+ */
+
+/** @typedef {AccessToken & { userId: number, userName: string }} AdminAccessToken the admin list also names the owner */
+
+/**
+ * The person's private calendar link. The address is the secret: the page builds the https address from the path.
+ * @typedef {object} CalendarFeed
+ * @property {string} path '/api/calendar/<43 characters>.ics'
+ * @property {string} createdAt UTC ISO
+ */
+
+/**
  * One set of monthly totals (docs/STATS-API.md): the household's, or one person's. Additive components, and what the
  * server derives from them as whole numbers (ratios are null when there is nothing to divide by).
  * @typedef {object} StatsEntry

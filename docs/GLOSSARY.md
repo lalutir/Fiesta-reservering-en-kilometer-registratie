@@ -87,3 +87,5 @@ without regard to case, and a "Do not use" term only as a whole word.
 | Theme | theme | Weergave, Systeem, Licht, Donker | thema | The choice between the phone's own setting (Systeem), always light (Licht) and always dark (Donker). |
 | Unsent input | unsent input | niet-opgeslagen invoer | | What was typed in a form and not sent; it comes back when you return to the form. |
 | Undo | undo | Ongedaan maken | | The button in the toast after a delete that tells nobody anything; it works for six seconds. |
+| Access token | personal access token | toegangstoken | API-sleutel, toegangscode | A secret that lets a tool of your own (a script, a home-automation system) read the app as you. It is shown once; "intrekken" ends it. |
+| Calendar link | calendar feed | agendalink | agendafeed, ics-link | The private address that a calendar app subscribes to. The card is called "Agenda-abonnement"; "Nieuwe link maken" replaces it and "Link uitzetten" turns it off. |
